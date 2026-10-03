@@ -2,6 +2,79 @@ defmodule WebWidget.Conversation.StateTest do
   use ExUnit.Case, async: true
   alias WebWidget.Conversation.State, as: Conversation
 
+  test "request errors fail the pending assistant and active steps without regressing finished steps" do
+    state =
+      Conversation.new()
+      |> Conversation.submit(%{id: "u", content: "hello"})
+      |> Conversation.apply_event(%{
+        type: "response.message.create",
+        payload: %{id: "a", content: "Partial answer"}
+      })
+
+    state =
+      Enum.reduce([{"active", "started"}, {"done", "completed"}], state, fn {id, status}, state ->
+        Conversation.apply_event(state, %{
+          type: "response.message.step",
+          payload: %{
+            id: id,
+            message_id: "a",
+            kind: "tool_call",
+            state: status,
+            label: "Search",
+            content: nil
+          }
+        })
+      end)
+
+    state = Conversation.apply_event(state, %{type: "response.typing", payload: %{active: true}})
+    assert state.typing
+
+    error = %{
+      type: "response.error",
+      payload: %{request_type: "message.create", code: "failed", message: "Service unavailable"}
+    }
+
+    failed = Conversation.apply_event(state, error)
+    assert failed.pending_reply == nil
+    refute failed.typing
+    assert failed.error == "Service unavailable"
+    assert [user, assistant] = failed.messages
+    assert user == hd(state.messages)
+    assert assistant.status == "failed"
+    assert assistant.error == "Service unavailable"
+    assert assistant.content == "Partial answer"
+
+    assert Enum.map(assistant.steps, &{&1.id, &1.state}) == [
+             {"active", "failed"},
+             {"done", "completed"}
+           ]
+
+    assert Conversation.apply_event(failed, error) == failed
+  end
+
+  test "additional assistant messages preserve the pending response owner" do
+    create = %{type: "response.message.create", payload: %{id: "a", content: ""}}
+    unsolicited = Conversation.apply_event(Conversation.new(), create)
+    assert unsolicited.pending_reply == nil
+    assert [%{id: "a", role: "assistant"}] = unsolicited.messages
+
+    state =
+      Conversation.new()
+      |> Conversation.submit(%{id: "u", content: "hello"})
+      |> Conversation.apply_event(create)
+      |> Conversation.apply_event(%{create | payload: %{id: "b", content: "Another response"}})
+
+    assert state.pending_reply == %{request_id: "u", id: "a"}
+    assert Enum.map(state.messages, & &1.id) == ["u", "a", "b"]
+
+    assert Conversation.apply_event(state, %{
+             type: "response.conversation.history",
+             payload: %{messages: []}
+           }) == state
+
+    assert Conversation.apply_event(state, %{type: "response.conversation.created"}) == state
+  end
+
   test "streaming and completion retain the original message timestamp" do
     state =
       Conversation.new()

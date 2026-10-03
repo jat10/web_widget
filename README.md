@@ -308,6 +308,15 @@ tasks are not part of this standalone project.
 - `mix coveralls` — run tests and print coverage.
 - `mix coveralls.html` — write a browsable report to `cover/excoveralls.html`.
 - `mix coveralls.json` — write machine-readable coverage to `cover/excoveralls.json`.
+- `mix coverup [threshold] [limit]` — read that JSON report and list changed Elixir
+  files below the threshold with their uncovered line numbers (defaults: 95%, 20
+  files). Run `mix coveralls.json` first. Requires Git, jq, and a local `main`
+  branch; considers `main...HEAD`, staged, and unstaged tracked changes under
+  `lib/`. Untracked files and files missing from the report are not included.
+
+The local [coverage-upper skill](.agents/skills/coverage-upper/SKILL.md) coordinates
+fresh report generation, test planning, and focused test implementation using the
+supporting skills in `.agents/skills/`.
 
 Coverage tasks automatically use the test environment. Reports exclude dependencies
 and test support code; application code, including Phoenix components, is counted.
