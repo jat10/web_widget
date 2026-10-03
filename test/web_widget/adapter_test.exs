@@ -18,12 +18,50 @@ defmodule WebWidget.AdapterTest do
        }}
     )
 
-    %{id: id}
+    %{id: id, server: server}
   end
 
   def callback(event, caller) do
     send(caller, {:callback, event})
     :ok
+  end
+
+  def dispatch(_entries, _from, _message), do: exit(:host_dispatcher_unavailable)
+
+  test "stopped PubSub returns unavailable for subscriptions and response delivery", %{
+    id: id
+  } do
+    stop_supervised!(Phoenix.PubSub.Supervisor)
+
+    assert Adapter.subscribe(id, "conversation") == {:error, :unavailable}
+
+    assert Adapter.send_event(%{
+             type: "response.typing",
+             widget_id: id,
+             conversation_id: "conversation",
+             payload: %{active: true}
+           }) == {:error, :unavailable}
+  end
+
+  test "a stopped subscription partition is reported as unavailable", %{id: id, server: server} do
+    for {partition, _, _, _} <- Supervisor.which_children(server) do
+      :ok = Supervisor.terminate_child(server, partition)
+    end
+
+    assert Adapter.subscribe(id, "conversation") == {:error, :unavailable}
+  end
+
+  test "host dispatcher exits are reported as unavailable", %{id: id, server: server} do
+    stop_supervised!(Phoenix.PubSub.Supervisor)
+    start_supervised!({Phoenix.PubSub, name: server, dispatcher: __MODULE__})
+    assert {:ok, _subscription} = Adapter.subscribe(id, "conversation")
+
+    assert Adapter.send_event(%{
+             type: "response.typing",
+             widget_id: id,
+             conversation_id: "conversation",
+             payload: %{active: true}
+           }) == {:error, :unavailable}
   end
 
   test "uses configured PubSub and isolates widget/conversation topics", %{id: id} do

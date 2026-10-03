@@ -3,6 +3,11 @@ defmodule WebWidget.RuntimeTest do
 
   alias WebWidget.Runtime
 
+  def failing_sink(_event, :raise), do: raise("host callback failed")
+  def failing_sink(_event, :throw), do: throw(:host_callback_failed)
+  def failing_sink(_event, :exit), do: exit(:host_callback_failed)
+  def returning_sink(_event, result), do: result
+
   defp config do
     id = System.unique_integer([:positive])
 
@@ -160,6 +165,90 @@ defmodule WebWidget.RuntimeTest do
           [%{widget | widget_id: ""}]
         ] do
       assert Runtime.start_link(%{config | widgets: widgets}) == {:error, :invalid_runtime_config}
+    end
+  end
+
+  test "rejects malformed runtime configuration before starting a process" do
+    config = config()
+
+    for invalid <- [
+          nil,
+          %{},
+          Map.delete(config, :sink_mfa),
+          %{config | channel_config_id: nil},
+          %{config | sink_mfa: {__MODULE__, "callback", []}},
+          %{config | sink_mfa: {__MODULE__, :callback, %{}}},
+          %{config | widgets: %{}}
+        ] do
+      assert Runtime.start_link(invalid) == {:error, :invalid_runtime_config}
+    end
+  end
+
+  test "callback exceptions, throws and exits are unavailable without exposing host details" do
+    config = config()
+    [widget | _] = config.widgets
+
+    for failure <- [:raise, :throw, :exit] do
+      start_supervised!({Runtime, %{config | sink_mfa: {__MODULE__, :failing_sink, [failure]}}})
+
+      assert Runtime.dispatch(%{widget_id: widget.widget_id, type: "widget.init"}) ==
+               {:error, :unavailable}
+
+      assert {:ok, ^widget} = Runtime.fetch_widget(widget.widget_id)
+      stop_supervised!({Runtime, config.channel_config_id})
+    end
+  end
+
+  test "preserves synchronous replies, acknowledgements and host rejections" do
+    config = config()
+    [widget | _] = config.widgets
+
+    for result <- [:ok, {:ok, %{conversation_id: "accepted"}}, {:error, :invalid_user}] do
+      start_supervised!({Runtime, %{config | sink_mfa: {__MODULE__, :returning_sink, [result]}}})
+
+      assert Runtime.dispatch(%{widget_id: widget.widget_id, type: "widget.init"}) == result
+      stop_supervised!({Runtime, config.channel_config_id})
+    end
+  end
+
+  test "runtime loss during an outstanding lookup or dispatch returns not found" do
+    for operation <- [:fetch_widget, :dispatch] do
+      config = config()
+      [widget | _] = config.widgets
+
+      runtime =
+        start_supervised!(Supervisor.child_spec({Runtime, config}, restart: :temporary))
+
+      :ok = :sys.suspend(runtime)
+      parent = self()
+
+      caller =
+        start_supervised!(
+          {Task,
+           fn ->
+             receive do
+               :request ->
+                 result =
+                   case operation do
+                     :fetch_widget -> Runtime.fetch_widget(widget.widget_id)
+                     :dispatch -> Runtime.dispatch(%{widget_id: widget.widget_id})
+                   end
+
+                 send(parent, {:result, self(), result})
+             end
+           end},
+          id: operation
+        )
+
+      :erlang.trace(caller, true, [:send])
+      send(caller, :request)
+      assert_receive {:trace, ^caller, :send, {:"$gen_call", _, _}, ^runtime}
+      :erlang.trace(caller, false, [:send])
+
+      monitor = Process.monitor(runtime)
+      Process.exit(runtime, :kill)
+      assert_receive {:DOWN, ^monitor, :process, ^runtime, :killed}
+      assert_receive {:result, ^caller, {:error, :not_found}}
     end
   end
 end

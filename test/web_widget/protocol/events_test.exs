@@ -6,6 +6,32 @@ defmodule WebWidget.Protocol.EventsTest do
   @context %{user_id: "user_123", conversation_id: "conv_123"}
   @message %{id: "msg_123", content: "  Hello\nworld  "}
 
+  test "history requires an accepted identity and explicit boolean conversation-list flag" do
+    for include_conversations <- [false, true] do
+      assert Events.history("widget", @context, include_conversations) ==
+               {:ok,
+                %{
+                  type: "conversation.history.request",
+                  mode: :sync,
+                  widget_id: "widget",
+                  user_id: "user_123",
+                  conversation_id: "conv_123",
+                  include_conversations: include_conversations
+                }}
+    end
+
+    for {widget, context, flag} <- [
+          {" ", @context, false},
+          {"widget", %{@context | user_id: nil}, false},
+          {"widget", %{@context | conversation_id: " "}, false},
+          {"widget", nil, false},
+          {"widget", %{}, false},
+          {"widget", @context, "true"}
+        ] do
+      assert {:error, :invalid_history_context} = Events.history(widget, context, flag)
+    end
+  end
+
   test "init prepares only the bootstrap fields for a synchronous host request" do
     for prompt <- [nil, "", "Billing"],
         conversation <- [nil, "conv_123"] do
