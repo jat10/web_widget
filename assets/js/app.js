@@ -27,12 +27,14 @@ import topbar from "topbar"
 import {getHooks} from "live_react"
 import components from "../react-components"
 import "../css/app.css"
+import "./widget-demo"
+import {WidgetContext} from "./widget-context"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, ...getHooks(components)},
+  hooks: {...colocatedHooks, ...getHooks(components), WidgetContext},
 })
 
 // Show progress bar on live navigation and form submits

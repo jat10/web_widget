@@ -3,9 +3,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host localhost --strictPort",
-    "build": "tsc && vite build"
+    "build": "tsc && vite build",
+    "test:e2e": "playwright test"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/vite": "^4.1.17",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",

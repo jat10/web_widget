@@ -7,7 +7,22 @@ defmodule WebWidget.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
+    children =
+      [{Registry, keys: :unique, name: WebWidget.RuntimeRegistry}] ++ web_children()
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: WebWidget.Supervisor)
+  end
+
+  # Hosts may use the supervised runtime without starting the standalone Phoenix
+  # server and database. Runtime children remain owned by the host supervisor.
+  defp web_children do
+    if Application.get_env(:web_widget, :start_web_server, false),
+      do: standalone_children(),
+      else: []
+  end
+
+  defp standalone_children do
+    [
       WebWidgetWeb.Telemetry,
       WebWidget.Repo,
       {DNSCluster, query: Application.get_env(:web_widget, :dns_cluster_query) || :ignore},
@@ -17,18 +32,16 @@ defmodule WebWidget.Application do
       # Start to serve requests, typically the last entry
       WebWidgetWeb.Endpoint
     ]
-
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
-    opts = [strategy: :one_for_one, name: WebWidget.Supervisor]
-    Supervisor.start_link(children, opts)
   end
 
   # Tell Phoenix to update the endpoint configuration
   # whenever the application is updated.
   @impl true
   def config_change(changed, _new, removed) do
-    WebWidgetWeb.Endpoint.config_change(changed, removed)
+    if Process.whereis(WebWidgetWeb.Endpoint) do
+      WebWidgetWeb.Endpoint.config_change(changed, removed)
+    end
+
     :ok
   end
 end

@@ -32,7 +32,7 @@
       })();
     </script>
   </head>
-  <body>
+  <body class={if assigns[:widget], do: "zaq-widget-page"}>
     {@inner_content}
   </body>
 </html>

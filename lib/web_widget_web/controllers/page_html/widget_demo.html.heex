@@ -1,0 +1,47 @@
+<div class="zaq-demo">
+  <header class="zaq-demo-header">
+    <a href="/widget-demo">The everyday guide</a>
+    <span>Ideas for a more connected community</span>
+  </header>
+  <main class="zaq-demo-main">
+    <section class="zaq-demo-hero">
+      <p class="zaq-demo-eyebrow">Explore · Learn · Take part</p>
+      <h1>A little curiosity.<br />A world of possibility.</h1>
+      <p>
+        Discover the places, people, and ideas that bring a community together. Start here, or ask a question below.
+      </p>
+      <a href="#explore">Explore the guide ↓</a>
+    </section>
+    <section id="explore" class="zaq-demo-grid" aria-label="Explore the guide">
+      <article :for={
+        {title, description} <- [
+          {"Find your next adventure",
+           "Make room for something new. Explore local parks, walking trails, and places worth a second look."},
+          {"Learn something together",
+           "Libraries, workshops, and community spaces open doors to new ideas and shared experiences."},
+          {"Make a difference nearby",
+           "Small actions add up. Discover ways to volunteer, meet your neighbors, and support your community."},
+          {"Celebrate local stories",
+           "Every neighborhood has a story. Get to know the people and traditions that make yours unique."},
+          {"Plan a day outside",
+           "Find a quiet corner, a favorite route, or a new perspective. There is always more to discover."},
+          {"Keep the conversation going",
+           "Good questions lead to good connections. Find the information you need to take the next step."}
+        ]
+      }>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </article>
+    </section>
+    <footer class="zaq-demo-footer">
+      A sample host website · Scroll to try the floating composer
+    </footer>
+  </main>
+  <iframe
+    id="zaq-demo-widget"
+    class="zaq-demo-frame"
+    data-mode="launcher"
+    src={~p"/widget"}
+    title="Website assistant"
+  />
+</div>

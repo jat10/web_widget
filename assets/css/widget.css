@@ -1,0 +1,64 @@
+:root {
+  --zaq-widget-primary: #245a50;
+  --zaq-widget-background: #fbfcfa;
+  --zaq-widget-text: #202925;
+  --zaq-widget-radius: 18px;
+  --zaq-widget-font-family: system-ui, sans-serif;
+  --zaq-widget-composer-background: #fff;
+  --zaq-widget-max-width: 760px;
+  --zaq-widget-edge: 16px;
+}
+
+html:has(.zaq-widget-page), body.zaq-widget-page { background: transparent; color-scheme: normal; }
+body.zaq-widget-page { margin: 0; overflow: hidden; }
+.zaq-widget { font-family: var(--zaq-widget-font-family); color: var(--zaq-widget-text); box-sizing: border-box; }
+.zaq-widget[data-mode="launcher"] {
+  position: fixed;
+  bottom: max(var(--zaq-widget-edge), env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(var(--zaq-widget-max-width), calc(100% - 2 * var(--zaq-widget-edge)));
+}
+.zaq-widget[data-mode="conversation"] {
+  position: fixed;
+  inset: 0;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--zaq-widget-background);
+  animation: zaq-widget-enter 180ms ease-out;
+}
+.zaq-widget-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 20px max(var(--zaq-widget-edge), calc((100% - var(--zaq-widget-max-width)) / 2));
+  border-bottom: 1px solid color-mix(in srgb, var(--zaq-widget-text) 12%, transparent);
+}
+.zaq-widget-header h1 { font-size: 17px; font-weight: 600; margin: 0; }
+.zaq-widget-header span { font-size: 12px; opacity: .6; }
+.zaq-thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.zaq-thread-content { max-width: var(--zaq-widget-max-width); margin: 0 auto; padding: 28px var(--zaq-widget-edge); display: flex; flex-direction: column; gap: 24px; }
+.zaq-message { font-size: 15px; line-height: 1.65; overflow-wrap: anywhere; }
+.zaq-message-user { align-self: flex-end; max-width: 85%; border-radius: var(--zaq-widget-radius); background: color-mix(in srgb, var(--zaq-widget-primary) 10%, var(--zaq-widget-background)); padding: 12px 18px; }
+.zaq-message-assistant { align-self: stretch; }
+.zaq-response-step { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: .7; margin: 0 0 12px; }
+.zaq-step-indicator { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: var(--zaq-widget-primary); }
+[data-status="running"] .zaq-step-indicator { animation: zaq-widget-pulse 1s ease-in-out infinite alternate; }
+.zaq-widget-footer { flex-shrink: 0; width: 100%; }
+[data-mode="conversation"] .zaq-widget-footer { max-width: calc(var(--zaq-widget-max-width) + 2 * var(--zaq-widget-edge)); margin: 0 auto; padding: 12px var(--zaq-widget-edge) max(var(--zaq-widget-edge), env(safe-area-inset-bottom)); }
+.zaq-composer { display: flex; align-items: flex-end; gap: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--zaq-widget-text) 18%, transparent); border-radius: var(--zaq-widget-radius); background: var(--zaq-widget-composer-background); box-shadow: 0 5px 24px #0000000c; }
+.zaq-composer:focus-within { outline: 2px solid color-mix(in srgb, var(--zaq-widget-primary) 45%, transparent); outline-offset: 2px; }
+.zaq-composer-input { flex: 1; width: 0; min-width: 0; min-height: 44px; max-height: 120px; resize: none; border: 0; padding: 10px 4px; background: transparent; color: inherit; font: inherit; font-size: 16px; line-height: 24px; outline: none; }
+.zaq-composer-send { flex-shrink: 0; min-height: 44px; padding: 10px 18px; border: 0; border-radius: calc(var(--zaq-widget-radius) - 7px); background: var(--zaq-widget-primary); color: #fff; font: inherit; font-size: 14px; cursor: pointer; transition: opacity 150ms; }
+.zaq-composer-send:hover { opacity: .85; }
+.zaq-composer-send:disabled { opacity: .45; cursor: default; }
+.zaq-composer-send:focus-visible, .zaq-scroll-bottom:focus-visible { outline: 2px solid var(--zaq-widget-primary); outline-offset: 3px; }
+.zaq-scroll-bottom { align-self: center; border: 1px solid currentColor; border-radius: 999px; font-size: 12px; padding: 6px 12px; cursor: pointer; }
+.zaq-scroll-bottom:disabled { display: none; }
+.zaq-widget-error { font-size: 13px; padding: 8px 12px; background: var(--zaq-widget-background); }
+@keyframes zaq-widget-enter { from { opacity: .65; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes zaq-widget-pulse { to { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .zaq-widget *, .zaq-widget { animation: none !important; transition: none !important; } }
