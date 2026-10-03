@@ -8,6 +8,7 @@
 import Config
 
 config :web_widget,
+  start_web_server: true,
   ecto_repos: [WebWidget.Repo],
   generators: [timestamp_type: :utc_datetime]
 

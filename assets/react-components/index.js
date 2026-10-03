@@ -3,20 +3,20 @@ import { LinkExample } from "./link-example";
 import { Link } from "live_react";
 import { createElement, lazy, Suspense } from "react";
 
-const LazyAssistantUI = lazy(() =>
-  import("./assistant-ui").then(({ AssistantUI }) => ({ default: AssistantUI })),
+const LazyWebWidget = lazy(() =>
+  import("./web-widget").then(({ WebWidget }) => ({ default: WebWidget })),
 );
 
-function AssistantUI(props) {
+function WebWidget(props) {
   return createElement(
     Suspense,
     { fallback: createElement("p", { role: "status" }, "Loading assistant…") },
-    createElement(LazyAssistantUI, props),
+    createElement(LazyWebWidget, props),
   );
 }
 
 export default {
-  AssistantUI,
+  WebWidget,
   Simple,
   LinkExample,
   Link,

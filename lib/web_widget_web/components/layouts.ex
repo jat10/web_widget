@@ -26,12 +26,19 @@ defmodule WebWidgetWeb.Layouts do
 
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
+  attr :widget, :boolean, default: false
 
   attr :current_scope, :map,
     default: nil,
     doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
 
   slot :inner_block, required: true
+
+  def app(%{widget: true} = assigns) do
+    ~H"""
+    <main class="zaq-widget-mount">{render_slot(@inner_block)}</main>
+    """
+  end
 
   def app(assigns) do
     ~H"""

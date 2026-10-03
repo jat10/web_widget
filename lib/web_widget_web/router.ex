@@ -17,8 +17,8 @@ defmodule WebWidgetWeb.Router do
   scope "/", WebWidgetWeb do
     pipe_through :browser
 
-    get "/", PageController, :home
-    live "/assistant", AssistantLive
+    live "/assistant", WidgetLive
+    live "/widget", WidgetLive
   end
 
   # Other scopes may use custom stacks.
@@ -26,8 +26,14 @@ defmodule WebWidgetWeb.Router do
   #   pipe_through :api
   # end
 
-  # Enable LiveDashboard and Swoosh mailbox preview in development
+  # Enable the widget demo, LiveDashboard, and mailbox preview in development.
   if Application.compile_env(:web_widget, :dev_routes) do
+    scope "/", WebWidgetWeb do
+      pipe_through :browser
+
+      get "/widget-demo", PageController, :widget_demo
+    end
+
     # If you want to use the LiveDashboard in production, you should put
     # it behind authentication and allow only admins to access it.
     # If your application does not have an admins-only section yet,
