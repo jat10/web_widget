@@ -10,7 +10,7 @@ export default defineConfig(({ command }) => {
   const isDev = command !== "build";
 
   return {
-    base: isDev ? undefined : "/assets",
+    base: isDev ? undefined : "./",
     publicDir: "static",
     server: {
       cors: { origin: /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ },
@@ -30,10 +30,6 @@ export default defineConfig(({ command }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./react-components"),
-        "phoenix-colocated/web_widget": path.resolve(
-          __dirname,
-          `../_build/${process.env.MIX_ENV || "dev"}/phoenix-colocated/web_widget/index.js`,
-        ),
       },
       dedupe: ["react", "react-dom"],
     },

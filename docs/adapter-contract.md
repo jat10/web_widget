@@ -140,7 +140,7 @@ listening, and again after reconnecting. The parent replies with
 iframe's exact origin as `targetOrigin`. A load event alone is too early to
 guarantee that LiveView is listening.
 
-The current standalone `/widget` route accepts only same-origin parent messages.
+The current `/widget/:widget_id` route accepts only same-origin parent messages.
 The browser checks both the parent window and origin. LiveView validates the
 payload and retains only these three fields as untrusted bootstrap context.
 `user_id` must be a nonblank string; `conversation_id` may be a nonblank string
@@ -152,8 +152,8 @@ no valid context arrives within five seconds of readiness, the same guidance
 is logged. A later valid message can still initialize the widget.
 Identical retries are accepted; replacing context requires
 an iframe reload. Receiving context does not perform host initialization or
-load conversation history. Runtime-configured cross-origin embedding remains
-part of the host route integration.
+load conversation history. Runtime-configured cross-origin embedding and stylesheet customization remain
+deferred beyond the initial host router integration.
 
 The widget does not own authentication cookies or user identity resolution.
 

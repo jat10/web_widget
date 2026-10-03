@@ -4,7 +4,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   import Phoenix.LiveViewTest
 
   test "parent context retains only bootstrap fields and accepts identical retries", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     assert has_element?(view, "#widget-state[data-context-received='false']")
 
     params = %{
@@ -32,7 +32,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
 
   test "optional bootstrap fields support new conversations and string context", %{conn: conn} do
     for params <- [%{user_id: "user_123"}, %{user_id: "user_123", prompt_context: "Billing"}] do
-      {:ok, view, _} = live(conn, ~p"/widget")
+      {:ok, view, _} = live(conn, ~p"/widget/demo")
       render_hook(view, "widget.context", params)
 
       assert :sys.get_state(view.pid).socket.assigns.parent_context == %{
@@ -44,7 +44,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "malformed context cannot initialize the widget", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
 
     for params <- [
           %{},
@@ -63,7 +63,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "context cannot be replaced during the LiveView lifetime", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     params = %{user_id: "user_123", conversation_id: "conv_123", prompt_context: nil}
     render_hook(view, "widget.context", params)
 
@@ -78,7 +78,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "initial mount hides the chat and rejects submissions until context arrives", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     assert has_element?(view, "#widget-state[data-mode='launcher']")
     refute has_element?(view, "#web-widget")
     render_hook(view, "widget.submit", %{text: "Not initialized"})
@@ -90,7 +90,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   test "first submission preserves user text, shows a step, then completes the mock", %{
     conn: conn
   } do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     render_hook(view, "widget.context", %{user_id: "user_123"})
     render_hook(view, "widget.submit", %{text: "  Where can I learn?  "})
 
@@ -111,7 +111,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "subsequent submissions keep the conversation and its history", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     render_hook(view, "widget.context", %{user_id: "user_123"})
     render_hook(view, "widget.submit", %{text: "First question"})
     send(view.pid, {:mock_reply, "assistant-1"})
@@ -133,7 +133,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "rejects blank, oversized and malformed submissions without expanding", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     render_hook(view, "widget.context", %{user_id: "user_123"})
 
     for params <- [%{text: "  "}, %{text: String.duplicate("a", 2001)}, %{text: nil}, %{}] do
@@ -143,7 +143,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   end
 
   test "rejects concurrent sends and ignores stale mock completions", %{conn: conn} do
-    {:ok, view, _} = live(conn, ~p"/widget")
+    {:ok, view, _} = live(conn, ~p"/widget/demo")
     render_hook(view, "widget.context", %{user_id: "user_123"})
     render_hook(view, "widget.submit", %{text: "First"})
     render_hook(view, "widget.submit", %{text: "Duplicate"})

@@ -14,11 +14,11 @@ defmodule WebWidgetWeb.Router do
     plug :accepts, ["json"]
   end
 
-  scope "/", WebWidgetWeb do
-    pipe_through :browser
+  import WebWidget.Router
 
-    live "/assistant", WidgetLive
-    live "/widget", WidgetLive
+  scope "/" do
+    pipe_through :browser
+    web_widget("/widget")
   end
 
   # Other scopes may use custom stacks.
