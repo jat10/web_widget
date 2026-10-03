@@ -26,7 +26,7 @@ defmodule WebWidgetWeb.Router do
   #   pipe_through :api
   # end
 
-  # Enable the widget demo, LiveDashboard, and mailbox preview in development.
+  # Enable the widget demo and LiveDashboard in development.
   if Application.compile_env(:web_widget, :dev_routes) do
     scope "/", WebWidgetWeb do
       pipe_through :browser
@@ -45,7 +45,6 @@ defmodule WebWidgetWeb.Router do
       pipe_through :browser
 
       live_dashboard "/dashboard", metrics: WebWidgetWeb.Telemetry
-      forward "/mailbox", Plug.Swoosh.MailboxPreview
     end
   end
 end

@@ -82,4 +82,36 @@ defmodule WebWidget.HostRouterTest do
              )
     end
   end
+
+  test "connected mount uses replacement runtime configuration, not stale HTTP configuration" do
+    conn = get(build_conn(), "/widget/support")
+    stop_supervised!({WebWidget.Runtime, :host_test})
+
+    start_supervised!(
+      {WebWidget.Runtime,
+       %{
+         channel_config_id: :host_test,
+         sink_mfa: {__MODULE__, :unused, []},
+         widgets: [%{widget_id: "support", display_name: "Replacement", allowed_origins: []}]
+       }}
+    )
+
+    {:ok, view, _} = live(conn)
+    render_hook(view, "widget.context", %{user_id: "user"})
+    assert :sys.get_state(view.pid).socket.assigns.config.title == "Replacement"
+  end
+
+  test "browser context cannot replace the widget selected by the host route" do
+    {:ok, view, _} = live(build_conn(), "/support/chat/support")
+
+    render_hook(view, "widget.context", %{
+      user_id: "user",
+      widget_id: "another-widget",
+      display_name: "Browser-supplied title"
+    })
+
+    %{socket: %{assigns: assigns}} = :sys.get_state(view.pid)
+    assert assigns.widget_id == "support"
+    assert assigns.config.title == "Host Support"
+  end
 end

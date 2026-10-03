@@ -20,12 +20,6 @@ config :web_widget, WebWidgetWeb.Endpoint,
   secret_key_base: "hItqrDpSbn8YcVdlF3NUYNNEzMovPEE/ziM0eSAIxf4ZDDX8SSCztM/ifXQ9iq5H",
   server: false
 
-# In test we don't send emails
-config :web_widget, WebWidget.Mailer, adapter: Swoosh.Adapters.Test
-
-# Disable swoosh api client as it is only required for production adapters
-config :swoosh, :api_client, false
-
 # Print only warnings and errors during test
 config :logger, level: :warning
 
