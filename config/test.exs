@@ -34,6 +34,6 @@ config :phoenix_live_view,
 config :phoenix,
   sort_verified_routes_query_params: true
 
-config :web_widget, :demo_allowed_origins, ["http://www.example.com"]
+config :web_widget, :demo_allowed_domains, ["http://www.example.com"]
 
 config :web_widget, :mock_host, true

@@ -46,7 +46,7 @@ defmodule WebWidget.Application do
                theme: Application.get_env(:web_widget, :demo_theme, "auto"),
                multiple_conversations:
                  Application.get_env(:web_widget, :demo_multiple_conversations, false),
-               allowed_origins: Application.get_env(:web_widget, :demo_allowed_origins, [])
+               allowed_domains: Application.get_env(:web_widget, :demo_allowed_domains, [])
              }
            ]
          }}

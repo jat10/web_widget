@@ -26,7 +26,7 @@ defmodule WebWidget.HostRouterTest do
         %{
           widget_id: "support",
           display_name: "Host Support",
-          allowed_origins: ["https://customer.com", "http://www.example.com"]
+          allowed_domains: ["https://customer.com", "http://www.example.com"]
         }
       ]
     }
@@ -72,8 +72,8 @@ defmodule WebWidget.HostRouterTest do
     for {widget, index} <-
           Enum.with_index([
             %{widget_id: "disabled", display_name: "Disabled"},
-            %{widget_id: "disabled", display_name: "Disabled", allowed_origins: nil},
-            %{widget_id: "disabled", display_name: "Disabled", allowed_origins: []}
+            %{widget_id: "disabled", display_name: "Disabled", allowed_domains: nil},
+            %{widget_id: "disabled", display_name: "Disabled", allowed_domains: []}
           ]) do
       id = {:disabled, index}
 
@@ -112,7 +112,7 @@ defmodule WebWidget.HostRouterTest do
        %{
          channel_config_id: :host_test,
          sink_mfa: {__MODULE__, :unused, []},
-         widgets: [%{widget_id: "support", display_name: "Support", allowed_origins: []}]
+         widgets: [%{widget_id: "support", display_name: "Support", allowed_domains: []}]
        }}
     )
 
@@ -190,7 +190,7 @@ defmodule WebWidget.HostRouterTest do
            %{
              widget_id: "support",
              display_name: "Replacement",
-             allowed_origins: ["https://customer.com", "http://www.example.com"]
+             allowed_domains: ["https://customer.com", "http://www.example.com"]
            }
          ]
        }}

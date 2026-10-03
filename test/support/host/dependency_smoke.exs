@@ -36,7 +36,7 @@ defmodule WebWidget.DependencyHostSmokeTest do
            %{
              widget_id: "isolated",
              display_name: "Isolated host",
-             allowed_origins: ["https://customer.com", "http://www.example.com"]
+             allowed_domains: ["https://customer.com", "http://www.example.com"]
            }
          ]
        }}

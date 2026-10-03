@@ -9,9 +9,9 @@ if config_env() == :dev do
     config :web_widget, :demo_multiple_conversations, value == "true"
   end
 
-  if origins = System.get_env("WEB_WIDGET_DEMO_ALLOWED_ORIGINS") do
+  if origins = System.get_env("WEB_WIDGET_DEMO_ALLOWED_DOMAINS") do
     config :web_widget,
-           :demo_allowed_origins,
+           :demo_allowed_domains,
            origins |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
   end
 end

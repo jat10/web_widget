@@ -13,13 +13,13 @@ defmodule WebWidget.RuntimeTest do
         %{
           widget_id: "support-#{id}",
           display_name: "Support Assistant",
-          allowed_origins: ["https://customer.com"],
+          allowed_domains: ["https://customer.com"],
           stylesheet_url: "https://customer.com/widget.css"
         },
         %{
           widget_id: "sales-#{id}",
           display_name: "Sales Assistant",
-          allowed_origins: ["https://shop.customer.com"],
+          allowed_domains: ["https://shop.customer.com"],
           stylesheet_url: nil
         }
       ]
@@ -104,7 +104,7 @@ defmodule WebWidget.RuntimeTest do
   test "normalizes exact origins and rejects unsafe or non-origin entries" do
     config = config()
     [widget | _] = config.widgets
-    normalized = %{widget | allowed_origins: ["https://customer.com", "http://localhost:4019"]}
+    normalized = %{widget | allowed_domains: ["https://customer.com", "http://localhost:4019"]}
 
     start_supervised!(
       {Runtime,
@@ -113,7 +113,7 @@ defmodule WebWidget.RuntimeTest do
          | widgets: [
              %{
                widget
-               | allowed_origins: [
+               | allowed_domains: [
                    "https://customer.com/",
                    "https://customer.com:443",
                    "http://localhost:4019"
@@ -142,7 +142,7 @@ defmodule WebWidget.RuntimeTest do
           ["https://customer.com:65536"],
           ["https://customer.com", "*"]
         ] do
-      assert Runtime.start_link(%{config | widgets: [%{widget | allowed_origins: origins}]}) ==
+      assert Runtime.start_link(%{config | widgets: [%{widget | allowed_domains: origins}]}) ==
                {:error, :invalid_runtime_config}
     end
   end
@@ -155,7 +155,7 @@ defmodule WebWidget.RuntimeTest do
           [widget, widget],
           [Map.put(widget, :multiple_conversations, "true")],
           [%{widget | display_name: %{token: "secret"}}],
-          [%{widget | allowed_origins: [%{token: "secret"}]}],
+          [%{widget | allowed_domains: [%{token: "secret"}]}],
           [%{widget | stylesheet_url: %{token: "secret"}}],
           [%{widget | widget_id: ""}]
         ] do

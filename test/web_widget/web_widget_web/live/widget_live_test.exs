@@ -14,7 +14,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
            %{
              widget_id: "live-test",
              display_name: "Test",
-             allowed_origins: ["http://www.example.com"]
+             allowed_domains: ["http://www.example.com"]
            }
          ]
        }}
