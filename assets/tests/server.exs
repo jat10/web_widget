@@ -1,4 +1,4 @@
-Application.put_env(:web_widget, :demo_allowed_origins, ["http://127.0.0.1:4019", "http://127.0.0.1:4020"])
+Application.put_env(:web_widget, :demo_allowed_domains, ["http://127.0.0.1:4019", "http://127.0.0.1:4020"])
 
 # Serve the built browser assets over the real LiveView WebSocket transport.
 Application.delete_env(:live_react, :vite_host)
@@ -37,12 +37,12 @@ Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
   sink_mfa: {WebWidget.MockHost, :handle_event, []},
      pubsub_server: WebWidget.PubSub,
   widgets: [
-    %{widget_id: "theme-light", display_name: "Light assistant", theme: "light", allowed_origins: ["http://127.0.0.1:4019"]},
-    %{widget_id: "theme-dark", display_name: "Dark assistant", theme: "dark", multiple_conversations: true, allowed_origins: ["http://127.0.0.1:4019"]},
-    %{widget_id: "theme-custom", display_name: "Custom assistant", theme: "dark", stylesheet_url: "/custom-widget.css", allowed_origins: ["http://127.0.0.1:4019"]},
-    %{widget_id: "multi", display_name: "Conversation history", multiple_conversations: true, allowed_origins: ["http://127.0.0.1:4019"]},
-    %{widget_id: "cross-origin", display_name: "Cross origin", allowed_origins: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-light", display_name: "Light assistant", theme: "light", allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-dark", display_name: "Dark assistant", theme: "dark", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-custom", display_name: "Custom assistant", theme: "dark", stylesheet_url: "/custom-widget.css", allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "multi", display_name: "Conversation history", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "cross-origin", display_name: "Cross origin", allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "no-origins", display_name: "Disabled"},
-    %{widget_id: "empty-origins", display_name: "Disabled", allowed_origins: []}
+    %{widget_id: "empty-origins", display_name: "Disabled", allowed_domains: []}
   ]
 }})

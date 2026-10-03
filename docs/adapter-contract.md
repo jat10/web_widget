@@ -93,7 +93,7 @@ Example:
     %{
       widget_id: "widget_support",
       display_name: "Support Assistant",
-      allowed_origins: [
+      allowed_domains: [
         "https://customer.com"
       ],
       stylesheet_url: "https://customer.com/widget.css"
@@ -142,7 +142,7 @@ iframe's exact origin as `targetOrigin`. A load event alone is too early to
 guarantee that LiveView is listening.
 
 The `/widget/:widget_id` route denies embedding by default. ZAQ must provide
-`allowed_origins` for each widget: exact HTTP(S) origins (scheme, hostname, and
+`allowed_domains` for each widget: exact HTTP(S) origins (scheme, hostname, and
 port), without paths, queries, credentials, fragments, or wildcards. A trailing
 slash is accepted and normalized. Missing, null, or empty lists disable the
 widget; malformed entries reject runtime configuration. There is no implicit

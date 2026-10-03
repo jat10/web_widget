@@ -7,7 +7,7 @@ defmodule WebWidget.Embedding.FramePolicy do
   def call(conn, _opts) do
     ancestors =
       case WebWidget.Runtime.fetch_widget(conn.path_params["widget_id"] || "") do
-        {:ok, %{allowed_origins: [_ | _] = origins}} -> Enum.join(origins, " ")
+        {:ok, %{allowed_domains: [_ | _] = origins}} -> Enum.join(origins, " ")
         _ -> "'none'"
       end
 

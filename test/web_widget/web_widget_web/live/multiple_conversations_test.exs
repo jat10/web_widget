@@ -18,13 +18,13 @@ defmodule WebWidgetWeb.MultipleConversationsTest do
            %{
              widget_id: "multi-test",
              display_name: "Multiple",
-             allowed_origins: ["http://www.example.com"],
+             allowed_domains: ["http://www.example.com"],
              multiple_conversations: true
            },
            %{
              widget_id: "single-test",
              display_name: "Single",
-             allowed_origins: ["http://www.example.com"]
+             allowed_domains: ["http://www.example.com"]
            }
          ]
        }}

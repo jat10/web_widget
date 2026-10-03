@@ -17,7 +17,7 @@ defmodule WebWidget.Runtime do
   @widget_fields [
     :widget_id,
     :display_name,
-    :allowed_origins,
+    :allowed_domains,
     :stylesheet_url,
     :theme,
     :multiple_conversations
@@ -36,9 +36,9 @@ defmodule WebWidget.Runtime do
           :widgets,
           &Enum.map(&1, fn widget ->
             {:ok, origins} =
-              Origins.normalize(Map.get(widget, :allowed_origins))
+              Origins.normalize(Map.get(widget, :allowed_domains))
 
-            widget |> Map.take(@widget_fields) |> Map.put(:allowed_origins, origins)
+            widget |> Map.take(@widget_fields) |> Map.put(:allowed_domains, origins)
           end)
         )
 
@@ -125,7 +125,7 @@ defmodule WebWidget.Runtime do
        when is_binary(id) and id != "" and is_binary(name) do
     Map.get(widget, :theme, "auto") in ["light", "dark", "auto"] and
       is_boolean(Map.get(widget, :multiple_conversations, false)) and
-      match?({:ok, _}, Origins.normalize(Map.get(widget, :allowed_origins))) and
+      match?({:ok, _}, Origins.normalize(Map.get(widget, :allowed_domains))) and
       valid_stylesheet_url?(Map.get(widget, :stylesheet_url))
   end
 

@@ -48,14 +48,14 @@ Start each channel's runtime under the host supervisor:
    sink_mfa: {MyApp.WebBridge, :from_widget, []},
    pubsub_server: MyApp.PubSub,
    widgets: [
-     %{widget_id: "support", display_name: "Support Assistant", allowed_origins: ["https://customer.com"]}
+     %{widget_id: "support", display_name: "Support Assistant", allowed_domains: ["https://customer.com"]}
    ]
  }}
 ```
 
 Origins must be exact HTTP(S) origins, including any non-default port. Paths,
 wildcards, credentials, queries, and fragments are rejected; a trailing slash is
-normalized. Missing, null, or empty `allowed_origins` disables the widget, including
+normalized. Missing, null, or empty `allowed_domains` disables the widget, including
 same-origin embedding. The route sets CSP `frame-ancestors` from this list and
 removes `X-Frame-Options`; unavailable widgets use `frame-ancestors 'none'`.
 The browser bootstrap also checks the parent window and allowed origin.
@@ -65,7 +65,7 @@ explicitly allows `http://localhost:4000` in development.
 For local testing, override the demo origins when starting the development server:
 
 ```sh
-WEB_WIDGET_DEMO_ALLOWED_ORIGINS=http://localhost:4010 mix phx.server
+WEB_WIDGET_DEMO_ALLOWED_DOMAINS=http://localhost:4010 mix phx.server
 ```
 
 Use a comma-separated list to allow multiple origins. This development-only
@@ -207,7 +207,7 @@ restart the server with:
 WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server
 ```
 
-Combine this with `WEB_WIDGET_DEMO_ALLOWED_ORIGINS` if using the playground.
+Combine this with `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` if using the playground.
 The regular demo URL remains `/widget-demo`. Set the parent conversation ID to
 `mock-weekend`, `mock-billing`, or `mock-research` to start with a fixture;
 `mock-history` remains an alias for the first history. Unknown mock histories are empty; the mock does not
@@ -242,7 +242,7 @@ window.addEventListener("message", (event) => {
 ```
 
 Register this listener before loading the iframe so you receive its ready message.
-Only parents listed in the widget’s `allowed_origins` can embed it. The demo handles this
+Only parents listed in the widget’s `allowed_domains` can embed it. The demo handles this
 handshake automatically. `user_id` is required; the other fields default to null. `prompt_context` accepts
 a string only (or null), not a JSON object. The chat UI remains hidden until valid
 context arrives. Invalid messages or five seconds without valid context produce

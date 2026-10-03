@@ -10,7 +10,7 @@ defmodule WebWidgetWeb.WidgetLive do
   @impl true
   def mount(%{"widget_id" => widget_id}, _session, socket) do
     case WebWidget.Runtime.fetch_widget(widget_id) do
-      {:ok, %{allowed_origins: [_ | _]} = widget} ->
+      {:ok, %{allowed_domains: [_ | _]} = widget} ->
         mount_widget(socket, widget)
 
       _ ->
@@ -24,7 +24,7 @@ defmodule WebWidgetWeb.WidgetLive do
        widget: true,
        unavailable: false,
        widget_id: widget.widget_id,
-       allowed_origins: widget.allowed_origins,
+       allowed_domains: widget.allowed_domains,
        page_title: widget.display_name,
        widget_theme: Map.get(widget, :theme, "auto"),
        widget_stylesheet_url: Map.get(widget, :stylesheet_url),
@@ -71,7 +71,7 @@ defmodule WebWidgetWeb.WidgetLive do
           id="widget-context"
           phx-hook="WidgetContext"
           phx-update="ignore"
-          data-allowed-origins={Jason.encode!(@allowed_origins)}
+          data-allowed-domains={Jason.encode!(@allowed_domains)}
         />
         <.react
           :if={@parent_context != nil}
