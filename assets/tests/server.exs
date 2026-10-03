@@ -1,3 +1,5 @@
+Application.put_env(:web_widget, :demo_allowed_origins, ["http://127.0.0.1:4019", "http://127.0.0.1:4020"])
+
 # Serve the built browser assets over the real LiveView WebSocket transport.
 Application.delete_env(:live_react, :vite_host)
 
@@ -29,3 +31,13 @@ Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
 )
 
 {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, WebWidget.TestHost.Endpoint)
+
+{:ok, _} = Supervisor.start_child(WebWidget.Supervisor, {WebWidget.Runtime, %{
+  channel_config_id: :origin_tests,
+  sink_mfa: {WebWidget.Application, :unused, []},
+  widgets: [
+    %{widget_id: "cross-origin", display_name: "Cross origin", allowed_origins: ["http://127.0.0.1:4019"]},
+    %{widget_id: "no-origins", display_name: "Disabled"},
+    %{widget_id: "empty-origins", display_name: "Disabled", allowed_origins: []}
+  ]
+}})

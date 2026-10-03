@@ -47,10 +47,28 @@ Start each channel's runtime under the host supervisor:
    channel_config_id: 42,
    sink_mfa: {MyApp.WebBridge, :from_listener, []},
    widgets: [
-     %{widget_id: "support", display_name: "Support Assistant", allowed_origins: []}
+     %{widget_id: "support", display_name: "Support Assistant", allowed_origins: ["https://customer.com"]}
    ]
  }}
 ```
+
+Origins must be exact HTTP(S) origins, including any non-default port. Paths,
+wildcards, credentials, queries, and fragments are rejected; a trailing slash is
+normalized. Missing, null, or empty `allowed_origins` disables the widget, including
+same-origin embedding. The route sets CSP `frame-ancestors` from this list and
+removes `X-Frame-Options`; unavailable widgets use `frame-ancestors 'none'`.
+The browser bootstrap also checks the parent window and allowed origin.
+Reload existing iframes after changing origin configuration. The standalone demo
+explicitly allows `http://localhost:4000` in development.
+
+For local testing, override the demo origins when starting the development server:
+
+```sh
+WEB_WIDGET_DEMO_ALLOWED_ORIGINS=http://localhost:4010 mix phx.server
+```
+
+Use a comma-separated list to allow multiple origins. This development-only
+override replaces the demo allowlist and requires restarting the server.
 
 The callback is retained but not invoked yet. Widget IDs are globally unique.
 HTTP and connected mounts look up the ID afresh. Missing/stopped runtimes render
@@ -58,6 +76,12 @@ HTTP and connected mounts look up the ID afresh. Missing/stopped runtimes render
 HTTP 200 error screen, not a redirect or HTTP 404. Runtime changes do not revoke
 already-mounted views; reconnect/remount checks again. The resolved display name
 supplies the document title and conversation header.
+
+Incomplete or malformed paths under the mounted widget prefix (such as `/widget`
+or `/widget/support/extra`) return a friendly HTTP 404 without debug details or
+chat scripts. Their framing policy remains `frame-ancestors 'none'`. Embedding
+pages should show their own unavailable message when a frame cannot load or
+does not announce readiness; browsers do not display denied iframe content.
 
 Dependency configuration files are not imported by Phoenix. The application
 starts only its runtime registry by default, without the standalone endpoint,
@@ -83,10 +107,9 @@ dependencies must match the host's resolved versions. Keep the generated
 `web_widget/priv/static/assets` directory in the release. Rebuild after dependency
 or UI changes. Static responses revalidate with ETags.
 
-Embed `/widget/support` in a same-origin iframe and implement the ready/init
+Embed `/widget/support` on a configured allowed origin and implement the ready/init
 handshake and resize handling below. Host routing/authentication remains the
-host's responsibility. Cross-origin embedding, runtime origin enforcement,
-stylesheet URLs, callback dispatch, response PubSub, real initialization and
+host's responsibility. Stylesheet URLs, callback dispatch, response PubSub, real initialization and
 history remain deferred. The existing mock conversation is unchanged.
 
 ## React components
@@ -158,7 +181,7 @@ window.addEventListener("message", (event) => {
 ```
 
 Register this listener before loading the iframe so you receive its ready message.
-The current route supports same-origin parents only. The demo handles this
+Only parents listed in the widget’s `allowed_origins` can embed it. The demo handles this
 handshake automatically. `user_id` is required; the other fields default to null. `prompt_context` accepts
 a string only (or null), not a JSON object. The chat UI remains hidden until valid
 context arrives. Invalid messages or five seconds without valid context produce
@@ -202,9 +225,8 @@ State lasts only for the LiveView process; reloads or a new connection after pro
 loss reset it. One response runs at a time. There is no persistence, authentication,
 cancel/retry protocol, real tools, or ZAQ integration. A submission timeout can be
 ambiguous if the server accepted it; reliable retries will need request IDs when
-the real protocol is introduced. Phoenix's default same-origin frame policy remains
-in place: embedding on a customer origin will need an explicit framing, origin, and
-session policy. Mobile sizing uses `dvh`; real-device keyboard behavior still needs
+the real protocol is introduced. Embedding uses the configured origin allowlist and CSP `frame-ancestors`.
+Hosts remain responsible for their session policy. Mobile sizing uses `dvh`; real-device keyboard behavior still needs
 validation. Nothing in the UI requires another transport: a future WebBridge adapter
 can update LiveView-owned messages and steps through the same props boundary.
 

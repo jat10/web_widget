@@ -4,10 +4,10 @@ defmodule WebWidgetWeb.WidgetLive do
   @impl true
   def mount(%{"widget_id" => widget_id}, _session, socket) do
     case WebWidget.Runtime.fetch_widget(widget_id) do
-      {:ok, widget} ->
+      {:ok, %{allowed_origins: [_ | _]} = widget} ->
         mount_widget(socket, widget)
 
-      {:error, :not_found} ->
+      _ ->
         {:ok, assign(socket, unavailable: true, page_title: "Widget unavailable")}
     end
   end
@@ -18,6 +18,7 @@ defmodule WebWidgetWeb.WidgetLive do
        widget: true,
        unavailable: false,
        widget_id: widget.widget_id,
+       allowed_origins: widget.allowed_origins,
        page_title: widget.display_name,
        parent_context: nil,
        mode: :launcher,
@@ -50,7 +51,12 @@ defmodule WebWidgetWeb.WidgetLive do
         data-mode={@mode}
         data-context-received={to_string(@parent_context != nil)}
       >
-        <div id="widget-context" phx-hook="WidgetContext" phx-update="ignore" />
+        <div
+          id="widget-context"
+          phx-hook="WidgetContext"
+          phx-update="ignore"
+          data-allowed-origins={Jason.encode!(@allowed_origins)}
+        />
         <.react
           :if={@parent_context != nil}
           id="web-widget"

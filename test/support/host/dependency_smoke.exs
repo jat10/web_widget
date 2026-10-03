@@ -28,7 +28,13 @@ defmodule WebWidget.DependencyHostSmokeTest do
        %{
          channel_config_id: :isolated_host,
          sink_mfa: {__MODULE__, :unused, []},
-         widgets: [%{widget_id: "isolated", display_name: "Isolated host", allowed_origins: []}]
+         widgets: [
+           %{
+             widget_id: "isolated",
+             display_name: "Isolated host",
+             allowed_origins: ["https://customer.com", "http://www.example.com"]
+           }
+         ]
        }}
     )
 

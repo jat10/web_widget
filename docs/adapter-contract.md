@@ -140,8 +140,17 @@ listening, and again after reconnecting. The parent replies with
 iframe's exact origin as `targetOrigin`. A load event alone is too early to
 guarantee that LiveView is listening.
 
-The current `/widget/:widget_id` route accepts only same-origin parent messages.
-The browser checks both the parent window and origin. LiveView validates the
+The `/widget/:widget_id` route denies embedding by default. ZAQ must provide
+`allowed_origins` for each widget: exact HTTP(S) origins (scheme, hostname, and
+port), without paths, queries, credentials, fragments, or wildcards. A trailing
+slash is accepted and normalized. Missing, null, or empty lists disable the
+widget; malformed entries reject runtime configuration. There is no implicit
+same-origin allowance. The HTTP response enforces the list using CSP
+`frame-ancestors` (or `'none'` for unavailable widgets), preserving other CSP
+directives. The widget route removes the default `X-Frame-Options` header so
+explicitly allowed cross-origin parents can embed it.
+
+The browser checks both the parent window and its configured origin. LiveView validates the
 payload and retains only these three fields as untrusted bootstrap context.
 `user_id` must be a nonblank string; `conversation_id` may be a nonblank string
 or null; `prompt_context` may be a string or null. Omitted optional
@@ -152,8 +161,9 @@ no valid context arrives within five seconds of readiness, the same guidance
 is logged. A later valid message can still initialize the widget.
 Identical retries are accepted; replacing context requires
 an iframe reload. Receiving context does not perform host initialization or
-load conversation history. Runtime-configured cross-origin embedding and stylesheet customization remain
-deferred beyond the initial host router integration.
+load conversation history. Stylesheet customization remains deferred.
+Origin configuration is checked on HTTP rendering and LiveView mounting;
+runtime changes require reloading existing iframes to refresh their HTTP policy.
 
 The widget does not own authentication cookies or user identity resolution.
 

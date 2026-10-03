@@ -6,13 +6,14 @@ const nonblank = (value: unknown): value is string =>
 export class WidgetContext extends ViewHook {
   private accepted = false;
   private contextTimer?: number;
+  private allowedOrigins: string[] = [];
 
   private reportError(reason: string) {
-    console.error(`[WebWidget] ${reason} The chat requires a valid user_id. In the parent page, listen for "zaq.widget.ready", verify event.source === iframe.contentWindow and event.origin === the widget origin, then call iframe.contentWindow.postMessage({ type: "zaq.widget.init", user_id: "user_123", prompt_context: "Current page: /billing", conversation_id: null }, widgetOrigin). prompt_context must be a string or null. Use the exact widget origin; the current widget supports same-origin embedding only.`);
+    console.error(`[WebWidget] ${reason} The chat requires a valid user_id. In the parent page, listen for "zaq.widget.ready", verify event.source === iframe.contentWindow and event.origin === the widget origin, then call iframe.contentWindow.postMessage({ type: "zaq.widget.init", user_id: "user_123", prompt_context: "Current page: /billing", conversation_id: null }, widgetOrigin). prompt_context must be a string or null. Use the exact widget origin; the parent origin must be listed in the widget’s allowed_origins.`);
   }
 
   private receiveContext = (event: MessageEvent) => {
-    if (window.parent === window || event.source !== window.parent || event.origin !== window.location.origin) return;
+    if (window.parent === window || event.source !== window.parent || !this.allowedOrigins.includes(event.origin)) return;
     const data = event.data;
     if (!data || data.type !== "zaq.widget.init") return;
     if (!nonblank(data.user_id)) {
@@ -42,6 +43,7 @@ export class WidgetContext extends ViewHook {
   };
 
   mounted() {
+    this.allowedOrigins = JSON.parse(this.el.dataset.allowedOrigins || "[]");
     window.addEventListener("message", this.receiveContext);
     this.announceReady();
   }
@@ -66,6 +68,8 @@ export class WidgetContext extends ViewHook {
         this.reportError("No valid user_id received within 5 seconds of zaq.widget.ready; the chat remains hidden. Send valid context to continue.");
       }, 5000);
     }
-    window.parent.postMessage({ type: "zaq.widget.ready" }, window.location.origin);
+    for (const origin of this.allowedOrigins) {
+      window.parent.postMessage({ type: "zaq.widget.ready" }, origin);
+    }
   }
 }

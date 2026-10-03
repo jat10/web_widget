@@ -23,7 +23,13 @@ defmodule WebWidget.Runtime do
       config =
         config
         |> Map.take([:channel_config_id, :sink_mfa, :widgets])
-        |> Map.update!(:widgets, &Enum.map(&1, fn widget -> Map.take(widget, @widget_fields) end))
+        |> Map.update!(
+          :widgets,
+          &Enum.map(&1, fn widget ->
+            {:ok, origins} = WebWidget.Origins.normalize(Map.get(widget, :allowed_origins))
+            widget |> Map.take(@widget_fields) |> Map.put(:allowed_origins, origins)
+          end)
+        )
 
       GenServer.start_link(__MODULE__, config)
     else
@@ -70,9 +76,9 @@ defmodule WebWidget.Runtime do
 
   defp valid_config?(_), do: false
 
-  defp valid_widget?(%{widget_id: id, display_name: name, allowed_origins: origins} = widget)
-       when is_binary(id) and id != "" and is_binary(name) and is_list(origins) do
-    Enum.all?(origins, &is_binary/1) and
+  defp valid_widget?(%{widget_id: id, display_name: name} = widget)
+       when is_binary(id) and id != "" and is_binary(name) do
+    match?({:ok, _}, WebWidget.Origins.normalize(Map.get(widget, :allowed_origins))) and
       (is_nil(Map.get(widget, :stylesheet_url)) or is_binary(widget.stylesheet_url))
   end
 
