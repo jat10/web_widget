@@ -45,7 +45,8 @@ Start each channel's runtime under the host supervisor:
 {WebWidget.Runtime,
  %{
    channel_config_id: 42,
-   sink_mfa: {MyApp.WebBridge, :from_listener, []},
+   sink_mfa: {MyApp.WebBridge, :from_widget, []},
+   pubsub_server: MyApp.PubSub,
    widgets: [
      %{widget_id: "support", display_name: "Support Assistant", allowed_origins: ["https://customer.com"]}
    ]
@@ -70,7 +71,13 @@ WEB_WIDGET_DEMO_ALLOWED_ORIGINS=http://localhost:4010 mix phx.server
 Use a comma-separated list to allow multiple origins. This development-only
 override replaces the demo allowlist and requires restarting the server.
 
-The callback is retained but not invoked yet. Widget IDs are globally unique.
+The callback receives the event followed by its configured arguments. It returns
+`{:ok, response_map}` for synchronous init/history requests, `:ok` for accepted
+asynchronous messages, or `{:error, reason}` on rejection. Host asynchronous
+responses enter through `WebWidget.Adapter.send_event/1`, which validates plain
+maps and publishes on the configured PubSub server. See the
+[adapter contract](docs/adapter-contract.md#implemented-delivery-boundary).
+Widget IDs are globally unique.
 HTTP and connected mounts look up the ID afresh. Missing/stopped runtimes render
 “Widget unavailable” without chat hooks and reject browser events. This is an
 HTTP 200 error screen, not a redirect or HTTP 404. Runtime changes do not revoke
@@ -109,8 +116,8 @@ or UI changes. Static responses revalidate with ETags.
 
 Embed `/widget/support` on a configured allowed origin and implement the ready/init
 handshake and resize handling below. Host routing/authentication remains the
-host's responsibility. Stylesheet URLs, callback dispatch, response PubSub, real initialization and
-history remain deferred. The existing mock conversation is unchanged.
+host's responsibility. The ZAQ-side bridge remains deferred. Callback dispatch,
+response PubSub, initialization, and history loading use the shared host boundary.
 
 ## React components
 
@@ -152,14 +159,68 @@ assigns to `assets/react-components/web-widget.tsx`. React uses assistant-ui's
 message list. Only draft input, submission acknowledgement, and errors are local.
 `useLiveReact().pushEvent("widget.submit", {text}, callback)` uses the existing
 LiveView WebSocket. LiveView validates the text, acknowledges it, and sends props
-updates immediately; the mock answer follows after 700ms. No client-side optimistic
+updates after host acceptance. Mock response events arrive at 350ms intervals. No client-side optimistic
 message is added, so first rendering depends on one WebSocket round trip.
 
 The React composition is `WebWidget` → `Conversation` (thread, user/assistant
 messages, `ResponseStep`) + `FloatingComposer`. It reuses assistant-ui's runtime
 provider, thread root/viewport/messages/scroll control, message parts, and composer
-root/input/send primitives. A response step is plain prototype data:
-`{type: "response.step", kind: "tool_call", text, status}`. This is not a WebBridge protocol.
+root/input/send primitives. Tool calls and results arrive as
+`response.message.step` events and update by step ID within their assistant message.
+React groups tool activity into expandable cards with progress badges and
+collapsible results. Activity opens while running, folds into a summary on
+completion, and stays open on failure. Streaming answers show a writing indicator;
+failed responses show a dedicated error panel. Arbitrary metadata is not sent
+to the browser.
+
+The standalone mock is explicitly enabled in development/test configuration via
+`:mock_host`. Its modules live in `test/support/demo`, compiled in development
+and test only. The development build includes this directory without loading
+other test support modules. Production builds exclude both mocks.
+It is not started by a dependency host or production defaults.
+Try these messages in `/widget-demo` or the local playground:
+
+| Message | Scenario |
+| --- | --- |
+| `hello` | Streamed greeting without tools |
+| `search` | Tool progress, result, then streamed answer |
+| `research` | Two independently updated tool calls |
+| `fail` | Tool failure and message failure; another message can be sent |
+| `slow` | Slower tool/streaming events |
+| Any other text | Default search scenario |
+
+Set `multiple_conversations: true` on a runtime widget to show the conversation
+sidebar and **New chat** button. The flag defaults to `false` and cannot be set
+by parent-page bootstrap. With it enabled, history loads after bootstrap with
+three mock conversations containing 4, 6, and 7 messages from yesterday and today.
+The widget stays in its compact launcher until the user sends the first message;
+loading history does not open it.
+Messages show local times and calendar-day separators. Selecting a conversation
+revalidates it through the host; switching is disabled while a response is running.
+Completed session updates survive switching, and New chat starts a separate
+conversation on its first submission.
+
+To enable this in the standalone development demo without editing configuration,
+restart the server with:
+
+```sh
+WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server
+```
+
+Combine this with `WEB_WIDGET_DEMO_ALLOWED_ORIGINS` if using the playground.
+The regular demo URL remains `/widget-demo`. Set the parent conversation ID to
+`mock-weekend`, `mock-billing`, or `mock-research` to start with a fixture;
+`mock-history` remains an alias for the first history. Unknown mock histories are empty; the mock does not
+persist or authenticate conversations. `WebWidget.MockHost` emits plain maps
+through the same `Adapter.send_event/1` used by ZAQ. `WebWidget.Conversation.State`
+reduces those events into LiveView-owned state, with stable message and step IDs.
+Switching to ZAQ requires configuring its callback and PubSub server and sending
+responses to the adapter, without changing the React components.
+
+The header’s **Close chat** button collapses the widget to its launcher without
+ending the conversation or cancelling the response. **Open conversation** restores
+the thread, including messages received while closed and any unsent draft. The
+demo restores host-page scrolling when the iframe returns to launcher mode.
 
 ### iframe sizing and customization
 
@@ -190,8 +251,9 @@ a developer console error explaining how to send `zaq.widget.init` after
 directly has no parent to initialize it; use `/widget-demo` or an embedding page.
 LiveView retains the context without exposing it in React props or treating it as
 authenticated identity. Identical retries are safe; changing context requires an
-iframe reload. Host initialization and conversation-history loading are not yet
-connected.
+iframe reload. The first submission initializes through the host callback,
+subscribes to the accepted conversation topic, and loads history when resuming
+a conversation before dispatching the message.
 
 React sends `window.parent.postMessage({type: "zaq.widget.resize", mode, height}, "*")`
 on mode and size changes. Launcher height is measured from the composer; conversation
@@ -200,11 +262,59 @@ height is `"100%"`. No message content is included. The demo listener in
 then changes only the iframe dimensions. The compact iframe leaves host content
 clickable and scrollable. This listener is a demo, not a parent SDK.
 
-Defaults live in `assets/css/widget.css`. Override `--zaq-widget-primary`,
+Set `theme: "light"`, `"dark"`, or `"auto"` in the host widget configuration.
+The default is `"auto"`, which follows browser appearance changes immediately.
+Set `style="color-scheme: light dark"` on the embedding `<iframe>` so its canvas
+stays transparent on both light and dark host pages. The demo includes this.
+For the local demo, start with `WEB_WIDGET_DEMO_THEME=dark mix phx.server`.
+
+Set `stylesheet_url: "https://your-site.example/widget.css"` (or a root-relative
+asset path) to load custom CSS inside the iframe. The URL is trusted host
+configuration; parent messages cannot change it. A failed stylesheet leaves the
+built-in theme available. Reload the iframe after configuration changes.
+
+Defaults live in `assets/css/widget.css` in the `zaq-widget-theme` cascade layer. Override `--zaq-widget-primary`,
 `--zaq-widget-background`, `--zaq-widget-text`, `--zaq-widget-radius`,
 `--zaq-widget-font-family`, or `--zaq-widget-composer-background` inside the widget
-document. Parent-page CSS does not cross the iframe boundary. No stylesheet URL API
-is implemented.
+document. Parent-page CSS does not cross the iframe boundary. Use unlayered CSS
+so your overrides take priority even when the widget CSS loads afterward:
+
+```css
+:root {
+  --zaq-widget-primary: #7356c7;
+  --zaq-widget-on-primary: #fff;
+  --zaq-widget-radius: 12px;
+}
+```
+
+The built-in palettes follow ZAQ chat’s foundation and semantic colors. Surface
+colors can also be overridden with `--zaq-widget-elevated`,
+`--zaq-widget-accent-background`, and `--zaq-widget-border`.
+
+Other color tokens include `--zaq-widget-muted`, `--zaq-widget-shadow`, and
+`--zaq-widget-error-border`, `--zaq-widget-error-background`,
+`--zaq-widget-error-text`, and `--zaq-widget-error-badge`. Custom CSS can use
+`[data-widget-theme="dark"]` and `prefers-color-scheme` media queries for its own
+appearance-specific overrides.
+
+### Elixir quality and coverage
+
+Like ZAQ, `mix q` runs formatting, strict Credo, and
+compilation with warnings treated as errors. ZAQ-specific hook and documentation
+tasks are not part of this standalone project.
+
+- `mix q` — fix formatting and run quality checks.
+- `mix precommit` — check formatting, run strict Credo, compile, and run all tests.
+- `mix coveralls` — run tests and print coverage.
+- `mix coveralls.html` — write a browsable report to `cover/excoveralls.html`.
+- `mix coveralls.json` — write machine-readable coverage to `cover/excoveralls.json`.
+
+Coverage tasks automatically use the test environment. Reports exclude dependencies
+and test support code; application code, including Phoenix components, is counted.
+CI runs strict Credo and coverage for every build and saves the report as an artifact.
+To enable Coveralls uploads, activate this repository in Coveralls and add its token
+as the GitHub Actions secret `COVERALLS_REPO_TOKEN`. Fork PRs generate local reports
+without uploading.
 
 ### Validation and limitations
 
@@ -225,10 +335,10 @@ State lasts only for the LiveView process; reloads or a new connection after pro
 loss reset it. One response runs at a time. There is no persistence, authentication,
 cancel/retry protocol, real tools, or ZAQ integration. A submission timeout can be
 ambiguous if the server accepted it; reliable retries will need request IDs when
-the real protocol is introduced. Embedding uses the configured origin allowlist and CSP `frame-ancestors`.
+request retry support is introduced. Embedding uses the configured origin allowlist and CSP `frame-ancestors`.
 Hosts remain responsible for their session policy. Mobile sizing uses `dvh`; real-device keyboard behavior still needs
-validation. Nothing in the UI requires another transport: a future WebBridge adapter
-can update LiveView-owned messages and steps through the same props boundary.
+validation. The ZAQ bridge can deliver events through `WebWidget.Adapter.send_event/1`;
+browser updates continue over the existing LiveView WebSocket.
 
 Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
 

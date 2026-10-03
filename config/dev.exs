@@ -89,3 +89,5 @@ config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
 config :web_widget, :demo_allowed_origins, ["http://localhost:4000"]
+
+config :web_widget, :mock_host, true

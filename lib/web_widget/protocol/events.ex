@@ -1,4 +1,4 @@
-defmodule WebWidget.Events do
+defmodule WebWidget.Protocol.Events do
   @moduledoc """
   Prepares widget-to-host events as plain maps without dispatching them.
 
@@ -8,7 +8,8 @@ defmodule WebWidget.Events do
   Unknown fields are discarded, including browser-supplied event types and modes.
   """
 
-  alias WebWidget.{Init, Message}
+  alias WebWidget.Protocol.Init
+  alias WebWidget.Protocol.Message
 
   @type result :: {:ok, map()} | {:error, atom()}
 
@@ -55,6 +56,32 @@ defmodule WebWidget.Events do
   def edit(widget_id, context, message, channel \\ "default") do
     message_event("message.edit", widget_id, context, message, channel)
   end
+
+  @doc "Builds a synchronous history request for a host-accepted conversation."
+  def history(widget_id, context, include_conversations \\ false)
+
+  def history(
+        widget_id,
+        %{user_id: user_id, conversation_id: conversation_id},
+        include_conversations
+      )
+      when is_boolean(include_conversations) do
+    if nonblank?(widget_id) and nonblank?(user_id) and nonblank?(conversation_id) do
+      {:ok,
+       %{
+         type: "conversation.history.request",
+         include_conversations: include_conversations,
+         mode: :sync,
+         widget_id: widget_id,
+         user_id: user_id,
+         conversation_id: conversation_id
+       }}
+    else
+      {:error, :invalid_history_context}
+    end
+  end
+
+  def history(_, _, _), do: {:error, :invalid_history_context}
 
   defp message_event(
          type,

@@ -1,6 +1,14 @@
 import Config
 
 if config_env() == :dev do
+  if theme = System.get_env("WEB_WIDGET_DEMO_THEME") do
+    config :web_widget, :demo_theme, theme
+  end
+
+  if value = System.get_env("WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS") do
+    config :web_widget, :demo_multiple_conversations, value == "true"
+  end
+
   if origins = System.get_env("WEB_WIDGET_DEMO_ALLOWED_ORIGINS") do
     config :web_widget,
            :demo_allowed_origins,

@@ -1,7 +1,7 @@
-defmodule WebWidget.MessageTest do
+defmodule WebWidget.Protocol.MessageTest do
   use ExUnit.Case, async: true
 
-  alias WebWidget.Message
+  alias WebWidget.Protocol.Message
 
   test "creation serializes to the asynchronous callback contract" do
     message = %Message{

@@ -28,15 +28,18 @@ test("floating iframe expands through React → LiveView and preserves the conve
   await input.press("Enter");
   await expect(frame).toHaveAttribute("data-mode", "conversation");
   await expect(widget.locator("#widget-state")).toHaveAttribute("data-mode", "conversation");
-  await expect(widget.locator('[data-role="user"]')).toHaveText("Where can I learn?");
+  await expect(widget.locator('[data-role="user"] .zaq-user-content')).toHaveText("Where can I learn?");
   await expect(widget.locator('[data-kind="tool_call"][data-status="running"]')).toContainText("Searching knowledge base");
   await expect(widget.locator('[data-role="assistant"]')).toContainText("prototype response to “Where can I learn?”");
-  await expect(widget.locator('.zaq-response-step[data-status="complete"]')).toBeVisible();
+  await expect(widget.locator('.zaq-activity-toggle')).toHaveAttribute("aria-expanded", "false");
+  await widget.locator('.zaq-activity-toggle').click();
+  await expect(widget.locator('.zaq-response-step[data-kind="tool_call"][data-status="complete"]')).toBeVisible();
   expect((await frame.boundingBox())!.height).toBeCloseTo(page.viewportSize()!.height, 0);
 
   await input.fill("What about parks?");
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
   await widget.getByRole("button", { name: "Send message" }).click();
-  await expect(widget.locator('[data-role="user"]')).toHaveText(["Where can I learn?", "What about parks?"]);
+  await expect(widget.locator('[data-role="user"] .zaq-user-content')).toHaveText(["Where can I learn?", "What about parks?"]);
   await expect(widget.locator('[data-role="assistant"]').last()).toContainText("prototype response to “What about parks?”");
   await expect(frame).toHaveAttribute("data-mode", "conversation");
   expect(errors).toEqual([]);
@@ -76,8 +79,8 @@ test("mobile launcher fits the viewport and Shift+Enter does not submit", async 
   expect(composer!.x).toBeGreaterThanOrEqual(12);
   expect(composer!.x + composer!.width).toBeLessThanOrEqual(378);
   await input.press("Enter");
-  await expect(widget.locator('[data-role="user"]')).toContainText("First line");
-  await expect(widget.locator('[data-role="user"]')).toContainText("Second line");
+  await expect(widget.locator('[data-role="user"] .zaq-user-content')).toContainText("First line");
+  await expect(widget.locator('[data-role="user"] .zaq-user-content')).toContainText("Second line");
   await expect(widget.locator('[data-role="assistant"]')).toContainText("No live search was performed.");
 });
 
@@ -193,4 +196,32 @@ test("missing user_id keeps chat hidden and console guidance allows late recover
   const errorCount = errors.length;
   await page.clock.runFor(5100);
   expect(errors).toHaveLength(errorCount);
+});
+
+test("close collapses the iframe and reopening preserves drafts and live responses", async ({ page }) => {
+  await page.goto("/widget-demo");
+  const frame = page.locator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-demo-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("research");
+  await input.press("Enter");
+  await expect(widget.locator('.zaq-response-step[data-status="running"]').first()).toBeVisible();
+  await input.fill("My follow-up draft");
+  await widget.getByRole("button", { name: "Close chat", exact: true }).click();
+  await expect(frame).toHaveAttribute("data-mode", "launcher");
+  await expect(widget.locator(".zaq-widget-header")).toHaveCount(0);
+  await expect(input).toHaveValue("My follow-up draft");
+  await expect(widget.getByRole("button", { name: "Open conversation" })).toBeFocused();
+  expect((await frame.boundingBox())!.height).toBeLessThan(260);
+  expect(await page.evaluate(() => document.documentElement.style.overflow)).not.toBe("hidden");
+  await page.evaluate(() => window.scrollTo(0, 400));
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
+  await widget.getByRole("button", { name: "Open conversation" }).click();
+  await expect(frame).toHaveAttribute("data-mode", "conversation");
+  await expect(input).toBeFocused();
+  await expect(input).toHaveValue("My follow-up draft");
+  await expect(widget.locator('[data-role="user"] .zaq-user-content')).toHaveText("research");
+  await expect(widget.locator(".zaq-answer-content")).toContainText("prototype response");
+  await expect(widget.locator(".zaq-activity-toggle")).toContainText("2 steps completed");
 });

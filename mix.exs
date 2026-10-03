@@ -11,7 +11,8 @@ defmodule WebWidget.MixProject do
       aliases: aliases(),
       deps: deps(),
       compilers: [:phoenix_live_view] ++ Mix.compilers(),
-      listeners: [Phoenix.CodeReloader]
+      listeners: [Phoenix.CodeReloader],
+      test_coverage: [tool: ExCoveralls]
     ]
   end
 
@@ -27,11 +28,20 @@ defmodule WebWidget.MixProject do
 
   def cli do
     [
-      preferred_envs: [precommit: :test]
+      preferred_envs: [
+        precommit: :test,
+        coveralls: :test,
+        "coveralls.detail": :test,
+        "coveralls.html": :test,
+        "coveralls.json": :test,
+        "coveralls.post": :test,
+        "coveralls.github": :test
+      ]
     ]
   end
 
   # Specifies which paths to compile per environment.
+  defp elixirc_paths(:dev), do: ["lib", "test/support/demo"]
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
@@ -40,6 +50,8 @@ defmodule WebWidget.MixProject do
   # Type `mix help deps` for examples and options.
   defp deps do
     [
+      {:credo, "~> 1.7.13", only: [:dev, :test], runtime: false},
+      {:excoveralls, "~> 0.18.5", only: :test},
       {:phoenix, "~> 1.8.3"},
       {:phoenix_ecto, "~> 4.5"},
       {:ecto_sql, "~> 3.13"},
@@ -85,7 +97,18 @@ defmodule WebWidget.MixProject do
         "assets.build",
         "phx.digest"
       ],
-      precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
+      q: ["quality"],
+      quality: [
+        "format",
+        "credo --strict",
+        "compile --warnings-as-errors"
+      ],
+      precommit: [
+        "format --check-formatted",
+        "credo --strict",
+        "compile --warnings-as-errors",
+        "test"
+      ]
     ]
   end
 end

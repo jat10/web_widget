@@ -34,8 +34,13 @@ Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
 
 {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, {WebWidget.Runtime, %{
   channel_config_id: :origin_tests,
-  sink_mfa: {WebWidget.Application, :unused, []},
+  sink_mfa: {WebWidget.MockHost, :handle_event, []},
+     pubsub_server: WebWidget.PubSub,
   widgets: [
+    %{widget_id: "theme-light", display_name: "Light assistant", theme: "light", allowed_origins: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-dark", display_name: "Dark assistant", theme: "dark", multiple_conversations: true, allowed_origins: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-custom", display_name: "Custom assistant", theme: "dark", stylesheet_url: "/custom-widget.css", allowed_origins: ["http://127.0.0.1:4019"]},
+    %{widget_id: "multi", display_name: "Conversation history", multiple_conversations: true, allowed_origins: ["http://127.0.0.1:4019"]},
     %{widget_id: "cross-origin", display_name: "Cross origin", allowed_origins: ["http://127.0.0.1:4019"]},
     %{widget_id: "no-origins", display_name: "Disabled"},
     %{widget_id: "empty-origins", display_name: "Disabled", allowed_origins: []}

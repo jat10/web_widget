@@ -38,6 +38,42 @@ defmodule WebWidget.RuntimeTest do
     assert Runtime.fetch_widget("missing") == {:error, :not_found}
   end
 
+  test "accepts supported themes and stylesheet URLs and rejects invalid values" do
+    config = config()
+    [widget | _] = config.widgets
+
+    for theme <- ["light", "dark", "auto"] do
+      themed = Map.put(widget, :theme, theme)
+      start_supervised!({Runtime, %{config | widgets: [themed]}})
+      assert Runtime.fetch_widget(widget.widget_id) == {:ok, themed}
+      stop_supervised!({Runtime, config.channel_config_id})
+    end
+
+    for theme <- [nil, :dark, "system", "DARK", true] do
+      assert {:error, :invalid_runtime_config} =
+               Runtime.start_link(%{config | widgets: [Map.put(widget, :theme, theme)]})
+    end
+
+    for url <- [nil, "/css/theme.css?v=2", "https://cdn.example.com/theme.css"] do
+      start_supervised!({Runtime, %{config | widgets: [%{widget | stylesheet_url: url}]}})
+      stop_supervised!({Runtime, config.channel_config_id})
+    end
+
+    for url <- [
+          "",
+          "theme.css",
+          "//cdn.example.com/theme.css",
+          "javascript:alert(1)",
+          "data:text/css,body{}",
+          "https://",
+          "https://user@example.com/theme.css",
+          123
+        ] do
+      assert {:error, :invalid_runtime_config} =
+               Runtime.start_link(%{config | widgets: [%{widget | stylesheet_url: url}]})
+    end
+  end
+
   test "stopping removes widgets and restarting applies replacement configuration" do
     config = config()
     [widget | _] = config.widgets
@@ -117,6 +153,7 @@ defmodule WebWidget.RuntimeTest do
 
     for widgets <- [
           [widget, widget],
+          [Map.put(widget, :multiple_conversations, "true")],
           [%{widget | display_name: %{token: "secret"}}],
           [%{widget | allowed_origins: [%{token: "secret"}]}],
           [%{widget | stylesheet_url: %{token: "secret"}}],

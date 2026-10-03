@@ -1,6 +1,8 @@
 ExUnit.start()
 
+# Standalone script executed by the dependency-host test, outside mix test discovery.
 defmodule WebWidget.DependencyHostSmokeTest do
+  # credo:disable-for-next-line Credo.Check.Warning.WrongTestFilename
   use ExUnit.Case
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
@@ -22,12 +24,14 @@ defmodule WebWidget.DependencyHostSmokeTest do
     )
 
     start_supervised!(@endpoint)
+    start_supervised!(WebWidget.MockHost)
 
     start_supervised!(
       {WebWidget.Runtime,
        %{
          channel_config_id: :isolated_host,
-         sink_mfa: {__MODULE__, :unused, []},
+         sink_mfa: {WebWidget.MockHost, :handle_event, []},
+         pubsub_server: WebWidget.DependencyHostPubSub,
          widgets: [
            %{
              widget_id: "isolated",
