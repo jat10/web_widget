@@ -23,15 +23,6 @@ config :web_widget, WebWidgetWeb.Endpoint,
   pubsub_server: WebWidget.PubSub,
   live_view: [signing_salt: "5AWTtc+k"]
 
-# Configure the mailer
-#
-# By default it uses the "Local" adapter which stores the emails
-# locally. You can see the emails in your browser, at "/dev/mailbox".
-#
-# For production it's recommended to configure a different adapter
-# at the `config/runtime.exs`.
-config :web_widget, WebWidget.Mailer, adapter: Swoosh.Adapters.Local
-
 # React components render in the browser; no Node.js SSR service is required.
 config :live_react, ssr: false
 
