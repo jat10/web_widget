@@ -1,0 +1,86 @@
+name: E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E Chromium
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MIX_ENV: dev
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28.1'
+          elixir-version: '1.19.5'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: assets/package-lock.json
+
+      - name: Restore Mix cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build/dev
+          key: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-e2e-${{ hashFiles('mix.lock', 'mix.exs', 'config/**') }}
+          restore-keys: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-e2e-
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm --prefix assets ci
+
+      # Compile before Playwright starts its server readiness timeout.
+      - name: Build assets
+        run: mix assets.build
+
+      - name: Prepare browser tests
+        run: |
+          mix ecto.create
+          mix ecto.migrate
+          cd assets
+          npx playwright install --with-deps chromium
+
+      - name: Run browser tests
+        run: npm --prefix assets run test:e2e
+
+      - name: Upload Playwright artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-artifacts-chromium
+          path: |
+            assets/playwright-report
+            assets/test-results
+          if-no-files-found: ignore

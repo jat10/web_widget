@@ -1,0 +1,76 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Elixir tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MIX_ENV: test
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28.1'
+          elixir-version: '1.19.5'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: assets/package-lock.json
+
+      - name: Restore Mix cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build/test
+          key: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-test-${{ hashFiles('mix.lock', 'mix.exs', 'config/**') }}
+          restore-keys: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-test-
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm --prefix assets ci
+
+      - name: Compile and check formatting
+        run: |
+          mix compile --warnings-as-errors
+          mix format --check-formatted
+
+      # Host rendering tests request the real built assets.
+      - name: Build assets
+        run: mix assets.build
+
+      - name: Run Elixir tests
+        run: mix test
