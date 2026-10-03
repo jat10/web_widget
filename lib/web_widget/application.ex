@@ -23,6 +23,12 @@ defmodule WebWidget.Application do
 
   defp standalone_children do
     [
+      {WebWidget.Runtime,
+       %{
+         channel_config_id: :standalone_demo,
+         sink_mfa: {__MODULE__, :unused, []},
+         widgets: [%{widget_id: "demo", display_name: "Website assistant", allowed_origins: []}]
+       }},
       WebWidgetWeb.Telemetry,
       WebWidget.Repo,
       {DNSCluster, query: Application.get_env(:web_widget, :dns_cluster_query) || :ignore},

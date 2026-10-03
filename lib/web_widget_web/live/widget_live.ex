@@ -2,17 +2,30 @@ defmodule WebWidgetWeb.WidgetLive do
   use WebWidgetWeb, :live_view
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(%{"widget_id" => widget_id}, _session, socket) do
+    case WebWidget.Runtime.fetch_widget(widget_id) do
+      {:ok, widget} ->
+        mount_widget(socket, widget)
+
+      {:error, :not_found} ->
+        {:ok, assign(socket, unavailable: true, page_title: "Widget unavailable")}
+    end
+  end
+
+  defp mount_widget(socket, widget) do
     {:ok,
      assign(socket,
        widget: true,
+       unavailable: false,
+       widget_id: widget.widget_id,
+       page_title: widget.display_name,
        parent_context: nil,
        mode: :launcher,
        messages: [],
        pending_reply: nil,
        next_id: 1,
        config: %{
-         title: "Website assistant",
+         title: widget.display_name,
          placeholder: "Ask a question…",
          follow_up_placeholder: "Ask a follow-up…",
          max_length: 2000
@@ -21,6 +34,14 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   @impl true
+  def render(%{unavailable: true} = assigns) do
+    ~H"""
+    <Layouts.app flash={@flash} widget>
+      <p id="widget-unavailable" role="alert">Widget unavailable.</p>
+    </Layouts.app>
+    """
+  end
+
   def render(assigns) do
     ~H"""
     <Layouts.app flash={@flash} widget>
@@ -34,6 +55,7 @@ defmodule WebWidgetWeb.WidgetLive do
           :if={@parent_context != nil}
           id="web-widget"
           name="WebWidget"
+          ssr={false}
           socket={@socket}
           mode={@mode}
           messages={@messages}
@@ -46,6 +68,10 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   @impl true
+  def handle_event(_event, _params, %{assigns: %{unavailable: true}} = socket) do
+    {:reply, %{ok: false, error: "Widget unavailable."}, socket}
+  end
+
   def handle_event("widget.context", %{"user_id" => user_id} = params, socket) do
     context = %{
       user_id: user_id,
