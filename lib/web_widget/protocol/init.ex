@@ -1,4 +1,4 @@
-defmodule WebWidget.Init do
+defmodule WebWidget.Protocol.Init do
   @moduledoc """
   Internal `widget.init` request. Convert with `to_map/1` before calling the host.
 

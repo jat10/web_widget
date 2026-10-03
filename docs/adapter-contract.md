@@ -87,6 +87,7 @@ Example:
 ```elixir
 %{
   channel_config_id: 42,
+  pubsub_server: Zaq.PubSub,
   sink_mfa: {Zaq.Channels.WebBridge, :from_listener, []},
   widgets: [
     %{
@@ -161,7 +162,18 @@ no valid context arrives within five seconds of readiness, the same guidance
 is logged. A later valid message can still initialize the widget.
 Identical retries are accepted; replacing context requires
 an iframe reload. Receiving context does not perform host initialization or
-load conversation history. Stylesheet customization remains deferred.
+load conversation history unless multiple conversations are enabled.
+
+Widget presentation accepts `theme: "light" | "dark" | "auto"` (default `"auto"`).
+Auto follows the browser color-scheme preference, including changes while open.
+The embedding iframe should use `color-scheme: light dark` to keep its transparent
+canvas compatible with either browser scheme. The chat controls apply the
+configured widget theme independently of that canvas.
+The trusted host may provide `stylesheet_url` as an HTTP(S) URL or a root-relative
+asset path; the widget loads it inside the iframe. Theme defaults use the
+`zaq-widget-theme` CSS layer so an unlayered custom stylesheet can override
+`--zaq-widget-*` variables on `:root`, regardless of asset loading order.
+Theme and stylesheet changes require an iframe reload.
 Origin configuration is checked on HTTP rendering and LiveView mounting;
 runtime changes require reloading existing iframes to refresh their HTTP policy.
 
@@ -204,16 +216,17 @@ It only knows that it has a configured callback.
 
 ### Event shape
 
-`WebWidget.Events` prepares the three inbound event maps without dispatching:
+`WebWidget.Protocol.Events` prepares inbound event maps without dispatching:
 
 ```elixir
-{:ok, init} = WebWidget.Events.init(widget_id, parent_context)
-{:ok, create} = WebWidget.Events.create(widget_id, accepted_context, %{id: message_id, content: text})
-{:ok, edit} = WebWidget.Events.edit(widget_id, accepted_context, %{id: message_id, content: updated_text})
+{:ok, init} = WebWidget.Protocol.Events.init(widget_id, parent_context)
+{:ok, create} = WebWidget.Protocol.Events.create(widget_id, accepted_context, %{id: message_id, content: text})
+{:ok, edit} = WebWidget.Protocol.Events.edit(widget_id, accepted_context, %{id: message_id, content: updated_text})
+{:ok, history} = WebWidget.Protocol.Events.history(widget_id, accepted_context)
 ```
 
 These builders accept internal atom-keyed maps and return `{:ok, event_map}` or
-`{:error, reason}`. Init uses `:sync`; create/edit use `:async` and require a
+`{:error, reason}`. Init/history use `:sync`; create/edit use `:async` and require a
 nonblank conversation ID from the host-accepted context. Both message builders
 accept an optional fourth argument for the public channel alias (`"default"`
 otherwise), and set `timestamp` at build time. The caller supplies and retains
@@ -259,7 +272,7 @@ Before the first user message is processed, the widget sends a `widget.init` req
 Conceptual internal struct:
 
 ```elixir
-%WebWidget.Init{
+%WebWidget.Protocol.Init{
   conversation_id: nil | "conv_123",
   user_id: "user_123",
   mode: :sync | :async,
@@ -309,6 +322,77 @@ A successful synchronous init response should include at least:
 ```
 
 `user_id` is included here so the widget knows which identity context ZAQ accepted/bound.
+
+---
+
+## Multiple conversations and timestamps
+
+Each runtime widget accepts `multiple_conversations: false` (default). Only trusted
+runtime configuration enables this feature; browser bootstrap cannot override it.
+When enabled, bootstrap loads history without expanding the launcher. The first
+message submission opens the conversation and sidebar; typing a draft alone does
+not expand it. Bootstrap initializes the host context and requests history with
+`include_conversations: true`. The synchronous `response.conversation.history`
+payload keeps `messages` for the accepted conversation and adds `conversations`:
+
+```elixir
+%{
+  messages: [],
+  conversations: [
+    %{id: "conv_1", title: "Research notes", messages: [
+      %{id: "msg_1", role: "user", content: "Hello", timestamp: "2026-10-03T09:00:00Z"}
+    ]}
+  ]
+}
+```
+
+ZAQ must return only conversations authorized for the accepted user and widget.
+Selection is limited to that list and reinitializes through the host before
+subscribing to the selected topic. Switching and New chat are disabled during an
+active response. Session updates are cached in LiveView; this is not persistence.
+New chat initializes with a null conversation ID on its first submission. The
+original parent bootstrap remains immutable across selections.
+
+Message `timestamp` is an optional ISO 8601 timestamp with offset (or DateTime
+at the in-process boundary), normalized to ISO 8601. Creation time is preserved
+through streaming edits and completion. History messages must be ordered oldest
+to newest by the host. Untimestamped legacy history is still
+accepted, without inventing historical dates. The UI formats times and calendar
+day separators in the browser's local time zone: Today, Yesterday, or a date.
+The mock history response supplies three fixture conversations containing 4, 6,
+and 7 timestamped messages across yesterday and today.
+
+---
+
+## Implemented delivery boundary
+
+Runtime configuration includes `pubsub_server`, the host-owned Phoenix.PubSub
+server name. `sink_mfa: {module, function, args}` is invoked as
+`apply(module, function, [event | args])`. Use a host wrapper or configured extra
+arguments to adapt an existing bridge signature. Callbacks must return promptly:
+init/history return `{:ok, response_map}`, message create/edit return `:ok` once
+accepted, and failures return `{:error, reason}`. Callback exceptions are reported
+as unavailable, without exposing exception details to the browser.
+
+`WebWidget.Adapter.send_event/1` accepts atom-keyed plain maps and validates the
+response namespace and payload. It resolves the PubSub server from the widget's
+runtime and publishes to a topic scoped by widget and conversation IDs. LiveView
+subscribes after synchronous initialization and before history or message dispatch.
+No widget-wide subscription is used for initialization: pre-conversation errors
+are returned synchronously. PubSub delivery requires a nonblank conversation ID.
+
+Message edits contain the full replacement text, not token deltas. A create event
+must precede edits, steps, completion, or failure for its message ID. Steps update
+by step ID within their assistant message; terminal messages/steps cannot regress
+on duplicate or late events. Producers must serialize events for each response and stop typing before the
+terminal message event, so a delayed typing reset cannot affect the next turn.
+Conversation IDs cannot change through unsolicited PubSub events. History is a
+snapshot loaded before a resumed conversation accepts a new message.
+
+The development/test mock uses this exact callback and adapter path. It does not
+authenticate users or persist history. The mock supplies three dated conversation fixtures; `mock-history` is an alias
+for the first. Unknown mock histories are empty. Reconnects reinitialize on
+the next submission. PubSub is live delivery, without replay or persistence.
 
 ---
 
@@ -443,7 +527,7 @@ Example:
 
 ## Outbound communication: ZAQ -> web_widget
 
-ZAQ should not build `WebWidget.Response` structs.
+ZAQ should not build `WebWidget.Protocol.Response` structs.
 
 `WebBridge` sends plain maps to the adapter:
 
@@ -605,7 +689,7 @@ Example:
     id: "step_1",
     message_id: "resp_456",
     kind: "tool_call",
-    state: "running",
+    state: "started",
     label: "Searching knowledge base",
     content: nil,
     metadata: %{}

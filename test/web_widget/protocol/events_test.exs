@@ -1,7 +1,7 @@
-defmodule WebWidget.EventsTest do
+defmodule WebWidget.Protocol.EventsTest do
   use ExUnit.Case, async: true
 
-  alias WebWidget.Events
+  alias WebWidget.Protocol.Events
 
   @context %{user_id: "user_123", conversation_id: "conv_123"}
   @message %{id: "msg_123", content: "  Hello\nworld  "}

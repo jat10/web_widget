@@ -1,4 +1,4 @@
-defmodule WebWidget.Unavailable do
+defmodule WebWidget.Embedding.Unavailable do
   @moduledoc false
   import Plug.Conn
 

@@ -23,27 +23,37 @@ defmodule WebWidget.Application do
 
   defp standalone_children do
     [
-      {WebWidget.Runtime,
-       %{
-         channel_config_id: :standalone_demo,
-         sink_mfa: {__MODULE__, :unused, []},
-         widgets: [
-           %{
-             widget_id: "demo",
-             display_name: "Website assistant",
-             allowed_origins: Application.get_env(:web_widget, :demo_allowed_origins, [])
-           }
-         ]
-       }},
       WebWidgetWeb.Telemetry,
       WebWidget.Repo,
       {DNSCluster, query: Application.get_env(:web_widget, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: WebWidget.PubSub},
-      # Start a worker by calling: WebWidget.Worker.start_link(arg)
-      # {WebWidget.Worker, arg},
-      # Start to serve requests, typically the last entry
-      WebWidgetWeb.Endpoint
-    ]
+      {Phoenix.PubSub, name: WebWidget.PubSub}
+    ] ++ demo_children() ++ [WebWidgetWeb.Endpoint]
+  end
+
+  defp demo_children do
+    if Application.get_env(:web_widget, :mock_host, false) do
+      [
+        WebWidget.MockHost,
+        {WebWidget.Runtime,
+         %{
+           channel_config_id: :standalone_demo,
+           sink_mfa: {WebWidget.MockHost, :handle_event, []},
+           pubsub_server: WebWidget.PubSub,
+           widgets: [
+             %{
+               widget_id: "demo",
+               display_name: "Website assistant",
+               theme: Application.get_env(:web_widget, :demo_theme, "auto"),
+               multiple_conversations:
+                 Application.get_env(:web_widget, :demo_multiple_conversations, false),
+               allowed_origins: Application.get_env(:web_widget, :demo_allowed_origins, [])
+             }
+           ]
+         }}
+      ]
+    else
+      []
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration

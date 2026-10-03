@@ -1,4 +1,4 @@
-defmodule WebWidget.Message do
+defmodule WebWidget.Protocol.Message do
   @moduledoc """
   Internal `message.create` or `message.edit` request.
 

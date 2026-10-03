@@ -2,6 +2,7 @@
 const frame = document.querySelector<HTMLIFrameElement>("#zaq-demo-widget");
 
 if (frame) {
+  const originalOverflow = document.documentElement.style.overflow;
   window.addEventListener("message", (event: MessageEvent) => {
     if (event.source !== frame.contentWindow || event.origin !== window.location.origin) return;
     const data = event.data;
@@ -20,6 +21,7 @@ if (frame) {
     frame.dataset.mode = data.mode;
     if (data.mode === "launcher" && typeof data.height === "number" && Number.isFinite(data.height)) {
       frame.style.height = `${Math.min(260, Math.max(96, data.height))}px`;
+      document.documentElement.style.overflow = originalOverflow;
     } else if (data.mode === "conversation") {
       frame.style.height = "100dvh";
       document.documentElement.style.overflow = "hidden";

@@ -13,23 +13,24 @@ defmodule WebWidget.Router do
     session = String.to_atom("web_widget_#{__CALLER__.line}")
 
     quote do
-      require Phoenix.LiveView.Router
+      alias Phoenix.LiveView.Router, as: LiveViewRouter
+      require LiveViewRouter
 
       pipeline unquote(session) do
-        plug WebWidget.FramePolicy
+        plug WebWidget.Embedding.FramePolicy
       end
 
       scope unquote(prefix), alias: false do
         pipe_through unquote(session)
 
-        Phoenix.LiveView.Router.live_session unquote(session),
+        LiveViewRouter.live_session unquote(session),
           layout: false,
           root_layout: {WebWidgetWeb.Layouts, :widget} do
-          Phoenix.LiveView.Router.live("/:widget_id", WebWidgetWeb.WidgetLive)
+          LiveViewRouter.live("/:widget_id", WebWidgetWeb.WidgetLive)
         end
 
-        get "/", WebWidget.Unavailable, []
-        get "/*path", WebWidget.Unavailable, []
+        get "/", WebWidget.Embedding.Unavailable, []
+        get "/*path", WebWidget.Embedding.Unavailable, []
       end
     end
   end

@@ -1,4 +1,4 @@
-defmodule WebWidget.FramePolicy do
+defmodule WebWidget.Embedding.FramePolicy do
   @moduledoc false
   import Plug.Conn
 

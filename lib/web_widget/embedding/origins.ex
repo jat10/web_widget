@@ -1,4 +1,4 @@
-defmodule WebWidget.Origins do
+defmodule WebWidget.Embedding.Origins do
   @moduledoc false
 
   def normalize(nil), do: {:ok, []}
@@ -18,7 +18,7 @@ defmodule WebWidget.Origins do
     with {:ok, uri} <- URI.new(origin),
          true <- uri.scheme in ["http", "https"],
          true <- valid_host?(uri.host),
-         true <- is_integer(uri.port) and uri.port in 1..65535,
+         true <- is_integer(uri.port) and uri.port in 1..65_535,
          true <- is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment),
          true <- uri.path in [nil, "", "/"] do
       {:ok, URI.to_string(%{uri | host: String.downcase(uri.host), path: nil})}

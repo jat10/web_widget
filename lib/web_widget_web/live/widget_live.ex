@@ -1,6 +1,12 @@
 defmodule WebWidgetWeb.WidgetLive do
   use WebWidgetWeb, :live_view
 
+  alias WebWidget.Adapter
+  alias WebWidget.Conversation.State, as: Conversation
+  alias WebWidget.Protocol.Events
+  alias WebWidget.Protocol.Response
+  alias WebWidget.Runtime
+
   @impl true
   def mount(%{"widget_id" => widget_id}, _session, socket) do
     case WebWidget.Runtime.fetch_widget(widget_id) do
@@ -20,13 +26,23 @@ defmodule WebWidgetWeb.WidgetLive do
        widget_id: widget.widget_id,
        allowed_origins: widget.allowed_origins,
        page_title: widget.display_name,
+       widget_theme: Map.get(widget, :theme, "auto"),
+       widget_stylesheet_url: Map.get(widget, :stylesheet_url),
        parent_context: nil,
        mode: :launcher,
+       conversation_opened: false,
        messages: [],
        pending_reply: nil,
-       next_id: 1,
+       accepted_context: nil,
+       subscription: nil,
+       conversations: [],
+       conversation_states: %{},
+       new_chat: false,
+       typing: false,
+       error: nil,
        config: %{
          title: widget.display_name,
+         multiple_conversations: Map.get(widget, :multiple_conversations, false),
          placeholder: "Ask a question…",
          follow_up_placeholder: "Ask a follow-up…",
          max_length: 2000
@@ -64,9 +80,14 @@ defmodule WebWidgetWeb.WidgetLive do
           ssr={false}
           socket={@socket}
           mode={@mode}
+          canReopen={@conversation_opened}
           messages={@messages}
           isRunning={@pending_reply != nil}
+          isTyping={@typing}
+          responseError={@error}
           config={@config}
+          conversations={@conversations}
+          conversationId={if @accepted_context, do: @accepted_context.conversation_id, else: nil}
         />
       </div>
     </Layouts.app>
@@ -76,6 +97,70 @@ defmodule WebWidgetWeb.WidgetLive do
   @impl true
   def handle_event(_event, _params, %{assigns: %{unavailable: true}} = socket) do
     {:reply, %{ok: false, error: "Widget unavailable."}, socket}
+  end
+
+  def handle_event("widget.close", _params, socket) do
+    {:reply, %{ok: true}, assign(socket, :mode, :launcher)}
+  end
+
+  def handle_event("widget.open", _params, socket) do
+    if socket.assigns.parent_context && socket.assigns.conversation_opened do
+      {:reply, %{ok: true}, assign(socket, mode: :conversation, conversation_opened: true)}
+    else
+      {:reply, %{ok: false, error: "No conversation to reopen."}, socket}
+    end
+  end
+
+  def handle_event("widget.conversation.select", %{"id" => id}, socket) do
+    cond do
+      not conversations_enabled?(socket) ->
+        {:reply, %{ok: false, error: "Conversation switching is unavailable."}, socket}
+
+      socket.assigns.pending_reply != nil ->
+        {:reply, %{ok: false, error: "Wait for the current response before switching chats."},
+         socket}
+
+      not Enum.any?(socket.assigns.conversations, &(&1.id == id)) ->
+        {:reply, %{ok: false, error: "Conversation unavailable."}, socket}
+
+      socket.assigns.accepted_context && socket.assigns.accepted_context.conversation_id == id ->
+        {:reply, %{ok: true}, socket}
+
+      true ->
+        case initialize(cache_current(socket), id) do
+          {:ok, socket} ->
+            {:reply, %{ok: true}, assign(socket, mode: :conversation, conversation_opened: true)}
+
+          {:error, socket} ->
+            {:reply, %{ok: false, error: "Unable to open this conversation."}, socket}
+        end
+    end
+  end
+
+  def handle_event("widget.conversation.select", _params, socket) do
+    {:reply, %{ok: false, error: "Conversation unavailable."}, socket}
+  end
+
+  def handle_event("widget.conversation.new", _params, socket) do
+    if conversations_enabled?(socket) and socket.assigns.pending_reply == nil do
+      socket = cache_current(socket)
+      if socket.assigns.subscription, do: Adapter.unsubscribe(socket.assigns.subscription)
+
+      {:reply, %{ok: true},
+       socket
+       |> assign(Conversation.new())
+       |> assign(
+         accepted_context: nil,
+         subscription: nil,
+         new_chat: true,
+         mode: :conversation,
+         conversation_opened: true
+       )}
+    else
+      {:reply,
+       %{ok: false, error: "Wait for the current response or enable multiple conversations."},
+       socket}
+    end
   end
 
   def handle_event("widget.context", %{"user_id" => user_id} = params, socket) do
@@ -92,8 +177,13 @@ defmodule WebWidgetWeb.WidgetLive do
       socket.assigns.parent_context not in [nil, context] ->
         {:reply, %{ok: false, error: "Reload the widget to change context."}, socket}
 
+      socket.assigns.parent_context == context ->
+        {:reply, %{ok: true}, socket}
+
       true ->
-        {:reply, %{ok: true}, assign(socket, :parent_context, context)}
+        candidate = assign(socket, :parent_context, context)
+
+        initialize_context(candidate, socket)
     end
   end
 
@@ -116,34 +206,13 @@ defmodule WebWidgetWeb.WidgetLive do
         {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
 
       true ->
-        id = socket.assigns.next_id
-        assistant_id = "assistant-#{id}"
-        timer = Process.send_after(self(), {:mock_reply, assistant_id}, 700)
+        case initialize(socket) do
+          {:ok, socket} ->
+            submit(socket, text)
 
-        messages =
-          socket.assigns.messages ++
-            [
-              %{id: "user-#{id}", role: "user", content: text},
-              %{
-                id: assistant_id,
-                role: "assistant",
-                content: "",
-                step: %{
-                  type: "response.step",
-                  kind: "tool_call",
-                  text: "Searching knowledge base…",
-                  status: "running"
-                }
-              }
-            ]
-
-        {:reply, %{ok: true},
-         assign(socket,
-           mode: :conversation,
-           messages: messages,
-           next_id: id + 1,
-           pending_reply: %{id: assistant_id, text: text, timer: timer}
-         )}
+          {:error, socket} ->
+            {:reply, %{ok: false, error: "Unable to initialize chat. Please try again."}, socket}
+        end
     end
   end
 
@@ -152,27 +221,213 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   @impl true
-  def handle_info({:mock_reply, id}, %{assigns: %{pending_reply: %{id: id} = pending}} = socket) do
-    Process.cancel_timer(pending.timer)
-
-    messages =
-      Enum.map(socket.assigns.messages, fn
-        %{id: ^id} = message ->
-          %{
-            message
-            | content:
-                "This is a prototype response to “#{pending.text}”. No live search was performed.",
-              step: %{message.step | status: "complete"}
-          }
-
-        message ->
-          message
-      end)
-
-    {:noreply, assign(socket, messages: messages, pending_reply: nil)}
+  def handle_info({:web_widget_response, event}, socket) do
+    with %{conversation_id: conversation_id} <- socket.assigns[:accepted_context],
+         {:ok, %{widget_id: widget_id, conversation_id: ^conversation_id} = response} <-
+           Response.normalize(event),
+         true <- widget_id == socket.assigns.widget_id do
+      state = Conversation.apply_event(conversation_state(socket), response)
+      {:noreply, socket |> assign(state) |> cache_current()}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
-  def handle_info({:mock_reply, _id}, socket), do: {:noreply, socket}
+  def handle_info(_, socket), do: {:noreply, socket}
+
+  defp initialize(socket, requested_id \\ :bootstrap)
+
+  defp initialize(%{assigns: %{accepted_context: context}} = socket, :bootstrap)
+       when not is_nil(context),
+       do: {:ok, socket}
+
+  defp initialize(socket, requested_id) do
+    widget_id = socket.assigns.widget_id
+    parent = initialization_parent(socket, requested_id)
+
+    with {:ok, event} <- Events.init(widget_id, parent),
+         {:ok, response} <- Runtime.dispatch(event),
+         {:ok, %{type: "response.widget.initialized", widget_id: ^widget_id} = response} <-
+           Response.normalize(response),
+         true <- requested_id == :bootstrap or response.conversation_id == requested_id,
+         {:ok, subscription} <- Adapter.subscribe(widget_id, response.conversation_id) do
+      context = Map.merge(parent, Map.take(response, [:user_id, :conversation_id]))
+
+      candidate =
+        socket
+        |> assign(Conversation.new())
+        |> assign(accepted_context: context, subscription: subscription, new_chat: false)
+
+      candidate
+      |> restore_conversation(socket, parent)
+      |> finish_initialization(socket, subscription)
+    else
+      _ -> {:error, socket}
+    end
+  end
+
+  defp initialize_context(
+         %{assigns: %{config: %{multiple_conversations: false}}} = candidate,
+         _socket
+       ),
+       do: {:reply, %{ok: true}, candidate}
+
+  defp initialize_context(candidate, socket) do
+    case initialize(candidate) do
+      {:ok, candidate} ->
+        {:reply, %{ok: true}, candidate}
+
+      {:error, _} ->
+        {:reply, %{ok: false, error: "Unable to load conversations. Please try again."}, socket}
+    end
+  end
+
+  defp initialization_parent(socket, requested_id) do
+    parent = socket.assigns.parent_context
+
+    cond do
+      requested_id != :bootstrap -> Map.put(parent, :conversation_id, requested_id)
+      socket.assigns.new_chat -> Map.put(parent, :conversation_id, nil)
+      true -> parent
+    end
+  end
+
+  defp restore_conversation(candidate, socket, parent) do
+    cached =
+      Map.get(
+        socket.assigns.conversation_states,
+        candidate.assigns.accepted_context.conversation_id
+      )
+
+    cond do
+      cached ->
+        {:ok, assign(candidate, cached)}
+
+      parent.conversation_id ||
+          (socket.assigns.config.multiple_conversations && not socket.assigns.new_chat) ->
+        load_history(candidate)
+
+      true ->
+        {:ok, candidate}
+    end
+  end
+
+  defp finish_initialization({:ok, candidate}, socket, subscription) do
+    if socket.assigns.subscription && socket.assigns.subscription != subscription,
+      do: Adapter.unsubscribe(socket.assigns.subscription)
+
+    {:ok, candidate}
+  end
+
+  defp finish_initialization(_, socket, subscription) do
+    if socket.assigns.subscription != subscription, do: Adapter.unsubscribe(subscription)
+    {:error, socket}
+  end
+
+  defp load_history(socket) do
+    widget_id = socket.assigns.widget_id
+    conversation_id = socket.assigns.accepted_context.conversation_id
+
+    with {:ok, event} <-
+           Events.history(
+             widget_id,
+             socket.assigns.accepted_context,
+             socket.assigns.config.multiple_conversations
+           ),
+         {:ok, response} <- Runtime.dispatch(event),
+         {:ok,
+          %{
+            type: "response.conversation.history",
+            widget_id: ^widget_id,
+            conversation_id: ^conversation_id
+          } = response} <- Response.normalize(response) do
+      socket = assign(socket, Conversation.apply_event(conversation_state(socket), response))
+
+      socket =
+        if socket.assigns.config.multiple_conversations do
+          Enum.reduce(response.payload.conversations, socket, &cache_history/2)
+        else
+          socket
+        end
+
+      {:ok, cache_current(socket)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp cache_history(conversation, socket) do
+    state =
+      Conversation.apply_event(Conversation.new(), %{
+        type: "response.conversation.history",
+        payload: %{messages: conversation.messages}
+      })
+
+    summary = %{id: conversation.id, title: conversation.title}
+
+    assign(socket,
+      conversations: socket.assigns.conversations ++ [summary],
+      conversation_states: Map.put(socket.assigns.conversation_states, conversation.id, state)
+    )
+  end
+
+  defp submit(socket, text) do
+    message = %{
+      id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false),
+      content: text,
+      timestamp: DateTime.to_iso8601(DateTime.utc_now())
+    }
+
+    with {:ok, event} <-
+           Events.create(socket.assigns.widget_id, socket.assigns.accepted_context, message),
+         :ok <- Runtime.dispatch(event) do
+      state = Conversation.submit(conversation_state(socket), message)
+
+      {:reply, %{ok: true},
+       socket
+       |> assign(state)
+       |> assign(mode: :conversation, conversation_opened: true)
+       |> cache_current()}
+    else
+      _ -> {:reply, %{ok: false, error: "Unable to send your message. Please try again."}, socket}
+    end
+  end
+
+  defp conversations_enabled?(socket),
+    do: socket.assigns.config.multiple_conversations and socket.assigns.parent_context != nil
+
+  defp cache_current(socket) do
+    if socket.assigns.config.multiple_conversations && socket.assigns.accepted_context &&
+         socket.assigns.messages != [] do
+      id = socket.assigns.accepted_context.conversation_id
+
+      conversations =
+        if Enum.any?(socket.assigns.conversations, &(&1.id == id)) do
+          socket.assigns.conversations
+        else
+          title = conversation_title(socket.assigns.messages)
+
+          [%{id: id, title: title} | socket.assigns.conversations]
+        end
+
+      assign(socket,
+        conversations: conversations,
+        conversation_states:
+          Map.put(socket.assigns.conversation_states, id, conversation_state(socket))
+      )
+    else
+      socket
+    end
+  end
+
+  defp conversation_title(messages) do
+    case Enum.find(messages, &(&1.role == "user")) do
+      nil -> "New chat"
+      message -> String.slice(message.content, 0, 60)
+    end
+  end
+
+  defp conversation_state(socket), do: Map.take(socket.assigns, Map.keys(Conversation.new()))
 
   defp valid_parent_context?(context) do
     nonblank_string?(context.user_id) and

@@ -1,7 +1,7 @@
-defmodule WebWidget.InitTest do
+defmodule WebWidget.Protocol.InitTest do
   use ExUnit.Case, async: true
 
-  alias WebWidget.Init
+  alias WebWidget.Protocol.Init
 
   test "initialization serializes to the synchronous callback contract" do
     init = %Init{widget_id: "widget_support", user_id: "user_123"}
