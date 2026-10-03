@@ -65,6 +65,52 @@ defmodule WebWidget.RuntimeTest do
     end
   end
 
+  test "normalizes exact origins and rejects unsafe or non-origin entries" do
+    config = config()
+    [widget | _] = config.widgets
+    normalized = %{widget | allowed_origins: ["https://customer.com", "http://localhost:4019"]}
+
+    start_supervised!(
+      {Runtime,
+       %{
+         config
+         | widgets: [
+             %{
+               widget
+               | allowed_origins: [
+                   "https://customer.com/",
+                   "https://customer.com:443",
+                   "http://localhost:4019"
+                 ]
+             }
+           ]
+       }}
+    )
+
+    assert Runtime.fetch_widget(widget.widget_id) == {:ok, normalized}
+
+    for origins <- [
+          "https://customer.com",
+          [""],
+          ["*"],
+          ["https://*.customer.com"],
+          ["https:"],
+          ["null"],
+          ["https://customer.com/path"],
+          ["https://customer.com?x=1"],
+          ["https://customer.com#fragment"],
+          ["https://user@customer.com"],
+          ["https://customer.com; frame-src *"],
+          ["ftp://customer.com"],
+          ["https://customer.com:0"],
+          ["https://customer.com:65536"],
+          ["https://customer.com", "*"]
+        ] do
+      assert Runtime.start_link(%{config | widgets: [%{widget | allowed_origins: origins}]}) ==
+               {:error, :invalid_runtime_config}
+    end
+  end
+
   test "malformed public fields and duplicate IDs fail before starting" do
     config = config()
     [widget | _] = config.widgets

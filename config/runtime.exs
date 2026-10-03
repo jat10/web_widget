@@ -1,5 +1,13 @@
 import Config
 
+if config_env() == :dev do
+  if origins = System.get_env("WEB_WIDGET_DEMO_ALLOWED_ORIGINS") do
+    config :web_widget,
+           :demo_allowed_origins,
+           origins |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+  end
+end
+
 # config/runtime.exs is executed for all environments, including
 # during releases. It is executed after compilation and before the
 # system starts, so it is typically used to load production configuration

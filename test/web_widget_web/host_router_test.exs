@@ -23,7 +23,11 @@ defmodule WebWidget.HostRouterTest do
       channel_config_id: :host_test,
       sink_mfa: {__MODULE__, :unused, []},
       widgets: [
-        %{widget_id: "support", display_name: "Host Support", allowed_origins: []}
+        %{
+          widget_id: "support",
+          display_name: "Host Support",
+          allowed_origins: ["https://customer.com", "http://www.example.com"]
+        }
       ]
     }
 
@@ -47,6 +51,76 @@ defmodule WebWidget.HostRouterTest do
     end
   end
 
+  test "framing uses only configured origins and preserves unrelated CSP directives" do
+    for path <- ["/widget/support", "/support/chat/support"] do
+      conn =
+        build_conn()
+        |> Plug.Conn.put_resp_header(
+          "content-security-policy",
+          "default-src 'self'; frame-ancestors 'self'"
+        )
+        |> get(path)
+
+      assert Plug.Conn.get_resp_header(conn, "content-security-policy") ==
+               ["default-src 'self'; frame-ancestors https://customer.com http://www.example.com"]
+
+      assert Plug.Conn.get_resp_header(conn, "x-frame-options") == []
+    end
+  end
+
+  test "missing, null and empty origins disable HTTP and connected widgets" do
+    for {widget, index} <-
+          Enum.with_index([
+            %{widget_id: "disabled", display_name: "Disabled"},
+            %{widget_id: "disabled", display_name: "Disabled", allowed_origins: nil},
+            %{widget_id: "disabled", display_name: "Disabled", allowed_origins: []}
+          ]) do
+      id = {:disabled, index}
+
+      start_supervised!(
+        {WebWidget.Runtime,
+         %{
+           channel_config_id: id,
+           sink_mfa: {__MODULE__, :unused, []},
+           widgets: [widget]
+         }}
+      )
+
+      conn = get(build_conn(), "/widget/disabled")
+
+      assert Plug.Conn.get_resp_header(conn, "content-security-policy") == [
+               "base-uri 'self'; frame-ancestors 'none'"
+             ]
+
+      document = LazyHTML.from_document(html_response(conn, 200))
+      assert Enum.empty?(LazyHTML.query(document, "[phx-hook]"))
+      {:ok, view, _} = live(conn)
+      assert has_element?(view, "#widget-unavailable")
+      render_hook(view, "widget.context", %{user_id: "user"})
+      render_hook(view, "widget.submit", %{text: "hello"})
+      refute has_element?(view, "[phx-hook]")
+      stop_supervised!({WebWidget.Runtime, id})
+    end
+  end
+
+  test "connected mount rechecks origins after HTTP rendering" do
+    conn = get(build_conn(), "/widget/support")
+    stop_supervised!({WebWidget.Runtime, :host_test})
+
+    start_supervised!(
+      {WebWidget.Runtime,
+       %{
+         channel_config_id: :host_test,
+         sink_mfa: {__MODULE__, :unused, []},
+         widgets: [%{widget_id: "support", display_name: "Support", allowed_origins: []}]
+       }}
+    )
+
+    {:ok, view, _} = live(conn)
+    assert has_element?(view, "#widget-unavailable")
+    refute has_element?(view, "[phx-hook]")
+  end
+
   test "unknown widgets have no hooks and reject context and submissions" do
     {:ok, view, _} = live(build_conn(), "/widget/missing")
     assert has_element?(view, "#widget-unavailable")
@@ -54,6 +128,26 @@ defmodule WebWidget.HostRouterTest do
     render_hook(view, "widget.context", %{user_id: "user"})
     render_hook(view, "widget.submit", %{text: "hello"})
     assert has_element?(view, "#widget-unavailable")
+  end
+
+  test "incomplete and malformed widget paths return a safe 404" do
+    for path <- [
+          "/widget",
+          "/widget/",
+          "/widget/support/extra",
+          "/support/chat",
+          "/support/chat/support/extra"
+        ] do
+      conn = get(build_conn(), path)
+      body = html_response(conn, 404)
+      document = LazyHTML.from_document(body)
+      assert LazyHTML.query(document, "#widget-unavailable") |> Enum.count() == 1
+      assert Enum.empty?(LazyHTML.query(document, "[phx-hook], script"))
+      refute body =~ "NoRouteError"
+
+      assert Plug.Conn.get_resp_header(conn, "content-security-policy") ==
+               ["base-uri 'self'; frame-ancestors 'none'"]
+    end
   end
 
   test "connected mount rechecks availability after the HTTP render" do
@@ -92,7 +186,13 @@ defmodule WebWidget.HostRouterTest do
        %{
          channel_config_id: :host_test,
          sink_mfa: {__MODULE__, :unused, []},
-         widgets: [%{widget_id: "support", display_name: "Replacement", allowed_origins: []}]
+         widgets: [
+           %{
+             widget_id: "support",
+             display_name: "Replacement",
+             allowed_origins: ["https://customer.com", "http://www.example.com"]
+           }
+         ]
        }}
     )
 

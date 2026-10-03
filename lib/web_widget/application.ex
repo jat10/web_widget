@@ -27,7 +27,13 @@ defmodule WebWidget.Application do
        %{
          channel_config_id: :standalone_demo,
          sink_mfa: {__MODULE__, :unused, []},
-         widgets: [%{widget_id: "demo", display_name: "Website assistant", allowed_origins: []}]
+         widgets: [
+           %{
+             widget_id: "demo",
+             display_name: "Website assistant",
+             allowed_origins: Application.get_env(:web_widget, :demo_allowed_origins, [])
+           }
+         ]
        }},
       WebWidgetWeb.Telemetry,
       WebWidget.Repo,
