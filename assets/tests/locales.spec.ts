@@ -9,7 +9,7 @@ const locales = [
 for (const labels of locales) {
   test(`${labels.locale} localizes controls, history, activity and validation`, async ({ page }, testInfo) => {
     await page.goto(`/widget-demo?widget_id=locale-${labels.locale}&language=${labels.locale}`);
-    const widget = page.frameLocator("#zaq-demo-widget");
+    const widget = page.frameLocator("#zaq-widget");
     await expect(widget.locator("html")).toHaveAttribute("lang", labels.locale);
     await expect(widget.locator("html")).toHaveAttribute("dir", labels.locale === "ar" ? "rtl" : "ltr");
     const input = widget.getByRole("textbox", { name: labels.message, exact: true });
@@ -45,7 +45,7 @@ for (const labels of locales) {
 test("Arabic mobile layout contains mixed-direction text without overflow", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/widget-demo?widget_id=locale-ar&language=ar");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "الرسالة", exact: true });
   const message = "مرحبًا support@example.com https://example.com 123";
   await input.fill(message);

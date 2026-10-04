@@ -126,6 +126,15 @@ Host content remains unchanged. Runtime updates preserve drafts, messages, pendi
 responses, and selected conversations. Custom CSS may override color tokens but
 there is no theme-selection CSS variable. ZAQ owns its response language.
 
+The parent may load `/web_widget/assets/embed.js` to expose `zaq.widget` for a
+single `#zaq-widget` iframe. This wrapper owns outer iframe defaults, validated
+resize handling, and parent scroll locking; it delegates identity and settings
+to the existing client. It requires explicit `init({user_id})` and generates no
+identity. The lower-level module remains available for independent widget instances.
+An allowed parent can send `zaq.widget.ready.request`; a ready hook replies with
+`zaq.widget.ready`. This handshake supports clients attaching after iframe load
+without navigating the iframe again. Source and origin checks apply to the probe.
+
 ### IDs
 
 `widget_id` and `channel_config_id` are separate.

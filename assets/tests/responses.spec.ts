@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 for (const scenario of ["hello", "search", "research", "fail"]) {
   test(`mock ${scenario} renders protocol responses through PubSub`, async ({ page }, testInfo) => {
     await page.goto("/widget-demo");
-    const widget = page.frameLocator("#zaq-demo-widget");
+    const widget = page.frameLocator("#zaq-widget");
     const input = widget.getByRole("textbox", { name: "Message", exact: true });
     await input.fill(scenario);
     await input.press("Enter");
@@ -63,7 +63,7 @@ for (const scenario of ["hello", "search", "research", "fail"]) {
 test("tool activity and results fit a mobile conversation", async ({ page }, testInfo) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/widget-demo");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("research");
   await input.press("Enter");

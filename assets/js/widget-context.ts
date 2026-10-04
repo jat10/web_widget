@@ -9,6 +9,7 @@ const nonblank = (value: unknown): value is string => typeof value === "string" 
 
 export class WidgetContext extends ViewHook {
   private accepted = false;
+  private ready = false;
   private contextTimer?: number;
   private allowedDomains: string[] = [];
   private queue = Promise.resolve();
@@ -19,6 +20,10 @@ export class WidgetContext extends ViewHook {
 
   private receiveContext = (event: MessageEvent) => {
     if (window.parent === window || event.source !== window.parent || !this.allowedDomains.includes(event.origin)) return;
+    if (event.data?.type === "zaq.widget.ready.request") {
+      if (this.ready) window.parent.postMessage({ type: "zaq.widget.ready" }, event.origin);
+      return;
+    }
     if (!["zaq.widget.init", "zaq.widget.settings.update", "zaq.widget.settings.get"].includes(event.data?.type)) return;
     this.queue = this.queue.then(() => this.receive(event));
   };
@@ -99,6 +104,7 @@ export class WidgetContext extends ViewHook {
   }
 
   disconnected() {
+    this.ready = false;
     for (const origin of this.allowedDomains) window.parent.postMessage({ type: "zaq.widget.disconnected" }, origin);
   }
 
@@ -116,11 +122,13 @@ export class WidgetContext extends ViewHook {
   }
 
   destroyed() {
+    this.ready = false;
     window.clearTimeout(this.contextTimer);
     window.removeEventListener("message", this.receiveContext);
   }
 
   private announceReady() {
+    this.ready = true;
     window.clearTimeout(this.contextTimer);
     if (window.parent === window) {
       this.reportError("No embedding parent found. Open /widget-demo or embed /widget in an iframe.");

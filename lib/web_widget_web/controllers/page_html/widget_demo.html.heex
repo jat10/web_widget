@@ -36,10 +36,11 @@
     </footer>
   </main>
   <iframe
-    id="zaq-demo-widget"
-    class="zaq-demo-frame"
+    id="zaq-widget"
     data-mode="launcher"
-    data-src={~p"/widget/#{@widget_id}"}
+    src={~p"/widget/#{@widget_id}"}
     title="Website assistant"
   />
+  <script src="/web_widget/assets/embed.js">
+  </script>
 </div>

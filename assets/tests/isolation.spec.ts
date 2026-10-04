@@ -14,7 +14,7 @@ test("two widgets isolate bootstrap context, messages and iframe resizing", asyn
   });
   await page.goto("/widget-demo?widget_id=multi");
   await page.evaluate(() => {
-    const first = document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!;
+    const first = document.querySelector<HTMLIFrameElement>("#zaq-widget")!;
     first.style.cssText = "position:fixed;left:0;right:auto;bottom:0;width:50%;height:180px";
     const second = document.createElement("iframe");
     second.id = "second-widget";
@@ -35,15 +35,15 @@ test("two widgets isolate bootstrap context, messages and iframe resizing", asyn
     document.body.append(second);
   });
 
-  const firstFrame = page.locator("#zaq-demo-widget");
+  const firstFrame = page.locator("#zaq-widget");
   const secondFrame = page.locator("#second-widget");
-  const first = page.frameLocator("#zaq-demo-widget");
+  const first = page.frameLocator("#zaq-widget");
   const second = page.frameLocator("#second-widget");
   await expect(firstFrame).toHaveAttribute("data-ready", "true");
   await expect(secondFrame).toHaveAttribute("data-ready", "true");
 
   await page.evaluate(() => {
-    document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!.postMessage({
+    document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!.postMessage({
       type: "zaq.widget.init", user_id: "first-user", prompt_context: "Weekend planning",
       conversation_id: "mock-weekend",
     }, window.location.origin);
@@ -117,7 +117,7 @@ test("two widgets isolate bootstrap context, messages and iframe resizing", asyn
 test("rapid double-clicks and repeated Enter accept only one message per submission", async ({ page }) => {
   for (const gesture of ["double-click", "Enter"]) {
     await page.goto("/widget-demo");
-    const widget = page.frameLocator("#zaq-demo-widget");
+    const widget = page.frameLocator("#zaq-widget");
     const input = widget.getByRole("textbox", { name: "Message", exact: true });
     const send = widget.getByRole("button", { name: "Send message" });
     // Open the conversation first so expansion cannot move the second click off the button.

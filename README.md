@@ -1,460 +1,231 @@
-# WebWidget
+# ZAQ Web Widget
 
-To start your Phoenix server:
+Add a floating chat widget to your website. Visitors can send messages, follow streamed responses and tool activity, and continue chatting without leaving the page.
 
-* Run `mix setup` to install and setup dependencies
-* Start Phoenix endpoint with `mix phx.server` or inside IEx with `iex -S mix phx.server`
+The widget provides light and dark themes, English, French, and Arabic UI, and a responsive layout. It is built with Phoenix LiveView, React, and assistant-ui. ZAQ supplies the assistant, message routing, and conversation storage; the widget handles presentation and embedding.
 
-Now you can visit [`localhost:4000`](http://localhost:4000) from your browser.
+## Preview
 
-## Host Phoenix integration
-
-Mount in the host browser pipeline, outside any existing `live_session` (the
-macro creates its own). The default prefix is `/widget`; a custom prefix or
-aliased scope is also supported.
-
-```elixir
-import WebWidget.Router
-
-scope "/" do
-  pipe_through :browser
-  web_widget("/widget")
-end
-```
-
-The browser pipeline must fetch session and LiveView flash, protect against CSRF,
-and set secure browser headers. Keep the host's `Plug.Session` and LiveView socket
-at `/live`, using the same session options in
-`websocket: [connect_info: [session: @session_options]]`. Add this before the host
-router and any catch-all static plug:
-
-```elixir
-plug WebWidget.Static
-plug MyAppWeb.Router
-```
-
-The macro supplies an iframe root layout loading JS/CSS and lazy React chunks
-from `/web_widget/assets/`. The bundle registers `WidgetContext` and LiveReact's
-`ReactHook` and connects to the host's `/live` socket. No widget hook imports or
-scripts belong in the parent's JS bundle. The iframe does not load the host app
-bundle. Currently the endpoint must be root-mounted with the standard `/live` path.
-
-Start each channel's runtime under the host supervisor:
-
-```elixir
-{WebWidget.Runtime,
- %{
-   channel_config_id: 42,
-   sink_mfa: {MyApp.WebBridge, :from_widget, []},
-   pubsub_server: MyApp.PubSub,
-   widgets: [
-     %{widget_id: "support", display_name: "Support Assistant", allowed_domains: ["https://customer.com"]}
-   ]
- }}
-```
-
-Origins must be exact HTTP(S) origins, including any non-default port. Paths,
-wildcards, credentials, queries, and fragments are rejected; a trailing slash is
-normalized. Missing, null, or empty `allowed_domains` disables the widget, including
-same-origin embedding. The route sets CSP `frame-ancestors` from this list and
-removes `X-Frame-Options`; unavailable widgets use `frame-ancestors 'none'`.
-The browser bootstrap also checks the parent window and allowed origin.
-Reload existing iframes after changing origin configuration. The standalone demo
-explicitly allows `http://localhost:4000` in development.
-
-For local testing, override the demo origins when starting the development server:
-
-```sh
-WEB_WIDGET_DEMO_ALLOWED_DOMAINS=http://localhost:4010 mix phx.server
-```
-
-Use a comma-separated list to allow multiple origins. This development-only
-override replaces the demo allowlist and requires restarting the server.
-
-The callback receives the event followed by its configured arguments. It returns
-`{:ok, response_map}` for synchronous init/history requests, `:ok` for accepted
-asynchronous messages, or `{:error, reason}` on rejection. Host asynchronous
-responses enter through `WebWidget.Adapter.send_event/1`, which validates plain
-maps and publishes on the configured PubSub server. See the
-[adapter contract](docs/adapter-contract.md#implemented-delivery-boundary).
-Widget IDs are globally unique.
-HTTP and connected mounts look up the ID afresh. Missing/stopped runtimes render
-“Widget unavailable” without chat hooks and reject browser events. This is an
-HTTP 200 error screen, not a redirect or HTTP 404. Runtime changes do not revoke
-already-mounted views; reconnect/remount checks again. The resolved display name
-supplies the document title and conversation header.
-
-Incomplete or malformed paths under the mounted widget prefix (such as `/widget`
-or `/widget/support/extra`) return a friendly HTTP 404 without debug details or
-chat scripts. Their framing policy remains `frame-ancestors 'none'`. Embedding
-pages should show their own unavailable message when a frame cannot load or
-does not announce readiness; browsers do not display denied iframe content.
-
-Dependency configuration files are not imported by Phoenix. The application
-starts only its runtime registry by default, without the standalone endpoint,
-Repo or demo runtime. Do not enable `config :web_widget, start_web_server: true`
-in the host. Widget rendering explicitly disables React SSR; no Node SSR service
-or global LiveReact setting is needed.
-
-Build assets before assembling the host release. With the normal Mix `deps/`
-layout, run from the host root (Node 22.12+ or 24 and npm required):
-
-```sh
-mix deps.get
-# Only if deps/web_widget/deps does not exist: expose host-resolved JS packages.
-ln -s .. deps/web_widget/deps
-npm --prefix deps/web_widget/assets ci
-npm --prefix deps/web_widget/assets run build
-mix compile
-```
-
-For path/umbrella dependencies, point the widget's `deps` symlink at the host's
-actual dependency directory. Existing widget-local Phoenix/LiveView/LiveReact
-dependencies must match the host's resolved versions. Keep the generated
-`web_widget/priv/static/assets` directory in the release. Rebuild after dependency
-or UI changes. Static responses revalidate with ETags.
-
-Embed `/widget/support` on a configured allowed origin and implement the ready/init
-handshake and resize handling below. Host routing/authentication remains the
-host's responsibility. The ZAQ-side bridge remains deferred. Callback dispatch,
-response PubSub, initialization, and history loading use the shared host boundary.
-
-## React components
-
-LiveReact 2 integrates React with LiveView. Use Node.js 22 (22.12+) or Node.js 24
-and npm; assistant-ui's dependencies do not support Node.js 23. These are required
-for the Vite asset pipeline. `mix setup` installs the locked npm dependencies,
-and `mix phx.server` starts Vite on `localhost:5173` for demo-page assets.
-Widget iframe assets use the built bundle in standalone and host mode; rerun
-`mix assets.build` after changing them.
-
-Add JSX or TSX components under `assets/react-components` and register them in
-`assets/react-components/index.js`. Render a registered component from a LiveView:
-
-```heex
-<.react name="Simple" socket={@socket} />
-```
-
-Additional assigns become React props. Server-side rendering is disabled;
-components render in the browser after LiveView connects.
-
-Run `mix assets.build` to check TypeScript and bundle assets, or
-`MIX_ENV=prod mix assets.deploy` to build and digest production assets.
-See the [LiveReact documentation](https://hexdocs.pm/live_react/) for component APIs.
-
-## Embedded widget prototype
-
-In development, open `/widget-demo` for a scrolling host page with the widget in a compact iframe. This route is only enabled by the development `:dev_routes` configuration.
-`/widget/demo` is the iframe document and requires parent bootstrap
-context before displaying the composer. Before the first message, only a floating
-composer is shown. Enter sends; Shift+Enter adds a line.
-The first submission expands the iframe and displays the conversation. A mocked
-search step appears, followed by a deterministic reply. Subsequent messages keep
-the same conversation. Responses are explicitly mocked; no external service is called.
-
-`WidgetLive` owns `mode` (`:launcher` or `:conversation`), the message list, pending
-reply, and widget configuration. Its `<.react name="WebWidget" ...>` passes these
-assigns to `assets/react-components/web-widget.tsx`. React uses assistant-ui's
-`useExternalStoreRuntime` to adapt those props; it does not keep another canonical
-message list. Only draft input, submission acknowledgement, and errors are local.
-`useLiveReact().pushEvent("widget.submit", {text}, callback)` uses the existing
-LiveView WebSocket. LiveView validates the text, acknowledges it, and sends props
-updates after host acceptance. Mock response events arrive at 350ms intervals. No client-side optimistic
-message is added, so first rendering depends on one WebSocket round trip.
-
-The React composition is `WebWidget` → `Conversation` (thread, user/assistant
-messages, `ResponseStep`) + `FloatingComposer`. It reuses assistant-ui's runtime
-provider, thread root/viewport/messages/scroll control, message parts, and composer
-root/input/send primitives. Tool calls and results arrive as
-`response.message.step` events and update by step ID within their assistant message.
-React groups tool activity into expandable cards with progress badges and
-collapsible results. Activity opens while running, folds into a summary on
-completion, and stays open on failure. Streaming answers show a writing indicator;
-failed responses show a dedicated error panel. Arbitrary metadata is not sent
-to the browser.
-
-The standalone mock is explicitly enabled in development/test configuration via
-`:mock_host`. Its modules live in `test/support/demo`, compiled in development
-and test only. The development build includes this directory without loading
-other test support modules. Production builds exclude both mocks.
-It is not started by a dependency host or production defaults.
-Try these messages in `/widget-demo` or the local playground:
-
-| Message | Scenario |
+| Light theme | Dark theme |
 | --- | --- |
-| `hello` | Streamed greeting without tools |
-| `search` | Tool progress, result, then streamed answer |
-| `research` | Two independently updated tool calls |
-| `fail` | Tool failure and message failure; another message can be sent |
-| `slow` | Slower tool/streaming events |
-| Any other text | Default search scenario |
+| ![Widget in light theme](docs/screenshots/light-theme.png) | ![Widget in dark theme](docs/screenshots/dark-theme.png) |
 
-Set `multiple_conversations: true` on a runtime widget to show the conversation
-sidebar and **New chat** button. The flag defaults to `false` and cannot be set
-by parent-page bootstrap. With it enabled, history loads after bootstrap with
-three mock conversations containing 4, 6, and 7 messages from yesterday and today.
-The widget stays in its compact launcher until the user sends the first message;
-loading history does not open it.
-Messages show local times and calendar-day separators. Selecting a conversation
-revalidates it through the host; switching is disabled while a response is running.
-Completed session updates survive switching, and New chat starts a separate
-conversation on its first submission.
+The screenshots show the local demo with mock responses.
 
-To enable this in the standalone development demo without editing configuration,
-restart the server with:
+## Add the widget to your website
 
-```sh
-WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server
-```
+### 1. Get your widget URL
 
-Combine this with `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` if using the playground.
-The regular demo URL remains `/widget-demo`. Set the parent conversation ID to
-`mock-weekend`, `mock-billing`, or `mock-research` to start with a fixture;
-`mock-history` remains an alias for the first history. Unknown mock histories are empty; the mock does not
-persist or authenticate conversations. `WebWidget.MockHost` emits plain maps
-through the same `Adapter.send_event/1` used by ZAQ. `WebWidget.Conversation.State`
-reduces those events into LiveView-owned state, with stable message and step IDs.
-Switching to ZAQ requires configuring its callback and PubSub server and sending
-responses to the adapter, without changing the React components.
+Ask your ZAQ administrator for:
 
-The header’s **Close chat** button collapses the widget to its launcher without
-ending the conversation or cancelling the response. **Open conversation** restores
-the thread, including messages received while closed and any unsent draft. The
-demo restores host-page scrolling when the iframe returns to launcher mode.
+- Your widget URL, such as `https://YOUR-ZAQ-HOST/widget/YOUR-WIDGET-ID`.
+- The embed script URL, such as `https://YOUR-ZAQ-HOST/web_widget/assets/embed.js`.
 
-### iframe sizing and customization
+The administrator must add your website's exact origin to the widget's `allowed_domains`, for example `https://yourwebsite.com`. Development and staging origins need separate entries. Include the scheme and any non-default port; do not include a page path.
 
-The parent website owns language and theme, both at startup and while chatting.
-ZAQ keeps trusted configuration such as `allowed_domains`, widget identity,
-`stylesheet_url`, and host callbacks. Do not put `locale`, `language`, or `theme`
-in ZAQ's widget configuration.
+If you are deploying the widget inside ZAQ or another Phoenix application, start with the [host integration guide](docs/host-integration.md) and [adapter contract](docs/adapter-contract.md).
 
-Create the iframe **without `src`**, then create the client. The client installs
-its listener before navigating the iframe, waits for readiness, and validates
-both the sender window and the exact widget origin.
+### 2. Embed and initialize
+
+Add this once to your website's shared layout. Replace the URLs and supply the current visitor's ID:
 
 ```html
-<iframe id="support-chat" title="Support chat"
-        style="width: 100%; height: 180px; border: 0; color-scheme: light dark"></iframe>
-<script type="module">
-  import { createWidgetClient } from "https://chat.example.com/web_widget/assets/widget-client.js";
+<iframe
+  src="https://YOUR-ZAQ-HOST/widget/YOUR-WIDGET-ID"
+  id="zaq-widget"
+  title="ZAQ widget"
+></iframe>
 
-  const iframe = document.querySelector("#support-chat");
-  const widgetUrl = "https://chat.example.com/widget/support";
-  const widgetOrigin = new URL(widgetUrl).origin;
-  const onResize = (event) => {
-    if (event.source !== iframe.contentWindow || event.origin !== widgetOrigin) return;
-    const data = event.data;
-    if (data?.type !== "zaq.widget.resize") return;
-    if (data.mode === "conversation") iframe.style.height = "100dvh";
-    if (data.mode === "launcher" && Number.isFinite(data.height)) {
-      iframe.style.height = `${Math.min(260, Math.max(96, data.height))}px`;
-    }
-  };
-  window.addEventListener("message", onResize);
-  const widget = createWidgetClient(iframe, widgetUrl);
-
-  // Required identity plus optional context and startup preferences.
-  await widget.init({
-    user_id: "user_123",
-    prompt_context: "Current page: /billing",
-    conversation_id: null,
+<script src="https://YOUR-ZAQ-HOST/web_widget/assets/embed.js"></script>
+<script>
+  zaq.widget.init({
+    user_id: "YOUR-VISITOR-ID",
     settings: { theme: "auto", language: "en" },
-  });
-
-  // Call these from the website's controls whenever preferences change.
-  await widget.updateSettings({ theme: "dark" });
-  await widget.updateSettings({ language: "fr" });
-
-  // Optional inspection, never required before an update.
-  console.log(await widget.getSettings()); // { theme: "dark", language: "fr" }
-
-  // When removing the iframe:
-  // widget.dispose();
-  // window.removeEventListener("message", onResize);
+  }).catch(error => console.error("Could not initialize chat", error));
 </script>
 ```
 
-Replace the URL and widget ID with your deployment. The parent origin must be in
-that widget's `allowed_domains`. The standalone demo is `/widget-demo`; its parent
-can select startup settings via `?theme=dark&language=ar`.
+The chat stays hidden until a valid `user_id` is accepted. The embed script handles readiness, message validation, default iframe styling, expansion, and page scrolling. You do not need your own `postMessage` or resize listener.
 
-| Setting | Values | Default |
+Load the script on the **parent website**, after the iframe and before calling `zaq.widget`. Do not add `async` or `defer` to the script in this example. Code inside the cross-origin iframe cannot expose this API to the parent website.
+
+For a frontend framework, load the script and initialize after the iframe mounts. Keep the widget mounted during client-side navigation. Before removing it, call `zaq.widget.dispose()` to remove listeners and restore the original inline styles and page scrolling. Disposal does not remove the iframe or reset its identity.
+
+### 3. Choose a visitor ID
+
+For signed-in visitors, supply the user ID accepted by your ZAQ integration. For anonymous visitors, generate a random ID and keep it in browser storage:
+
+```js
+function getVisitorId() {
+  const key = "my-site.zaq.visitor-id";
+  let id;
+  try { id = localStorage.getItem(key); } catch {}
+  if (id?.trim()) return id;
+
+  id = `anonymous-${crypto.randomUUID()}`;
+  try { localStorage.setItem(key, id); } catch {}
+  return id;
+}
+
+// Use this instead of the initialization call above.
+zaq.widget.init({ user_id: getVisitorId() }).catch(console.error);
+```
+
+Generate the ID once for initialization, not for each message or opening of chat. Storage lets the same browser reuse it across visits. If storage is unavailable, this example's ID lasts for the current widget instance. Clearing storage or using another browser produces a new ID. Random browser IDs are not authentication; ZAQ remains responsible for validating access.
+
+See [the website integration guide](widget-guideline.md) for a complete anonymous-visitor setup.
+
+## Language and theme
+
+The website owns these settings. Pass them during initialization or update them while the visitor is chatting:
+
+```js
+await zaq.widget.updateSettings({ theme: "dark" });
+await zaq.widget.updateSettings({ language: "fr" });
+await zaq.widget.updateSettings({ theme: "light", language: "ar" });
+
+// Optional inspection; not required before an update.
+const settings = await zaq.widget.getSettings();
+```
+
+| Setting | Accepted values | Default |
 | --- | --- | --- |
 | `theme` | `"auto"`, `"light"`, `"dark"` | `"auto"` |
 | `language` | `"en"`, `"fr"`, `"ar"` | `"en"` |
 
-Updates merge only the supplied fields. Unsupported values, null, arrays, and
-unknown keys reject the whole request without applying a partial change. Methods
-resolve with effective settings after application, or reject with an error.
-They time out after 20 seconds; after a timeout, inspect settings before retrying
-because a delayed request may have reached the iframe. No settings request can
-change identity, conversation IDs, permissions, origins, or stylesheet URLs.
+`auto` follows browser appearance. Arabic uses a right-to-left layout. Language changes translate widget controls, accessibility labels, and widget-generated errors; they do not translate ZAQ's messages or choose the assistant's response language.
 
-Language and theme changes preserve drafts, messages, pending replies, and the
-selected conversation. Preferences survive LiveView reconnects. A document reload
-resets widget defaults; a living parent client automatically reinitializes using
-its last accepted context and effective settings. The parent decides whether to
-persist preferences across page loads. Repeated init with the same context does
-not overwrite runtime settings; changing identity requires a new iframe document.
+Updates merge the supplied fields and preserve messages, drafts, pending responses, and the selected conversation. Unsupported values or unknown keys reject the whole update. Methods return promises: handle failures with `catch` or `try/catch`. Requests time out after 20 seconds; after an update timeout, inspect settings before retrying because the update may already have reached the iframe.
 
-`user_id` is required. `prompt_context` accepts a string or null, and
-`conversation_id` accepts a nonblank string or null; both default to null.
-These values remain untrusted until accepted by ZAQ. The chat stays hidden until
-valid initialization. The first submission initializes through the host callback
-and loads history when resuming a conversation before dispatching the message.
+Settings survive LiveView reconnects. If the iframe document reloads while the parent client remains alive, the client reapplies its accepted context and latest settings. Your website decides whether to save preferences across parent-page reloads. Language and theme do not belong in ZAQ's persisted widget configuration.
 
-#### Using postMessage directly
-
-The client is optional. Register your listener **before** setting `iframe.src`.
-After receiving `zaq.widget.ready` from the expected iframe and origin, send:
+## Initialization and conversations
 
 ```js
-iframe.contentWindow.postMessage({
-  type: "zaq.widget.init",
-  request_id: "init-1",
-  user_id: "user_123",
+await zaq.widget.init({
+  user_id: "visitor-123",
+  prompt_context: "Current page: /menu",
   conversation_id: null,
-  prompt_context: "Current page: /billing",
-  settings: { language: "ar", theme: "dark" },
-}, widgetOrigin);
-
-// Later: partial update, with a unique ID for each request.
-iframe.contentWindow.postMessage({
-  type: "zaq.widget.settings.update",
-  request_id: "settings-2",
-  settings: { theme: "light" },
-}, widgetOrigin);
-
-// Optional inspection:
-iframe.contentWindow.postMessage({
-  type: "zaq.widget.settings.get",
-  request_id: "settings-3",
-}, widgetOrigin);
+  settings: { language: "en", theme: "auto" },
+});
 ```
 
-Replies are `{type: "zaq.widget.result", request_id, ok: true, settings: {...}}`
-or `{type: "zaq.widget.result", request_id, ok: false, error: "..."}`. Always verify
-`event.source === iframe.contentWindow` and `event.origin === widgetOrigin`, then
-match the request ID. Invalid senders are ignored. Legacy init without a request
-ID still works but receives no acknowledgement. Reply to readiness after reconnects
-with the same bootstrap context; the iframe retains its effective settings.
+| Field | Purpose |
+| --- | --- |
+| `user_id` | Required, nonblank visitor ID validated by ZAQ. |
+| `prompt_context` | Optional string with context for the host; defaults to `null`. |
+| `conversation_id` | Optional real conversation ID to resume; defaults to `null`. |
+| `settings` | Optional language and theme preferences. |
 
-#### Sizing and custom CSS
+A visitor ID and a conversation ID are different. Do not invent a conversation ID or substitute the visitor ID. Conversation history and authorization depend on the ZAQ integration; keeping the visitor ID alone does not guarantee that a specific conversation reopens.
 
-React sends `window.parent.postMessage({type: "zaq.widget.resize", mode, height}, "*")`
-on mode and size changes. Launcher height is measured from the composer; conversation
-height is `"100%"`. No message content is included. The demo listener in
-`assets/js/widget-demo.ts` validates both `event.source` and the same-site origin,
-then changes only the iframe dimensions. The compact iframe leaves host content
-clickable and scrollable. This listener is a demo, not a parent SDK.
+Closing chat collapses the widget without ending the conversation. Changing identity or bootstrap context requires a fresh iframe document. Use `updateSettings()` for later presentation changes; repeated `init()` calls do not overwrite runtime settings.
 
-Language controls Gettext UI strings, validation errors, accessibility labels,
-plural summaries, and browser-local dates. Arabic uses right-to-left layout.
-Host-provided messages, display names, conversation titles, tool labels, and errors
-retain their original text. Translations live in
-`priv/gettext/{en,fr,ar}/LC_MESSAGES/widget.po`.
+The global `zaq.widget` API currently targets **one iframe with `id="zaq-widget"`**. For multiple widgets or custom layout ownership, import `createWidgetClient` from `/web_widget/assets/widget-client.js` and create a client for each iframe. That lower-level API leaves placement and resizing to your website; do not give multiple frames the same HTML ID.
 
-Theme is selected exclusively through settings. `auto` follows browser appearance.
-There is no `--zaq-widget-color-scheme` CSS variable. Keep
-`color-scheme: light dark` on the **iframe element** to preserve its transparent
-canvas; this does not select the widget's theme.
+## Customize the appearance
 
-Set `stylesheet_url: "https://your-site.example/widget.css"` (or a root-relative
-asset path) to load custom CSS inside the iframe. The URL is trusted host
-configuration; parent messages cannot change it. A failed stylesheet leaves the
-built-in theme available. Reload the iframe after configuration changes.
-
-Defaults live in `assets/css/widget.css` in the `zaq-widget-theme` cascade layer. Override `--zaq-widget-primary`,
-`--zaq-widget-background`, `--zaq-widget-text`, `--zaq-widget-radius`,
-`--zaq-widget-font-family`, or `--zaq-widget-composer-background` inside the widget
-document. Parent-page CSS does not cross the iframe boundary. Use unlayered CSS
-so your overrides take priority even when the widget CSS loads afterward:
+Theme is selected through `init()` or `updateSettings()`. To change branding, ask the ZAQ administrator to configure a `stylesheet_url` loaded inside the widget. For example:
 
 ```css
 :root {
   --zaq-widget-primary: #7356c7;
   --zaq-widget-on-primary: #fff;
   --zaq-widget-radius: 12px;
+  --zaq-widget-font-family: system-ui, sans-serif;
 }
 ```
 
-The built-in palettes follow ZAQ chat’s foundation and semantic colors. Surface
-colors can also be overridden with `--zaq-widget-elevated`,
-`--zaq-widget-accent-background`, and `--zaq-widget-border`.
+Use unlayered CSS to override the built-in defaults. More tokens are defined in [widget.css](assets/css/widget.css), including background, text, borders, and composer colors. Color tokens can use `light-dark(lightColor, darkColor)` to follow the selected theme. A failed stylesheet leaves the built-in theme available.
 
-Other color tokens include `--zaq-widget-muted`, `--zaq-widget-shadow`, and
-`--zaq-widget-error-border`, `--zaq-widget-error-background`,
-`--zaq-widget-error-text`, and `--zaq-widget-error-badge`. Custom color tokens can use `light-dark(lightColor, darkColor)` to follow the
-selected CSS color scheme.
+Website CSS cannot cross the iframe boundary. The embed script manages the outer iframe's default placement and height; the widget stylesheet controls its inner appearance. Keep the outer iframe's `color-scheme: light dark` default to preserve transparency.
 
-### Elixir quality and coverage
+## Run the demo locally
 
-Like ZAQ, `mix q` runs formatting, strict Credo, and
-compilation with warnings treated as errors. ZAQ-specific hook and documentation
-tasks are not part of this standalone project.
+Prerequisites:
 
-- `mix q` — fix formatting and run quality checks.
-- `mix precommit` — check formatting, run strict Credo, compile, and run all tests.
-- `mix coveralls` — run tests and print coverage.
-- `mix coveralls.html` — write a browsable report to `cover/excoveralls.html`.
-- `mix coveralls.json` — write machine-readable coverage to `cover/excoveralls.json`.
-- `mix coverup [threshold] [limit]` — read that JSON report and list changed Elixir
-  files below the threshold with their uncovered line numbers (defaults: 95%, 20
-  files). Run `mix coveralls.json` first. Requires Git, jq, and a local `main`
-  branch; considers `main...HEAD`, staged, and unstaged tracked changes under
-  `lib/`. Untracked files and files missing from the report are not included.
+- Elixir and Erlang/OTP. CI currently uses Elixir 1.19.5 and OTP 28.1.
+- Node.js 22.12+ in the 22 series, or Node.js 24, with npm.
+- PostgreSQL. Development defaults are configured in [config/dev.exs](config/dev.exs).
 
-The local [coverage-upper skill](.agents/skills/coverage-upper/SKILL.md) coordinates
-fresh report generation, test planning, and focused test implementation using the
-supporting skills in `.agents/skills/`.
+```sh
+mix setup
+mix phx.server
+```
 
-Coverage tasks automatically use the test environment. Reports exclude dependencies
-and test support code; application code, including Phoenix components, is counted.
-CI runs strict Credo and coverage for every build and saves the report as an artifact.
-To enable Coveralls uploads, activate this repository in Coveralls and add its token
-as the GitHub Actions secret `COVERALLS_REPO_TOKEN`. Fork PRs generate local reports
-without uploading.
+Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` and `zaq.widget.init()` API as the website integration. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
 
-### Validation and limitations
+| Message | Demo response |
+| --- | --- |
+| `hello` | Streamed greeting. |
+| `search` | One tool call, result, and streamed answer. |
+| `research` | Two tool calls with independent progress. |
+| `fail` | Tool and message failure, followed by the ability to send again. |
+| `slow` | Slower tool and streaming events. |
+
+The demo uses a mock host, not a live ZAQ agent. Enable its conversation sidebar with `WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server`. To embed the local demo on another origin, set `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` to a comma-separated list of exact allowed origins and restart the server.
+
+Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets.
+
+## Contributing
+
+Contributions to behavior, accessibility, translations, documentation, and tests are welcome.
+
+1. Fork or clone the repository and create a branch for your change.
+2. Follow the local setup above and read [AGENTS.md](AGENTS.md), the [Elixir guidelines](docs/elixir-guidlines.md), and the [adapter contract](docs/adapter-contract.md) where relevant.
+3. Make a focused change and add tests for the behavior it affects. Update documentation when changing the public API.
+4. Run the checks below and open a pull request describing the problem, the change, and how you tested it. Include screenshots for visual changes.
+
+### Project layout
+
+| Path | Responsibility |
+| --- | --- |
+| `lib/web_widget/` | Host runtime, adapter, routing helpers, and event contracts. |
+| `lib/web_widget_web/` | LiveView state, rendering, and standalone demo. |
+| `assets/react-components/` | React and assistant-ui presentation. |
+| `assets/js/` | Parent embed client and iframe messaging. |
+| `assets/css/` | Widget and demo styles. |
+| `priv/gettext/` | UI translation catalogs for English, French, and Arabic. |
+| `test/` | Elixir tests. |
+| `assets/tests/` | Playwright browser tests and mock host fixtures. |
+
+Keep canonical conversation state in LiveView and preserve the plain-map host boundary. Browser updates use the existing LiveView WebSocket. ZAQ owns routing, permissions, identity resolution, and durable state; host response events use the `response.*` namespace.
+
+### Checks
 
 ```sh
 mix assets.build
 mix precommit
+```
+
+The asset build checks TypeScript and produces widget, client, and embed bundles. `mix precommit` checks formatting, runs strict Credo, compiles with warnings as errors, and runs the Elixir tests.
+
+For browser changes, install Playwright's browsers once and run the relevant tests:
+
+```sh
 cd assets
 npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
 
-The browser tests run on Chromium, Firefox, and WebKit. To run one browser, use
-`npm --prefix assets run test:e2e -- --project=firefox` from the repository root.
-CI runs each browser in a separate job and saves its artifacts separately.
-The tests start the standalone demo on port 4019 and a minimal host endpoint on port 4020 and verify
-the real React → LiveView → React flow, desktop/mobile layout, iframe expansion,
-Enter/Shift+Enter behavior, mock steps, and preserved follow-up messages. Set
-`PLAYWRIGHT_CHROMIUM_BIN` to use an existing Chromium executable; this override
-applies only to the Chromium project.
+From the repository root, run a single browser or test file with:
 
-Recovery tests also start a loopback-only control server on port 4021. The
-Playwright-only host can reject a request once, hold a response until released,
-and retain session history for reconnect checks. These controls are loaded by
-`assets/tests/server.exs` and are not mounted in application routes.
+```sh
+npm --prefix assets run test:e2e -- --project=firefox
+npm --prefix assets run test:e2e -- themes.spec.ts
+```
 
-State lasts only for the LiveView process; reloads or a new connection after process
-loss reset it. One response runs at a time. There is no persistence, authentication,
-cancel/retry protocol, real tools, or ZAQ integration. A submission timeout can be
-ambiguous if the server accepted it; reliable retries will need request IDs when
-request retry support is introduced. Embedding uses the configured origin allowlist and CSP `frame-ancestors`.
-Hosts remain responsible for their session policy. Mobile sizing uses `dvh`; real-device keyboard behavior still needs
-validation. The ZAQ bridge can deliver events through `WebWidget.Adapter.send_event/1`;
-browser updates continue over the existing LiveView WebSocket.
+The suite runs against real iframe, React, and LiveView code with mock host responses. Its servers use ports 4019, 4020, and 4021; run one suite at a time. CI runs Chromium, Firefox, and WebKit separately. Real-device mobile keyboard behavior still needs manual validation.
 
-Ready to run in production? Please [check our deployment guides](https://hexdocs.pm/phoenix/deployment.html).
+For Elixir coverage:
 
-## Learn more
+```sh
+mix coveralls.json
+mix coverup 95 20
+```
 
-* Official website: https://www.phoenixframework.org/
-* Guides: https://hexdocs.pm/phoenix/overview.html
-* Docs: https://hexdocs.pm/phoenix
-* Forum: https://elixirforum.com/c/phoenix-forum
-* Source: https://github.com/phoenixframework/phoenix
+`coverup` lists changed Elixir files below the target with uncovered line numbers. It requires a fresh coverage report, Git, jq, and a local `main` branch. Use `mix coveralls.html` for a browsable report.
+
+### Translations
+
+Widget UI strings come from [Localization](lib/web_widget_web/localization.ex) through Gettext and are passed to React. When adding a UI string, update the English, French, and Arabic catalogs under `priv/gettext/` and test the affected UI, including Arabic layout. Do not translate host-provided response content in the widget.
