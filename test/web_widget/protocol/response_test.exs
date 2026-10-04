@@ -71,6 +71,27 @@ defmodule WebWidget.Protocol.ResponseTest do
     end
   end
 
+  test "history preserves host ordering and scopes message IDs to each conversation" do
+    messages = [
+      %{id: "z", role: "user", content: "First"},
+      %{id: "a", role: "assistant", content: "Second"}
+    ]
+
+    conversations = [
+      %{id: "z", title: "First chat", messages: messages},
+      %{id: "a", title: "Second chat", messages: Enum.reverse(messages)}
+    ]
+
+    payload = %{messages: messages, conversations: conversations}
+    assert {:ok, normalized} = Response.normalize(event("response.conversation.history", payload))
+    assert normalized.payload == payload
+
+    invalid = put_in(payload, [:conversations, Access.at(1), :messages], messages ++ messages)
+
+    assert {:error, :invalid_response} =
+             Response.normalize(event("response.conversation.history", invalid))
+  end
+
   test "initialization requires host identity and routing fields" do
     response = %{
       type: "response.widget.initialized",

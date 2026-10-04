@@ -19,7 +19,6 @@ defmodule WebWidget.Runtime do
     :display_name,
     :allowed_domains,
     :stylesheet_url,
-    :theme,
     :multiple_conversations
   ]
 
@@ -28,34 +27,14 @@ defmodule WebWidget.Runtime do
   end
 
   def start_link(config) do
-    if valid_config?(config) do
-      config =
-        config
-        |> Map.take([:channel_config_id, :sink_mfa, :widgets, :pubsub_server])
-        |> Map.update!(
-          :widgets,
-          &Enum.map(&1, fn widget ->
-            {:ok, origins} =
-              Origins.normalize(Map.get(widget, :allowed_domains))
-
-            widget |> Map.take(@widget_fields) |> Map.put(:allowed_domains, origins)
-          end)
-        )
-
+    with {:ok, config} <- normalize_config(config) do
       GenServer.start_link(__MODULE__, config)
-    else
-      {:error, :invalid_runtime_config}
     end
   end
 
   @doc "Looks up a running widget without exposing its channel ID or sink callback."
   def fetch_widget(widget_id) when is_binary(widget_id) do
-    case Registry.lookup(WebWidget.RuntimeRegistry, widget_id) do
-      [{pid, _}] -> GenServer.call(pid, {:fetch_widget, widget_id})
-      [] -> {:error, :not_found}
-    end
-  catch
-    :exit, _ -> {:error, :not_found}
+    call_widget(widget_id, {:fetch_widget, widget_id})
   end
 
   @doc "Resolves the host-owned PubSub server for a registered widget."
@@ -79,9 +58,11 @@ defmodule WebWidget.Runtime do
     _, _ -> {:error, :unavailable}
   end
 
-  defp delivery_config(widget_id) do
+  defp delivery_config(widget_id), do: call_widget(widget_id, :delivery_config)
+
+  defp call_widget(widget_id, request) do
     case Registry.lookup(WebWidget.RuntimeRegistry, widget_id) do
-      [{pid, _}] -> GenServer.call(pid, :delivery_config)
+      [{pid, _}] -> GenServer.call(pid, request)
       [] -> {:error, :not_found}
     end
   catch
@@ -108,28 +89,42 @@ defmodule WebWidget.Runtime do
     {:reply, if(widget, do: {:ok, widget}, else: {:error, :not_found}), config}
   end
 
-  defp valid_config?(%{
-         channel_config_id: id,
-         sink_mfa: {module, function, args},
-         widgets: widgets
-       })
+  defp normalize_config(
+         %{
+           channel_config_id: id,
+           sink_mfa: {module, function, args},
+           widgets: widgets
+         } = config
+       )
        when not is_nil(id) and is_atom(module) and is_atom(function) and is_list(args) and
               is_list(widgets) do
-    Enum.all?(widgets, &valid_widget?/1) and
-      length(Enum.uniq_by(widgets, & &1.widget_id)) == length(widgets)
+    normalized = Enum.map(widgets, &normalize_widget/1)
+
+    if Enum.all?(normalized, &match?({:ok, _}, &1)) and
+         length(Enum.uniq_by(widgets, & &1.widget_id)) == length(widgets) do
+      {:ok,
+       config
+       |> Map.take([:channel_config_id, :sink_mfa, :pubsub_server])
+       |> Map.put(:widgets, Enum.map(normalized, &elem(&1, 1)))}
+    else
+      {:error, :invalid_runtime_config}
+    end
   end
 
-  defp valid_config?(_), do: false
+  defp normalize_config(_), do: {:error, :invalid_runtime_config}
 
-  defp valid_widget?(%{widget_id: id, display_name: name} = widget)
+  defp normalize_widget(%{widget_id: id, display_name: name} = widget)
        when is_binary(id) and id != "" and is_binary(name) do
-    Map.get(widget, :theme, "auto") in ["light", "dark", "auto"] and
-      is_boolean(Map.get(widget, :multiple_conversations, false)) and
-      match?({:ok, _}, Origins.normalize(Map.get(widget, :allowed_domains))) and
-      valid_stylesheet_url?(Map.get(widget, :stylesheet_url))
+    with true <- is_boolean(Map.get(widget, :multiple_conversations, false)),
+         {:ok, origins} <- Origins.normalize(Map.get(widget, :allowed_domains)),
+         true <- valid_stylesheet_url?(Map.get(widget, :stylesheet_url)) do
+      {:ok, widget |> Map.take(@widget_fields) |> Map.put(:allowed_domains, origins)}
+    else
+      _ -> :error
+    end
   end
 
-  defp valid_widget?(_), do: false
+  defp normalize_widget(_), do: :error
 
   defp valid_stylesheet_url?(nil), do: true
 

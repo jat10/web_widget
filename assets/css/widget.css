@@ -1,63 +1,25 @@
 /* Defaults mirror ZAQ chat foundations.css and semantics.css. */
 @layer zaq-widget-theme {
   :where(:root) {
-    --zaq-widget-color-scheme: light;
-    --zaq-widget-primary: #027589;
-    --zaq-widget-on-primary: #fff;
-    --zaq-widget-background: #fafafa;
-    --zaq-widget-text: #0c1324;
-    --zaq-widget-muted: #43536d;
-    --zaq-widget-composer-background: #fff;
-    --zaq-widget-elevated: #e2e8f0;
-    --zaq-widget-accent-background: #e6f8fb;
-    --zaq-widget-border: #e2e8f0;
-    --zaq-widget-shadow: #0000000c;
-    --zaq-widget-error-border: #ea003e;
-    --zaq-widget-error-background: #fffafa;
-    --zaq-widget-error-text: #b70030;
-    --zaq-widget-error-badge: #fffafa;
+    --zaq-widget-color-scheme: light dark;
+    --zaq-widget-primary: light-dark(#027589, #0aadca);
+    --zaq-widget-on-primary: light-dark(#fff, #040b12);
+    --zaq-widget-background: light-dark(#fafafa, #040b12);
+    --zaq-widget-text: light-dark(#0c1324, #f3f5f7);
+    --zaq-widget-muted: light-dark(#43536d, #a0b2c8);
+    --zaq-widget-composer-background: light-dark(#fff, #0d141c);
+    --zaq-widget-elevated: light-dark(#e2e8f0, #1f2b35);
+    --zaq-widget-accent-background: light-dark(#e6f8fb, #031d2a);
+    --zaq-widget-border: light-dark(#e2e8f0, #1f2b35);
+    --zaq-widget-shadow: light-dark(#0000000c, #00000040);
+    --zaq-widget-error-border: light-dark(#ea003e, #7f1d2f);
+    --zaq-widget-error-background: light-dark(#fffafa, #200d12);
+    --zaq-widget-error-text: light-dark(#b70030, #ff6b82);
+    --zaq-widget-error-badge: light-dark(#fffafa, #200d12);
     --zaq-widget-radius: 18px;
     --zaq-widget-font-family: system-ui, sans-serif;
     --zaq-widget-max-width: 760px;
     --zaq-widget-edge: 16px;
-  }
-
-  :where(:root[data-widget-theme="dark"]) {
-    --zaq-widget-color-scheme: dark;
-    --zaq-widget-primary: #0aadca;
-    --zaq-widget-on-primary: #040b12;
-    --zaq-widget-background: #040b12;
-    --zaq-widget-text: #f3f5f7;
-    --zaq-widget-muted: #a0b2c8;
-    --zaq-widget-composer-background: #0d141c;
-    --zaq-widget-elevated: #1f2b35;
-    --zaq-widget-accent-background: #031d2a;
-    --zaq-widget-border: #1f2b35;
-    --zaq-widget-shadow: #00000040;
-    --zaq-widget-error-border: #7f1d2f;
-    --zaq-widget-error-background: #200d12;
-    --zaq-widget-error-text: #ff6b82;
-    --zaq-widget-error-badge: #200d12;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :where(:root[data-widget-theme="auto"]) {
-      --zaq-widget-color-scheme: dark;
-      --zaq-widget-primary: #0aadca;
-      --zaq-widget-on-primary: #040b12;
-      --zaq-widget-background: #040b12;
-      --zaq-widget-text: #f3f5f7;
-      --zaq-widget-muted: #a0b2c8;
-      --zaq-widget-composer-background: #0d141c;
-      --zaq-widget-elevated: #1f2b35;
-      --zaq-widget-accent-background: #031d2a;
-      --zaq-widget-border: #1f2b35;
-      --zaq-widget-shadow: #00000040;
-      --zaq-widget-error-border: #7f1d2f;
-      --zaq-widget-error-background: #200d12;
-      --zaq-widget-error-text: #ff6b82;
-      --zaq-widget-error-badge: #200d12;
-    }
   }
 }
 

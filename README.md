@@ -262,11 +262,11 @@ height is `"100%"`. No message content is included. The demo listener in
 then changes only the iframe dimensions. The compact iframe leaves host content
 clickable and scrollable. This listener is a demo, not a parent SDK.
 
-Set `theme: "light"`, `"dark"`, or `"auto"` in the host widget configuration.
-The default is `"auto"`, which follows browser appearance changes immediately.
+Theme is controlled by CSS inside the iframe, not ZAQ runtime configuration.
+Set `--zaq-widget-color-scheme: light` or `dark` for a fixed palette, or
+`light dark` (the default) to follow browser appearance changes immediately.
 Set `style="color-scheme: light dark"` on the embedding `<iframe>` so its canvas
 stays transparent on both light and dark host pages. The demo includes this.
-For the local demo, start with `WEB_WIDGET_DEMO_THEME=dark mix phx.server`.
 
 Set `stylesheet_url: "https://your-site.example/widget.css"` (or a root-relative
 asset path) to load custom CSS inside the iframe. The URL is trusted host
@@ -281,6 +281,7 @@ so your overrides take priority even when the widget CSS loads afterward:
 
 ```css
 :root {
+  --zaq-widget-color-scheme: dark;
   --zaq-widget-primary: #7356c7;
   --zaq-widget-on-primary: #fff;
   --zaq-widget-radius: 12px;
@@ -293,9 +294,8 @@ colors can also be overridden with `--zaq-widget-elevated`,
 
 Other color tokens include `--zaq-widget-muted`, `--zaq-widget-shadow`, and
 `--zaq-widget-error-border`, `--zaq-widget-error-background`,
-`--zaq-widget-error-text`, and `--zaq-widget-error-badge`. Custom CSS can use
-`[data-widget-theme="dark"]` and `prefers-color-scheme` media queries for its own
-appearance-specific overrides.
+`--zaq-widget-error-text`, and `--zaq-widget-error-badge`. Custom color tokens can use `light-dark(lightColor, darkColor)` to follow the
+selected CSS color scheme.
 
 ### Elixir quality and coverage
 
@@ -331,14 +331,23 @@ without uploading.
 mix assets.build
 mix precommit
 cd assets
-npx playwright install chromium
+npx playwright install chromium firefox webkit
 npm run test:e2e
 ```
 
-The browser tests start the standalone demo on port 4019 and a minimal host endpoint on port 4020 and verify
+The browser tests run on Chromium, Firefox, and WebKit. To run one browser, use
+`npm --prefix assets run test:e2e -- --project=firefox` from the repository root.
+CI runs each browser in a separate job and saves its artifacts separately.
+The tests start the standalone demo on port 4019 and a minimal host endpoint on port 4020 and verify
 the real React → LiveView → React flow, desktop/mobile layout, iframe expansion,
 Enter/Shift+Enter behavior, mock steps, and preserved follow-up messages. Set
-`PLAYWRIGHT_CHROMIUM_BIN` to use an existing Chromium executable.
+`PLAYWRIGHT_CHROMIUM_BIN` to use an existing Chromium executable; this override
+applies only to the Chromium project.
+
+Recovery tests also start a loopback-only control server on port 4021. The
+Playwright-only host can reject a request once, hold a response until released,
+and retain session history for reconnect checks. These controls are loaded by
+`assets/tests/server.exs` and are not mounted in application routes.
 
 State lasts only for the LiveView process; reloads or a new connection after process
 loss reset it. One response runs at a time. There is no persistence, authentication,

@@ -26,7 +26,6 @@ defmodule WebWidgetWeb.WidgetLive do
        widget_id: widget.widget_id,
        allowed_domains: widget.allowed_domains,
        page_title: widget.display_name,
-       widget_theme: Map.get(widget, :theme, "auto"),
        widget_stylesheet_url: Map.get(widget, :stylesheet_url),
        parent_context: nil,
        mode: :launcher,
