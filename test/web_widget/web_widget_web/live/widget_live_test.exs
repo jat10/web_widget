@@ -78,6 +78,47 @@ defmodule WebWidgetWeb.WidgetLiveTest do
 
   defp state(view), do: :sys.get_state(view.pid).socket.assigns
 
+  test "settings default to English and parent initialization selects language", %{conn: conn} do
+    {:ok, default, _} = live(conn, ~p"/widget/live-test")
+    assert state(default).config.locale == "en"
+
+    for {locale, _direction, placeholder} <- [
+          {"fr", "ltr", "Posez une question…"},
+          {"ar", "rtl", "اطرح سؤالًا…"}
+        ] do
+      id = "localized-#{locale}"
+
+      start_supervised!(
+        {WebWidget.Runtime,
+         %{
+           channel_config_id: id,
+           sink_mfa: {__MODULE__, :host, [self()]},
+           pubsub_server: WebWidget.PubSub,
+           widgets: [
+             %{
+               widget_id: id,
+               display_name: "Host title",
+               locale: locale,
+               allowed_domains: ["http://www.example.com"]
+             }
+           ]
+         }}
+      )
+
+      html = conn |> get("/widget/#{id}") |> html_response(200) |> LazyHTML.from_document()
+      assert LazyHTML.attribute(LazyHTML.query(html, "html"), "lang") == ["en"]
+      assert LazyHTML.attribute(LazyHTML.query(html, "html"), "dir") == ["ltr"]
+      {:ok, view, _} = live(conn, "/widget/#{id}")
+      render_hook(view, "widget.context", %{user_id: "user", settings: %{language: locale}})
+      assert state(view).config.locale == locale
+      assert state(view).config.placeholder == placeholder
+      assert state(view).config.title == "Host title"
+      refute Map.has_key?(state(view).parent_context, :locale)
+    end
+
+    assert state(default).config.strings["Send"] == "Send"
+  end
+
   test "parent context retains only bootstrap fields and accepts identical retries", %{conn: conn} do
     {:ok, view, _} = live(conn, ~p"/widget/live-test")
     assert has_element?(view, "#widget-state[data-context-received='false']")
@@ -103,6 +144,46 @@ defmodule WebWidgetWeb.WidgetLiveTest do
     end
 
     assert :sys.get_state(view.pid).socket.assigns.messages == []
+  end
+
+  test "runtime settings preserve context and repeated init cannot reset them", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/widget/live-test")
+
+    render_hook(view, "widget.context", %{
+      user_id: "user",
+      settings: %{theme: "dark", language: "fr"}
+    })
+
+    before = state(view)
+    render_hook(view, "widget.settings.update", %{settings: %{language: "ar"}})
+    assert state(view).settings == %{"theme" => "dark", "language" => "ar"}
+    assert state(view).parent_context == before.parent_context
+
+    render_hook(view, "widget.context", %{
+      user_id: "user",
+      settings: %{theme: "light", language: "en"}
+    })
+
+    assert state(view).settings == %{"theme" => "dark", "language" => "ar"}
+
+    render_hook(view, "widget.settings.update", %{
+      settings: %{theme: "light", user_id: "attacker"}
+    })
+
+    assert state(view).settings == %{"theme" => "dark", "language" => "ar"}
+    assert state(view).parent_context == before.parent_context
+  end
+
+  test "invalid startup settings leave context uninitialized", %{conn: conn} do
+    {:ok, view, _} = live(conn, ~p"/widget/live-test")
+
+    render_hook(view, "widget.context", %{
+      user_id: "user",
+      settings: %{theme: "dark", language: "invalid"}
+    })
+
+    assert state(view).parent_context == nil
+    assert state(view).settings == %{"theme" => "auto", "language" => "en"}
   end
 
   test "optional bootstrap fields support new conversations and string context", %{conn: conn} do

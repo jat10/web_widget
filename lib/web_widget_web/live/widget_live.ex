@@ -3,9 +3,11 @@ defmodule WebWidgetWeb.WidgetLive do
 
   alias WebWidget.Adapter
   alias WebWidget.Conversation.State, as: Conversation
+  alias WebWidget.Embedding.Settings
   alias WebWidget.Protocol.Events
   alias WebWidget.Protocol.Response
   alias WebWidget.Runtime
+  alias WebWidgetWeb.Localization
 
   @impl true
   def mount(%{"widget_id" => widget_id}, _session, socket) do
@@ -19,9 +21,15 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   defp mount_widget(socket, widget) do
+    locale = "en"
+    strings = Localization.strings(locale)
+
     {:ok,
      assign(socket,
        widget: true,
+       settings: Settings.defaults(),
+       widget_locale: locale,
+       widget_direction: if(locale == "ar", do: "rtl", else: "ltr"),
        unavailable: false,
        widget_id: widget.widget_id,
        allowed_domains: widget.allowed_domains,
@@ -41,9 +49,12 @@ defmodule WebWidgetWeb.WidgetLive do
        error: nil,
        config: %{
          title: widget.display_name,
+         locale: locale,
+         theme: "auto",
+         strings: strings,
          multiple_conversations: Map.get(widget, :multiple_conversations, false),
-         placeholder: "Ask a question…",
-         follow_up_placeholder: "Ask a follow-up…",
+         placeholder: strings["Ask a question…"],
+         follow_up_placeholder: strings["Ask a follow-up…"],
          max_length: 2000
        }
      )}
@@ -80,7 +91,7 @@ defmodule WebWidgetWeb.WidgetLive do
           socket={@socket}
           mode={@mode}
           canReopen={@conversation_opened}
-          messages={@messages}
+          messages={Localization.messages(@messages, @config.locale)}
           isRunning={@pending_reply != nil}
           isTyping={@typing}
           responseError={@error}
@@ -95,7 +106,25 @@ defmodule WebWidgetWeb.WidgetLive do
 
   @impl true
   def handle_event(_event, _params, %{assigns: %{unavailable: true}} = socket) do
-    {:reply, %{ok: false, error: "Widget unavailable."}, socket}
+    {:reply, %{ok: false, error: ui(socket, "Widget unavailable.")}, socket}
+  end
+
+  def handle_event("widget.settings.get", _params, socket) do
+    {:reply, %{ok: true, settings: socket.assigns.settings}, socket}
+  end
+
+  def handle_event("widget.settings.update", %{"settings" => patch}, socket) do
+    case Settings.update(socket.assigns.settings, patch) do
+      {:ok, settings} ->
+        {:reply, %{ok: true, settings: settings}, apply_settings(socket, settings)}
+
+      {:error, error} ->
+        {:reply, %{ok: false, error: error}, socket}
+    end
+  end
+
+  def handle_event("widget.settings.update", _params, socket) do
+    {:reply, %{ok: false, error: "Settings must be an object."}, socket}
   end
 
   def handle_event("widget.close", _params, socket) do
@@ -106,21 +135,23 @@ defmodule WebWidgetWeb.WidgetLive do
     if socket.assigns.parent_context && socket.assigns.conversation_opened do
       {:reply, %{ok: true}, assign(socket, mode: :conversation, conversation_opened: true)}
     else
-      {:reply, %{ok: false, error: "No conversation to reopen."}, socket}
+      {:reply, %{ok: false, error: ui(socket, "No conversation to reopen.")}, socket}
     end
   end
 
   def handle_event("widget.conversation.select", %{"id" => id}, socket) do
     cond do
       not conversations_enabled?(socket) ->
-        {:reply, %{ok: false, error: "Conversation switching is unavailable."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Conversation switching is unavailable.")},
+         socket}
 
       socket.assigns.pending_reply != nil ->
-        {:reply, %{ok: false, error: "Wait for the current response before switching chats."},
+        {:reply,
+         %{ok: false, error: ui(socket, "Wait for the current response before switching chats.")},
          socket}
 
       not Enum.any?(socket.assigns.conversations, &(&1.id == id)) ->
-        {:reply, %{ok: false, error: "Conversation unavailable."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Conversation unavailable.")}, socket}
 
       socket.assigns.accepted_context && socket.assigns.accepted_context.conversation_id == id ->
         {:reply, %{ok: true}, socket}
@@ -131,13 +162,13 @@ defmodule WebWidgetWeb.WidgetLive do
             {:reply, %{ok: true}, assign(socket, mode: :conversation, conversation_opened: true)}
 
           {:error, socket} ->
-            {:reply, %{ok: false, error: "Unable to open this conversation."}, socket}
+            {:reply, %{ok: false, error: ui(socket, "Unable to open this conversation.")}, socket}
         end
     end
   end
 
   def handle_event("widget.conversation.select", _params, socket) do
-    {:reply, %{ok: false, error: "Conversation unavailable."}, socket}
+    {:reply, %{ok: false, error: ui(socket, "Conversation unavailable.")}, socket}
   end
 
   def handle_event("widget.conversation.new", _params, socket) do
@@ -157,8 +188,10 @@ defmodule WebWidgetWeb.WidgetLive do
        )}
     else
       {:reply,
-       %{ok: false, error: "Wait for the current response or enable multiple conversations."},
-       socket}
+       %{
+         ok: false,
+         error: ui(socket, "Wait for the current response or enable multiple conversations.")
+       }, socket}
     end
   end
 
@@ -171,27 +204,25 @@ defmodule WebWidgetWeb.WidgetLive do
 
     cond do
       not valid_parent_context?(context) ->
-        {:reply, %{ok: false, error: "Invalid widget context."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Invalid widget context.")}, socket}
 
       socket.assigns.parent_context not in [nil, context] ->
-        {:reply, %{ok: false, error: "Reload the widget to change context."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Reload the widget to change context.")}, socket}
 
       socket.assigns.parent_context == context ->
-        {:reply, %{ok: true}, socket}
+        {:reply, %{ok: true, settings: socket.assigns.settings}, socket}
 
       true ->
-        candidate = assign(socket, :parent_context, context)
-
-        initialize_context(candidate, socket)
+        initialize_settings(socket, context, Map.get(params, "settings", %{}))
     end
   end
 
   def handle_event("widget.context", _params, socket) do
-    {:reply, %{ok: false, error: "Invalid widget context."}, socket}
+    {:reply, %{ok: false, error: ui(socket, "Invalid widget context.")}, socket}
   end
 
   def handle_event("widget.submit", _params, %{assigns: %{parent_context: nil}} = socket) do
-    {:reply, %{ok: false, error: "Widget context with user_id is required."}, socket}
+    {:reply, %{ok: false, error: ui(socket, "Widget context with user_id is required.")}, socket}
   end
 
   def handle_event("widget.submit", %{"text" => text}, socket) when is_binary(text) do
@@ -199,10 +230,10 @@ defmodule WebWidgetWeb.WidgetLive do
 
     cond do
       socket.assigns.pending_reply != nil ->
-        {:reply, %{ok: false, error: "Please wait for the current response."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Please wait for the current response.")}, socket}
 
       text == "" or String.length(text) > socket.assigns.config.max_length ->
-        {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
+        {:reply, %{ok: false, error: ui(socket, "Enter a message of 1–2000 characters.")}, socket}
 
       true ->
         case initialize(socket) do
@@ -210,13 +241,15 @@ defmodule WebWidgetWeb.WidgetLive do
             submit(socket, text)
 
           {:error, socket} ->
-            {:reply, %{ok: false, error: "Unable to initialize chat. Please try again."}, socket}
+            {:reply,
+             %{ok: false, error: ui(socket, "Unable to initialize chat. Please try again.")},
+             socket}
         end
     end
   end
 
   def handle_event("widget.submit", _params, socket) do
-    {:reply, %{ok: false, error: "Enter a text message."}, socket}
+    {:reply, %{ok: false, error: ui(socket, "Enter a text message.")}, socket}
   end
 
   @impl true
@@ -265,6 +298,22 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
+  defp initialize_settings(socket, context, patch) do
+    case Settings.update(socket.assigns.settings, patch) do
+      {:ok, settings} ->
+        candidate = socket |> assign(:parent_context, context) |> apply_settings(settings)
+        settings_reply(initialize_context(candidate, socket), settings)
+
+      {:error, error} ->
+        {:reply, %{ok: false, error: error}, socket}
+    end
+  end
+
+  defp settings_reply({:reply, %{ok: true}, socket}, settings),
+    do: {:reply, %{ok: true, settings: settings}, socket}
+
+  defp settings_reply(result, _settings), do: result
+
   defp initialize_context(
          %{assigns: %{config: %{multiple_conversations: false}}} = candidate,
          _socket
@@ -277,7 +326,9 @@ defmodule WebWidgetWeb.WidgetLive do
         {:reply, %{ok: true}, candidate}
 
       {:error, _} ->
-        {:reply, %{ok: false, error: "Unable to load conversations. Please try again."}, socket}
+        {:reply,
+         %{ok: false, error: ui(socket, "Unable to load conversations. Please try again.")},
+         socket}
     end
   end
 
@@ -388,7 +439,10 @@ defmodule WebWidgetWeb.WidgetLive do
        |> assign(mode: :conversation, conversation_opened: true)
        |> cache_current()}
     else
-      _ -> {:reply, %{ok: false, error: "Unable to send your message. Please try again."}, socket}
+      _ ->
+        {:reply,
+         %{ok: false, error: ui(socket, "Unable to send your message. Please try again.")},
+         socket}
     end
   end
 
@@ -404,7 +458,7 @@ defmodule WebWidgetWeb.WidgetLive do
         if Enum.any?(socket.assigns.conversations, &(&1.id == id)) do
           socket.assigns.conversations
         else
-          title = conversation_title(socket.assigns.messages)
+          title = conversation_title(socket)
 
           [%{id: id, title: title} | socket.assigns.conversations]
         end
@@ -419,9 +473,9 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
-  defp conversation_title(messages) do
-    case Enum.find(messages, &(&1.role == "user")) do
-      nil -> "New chat"
+  defp conversation_title(socket) do
+    case Enum.find(socket.assigns.messages, &(&1.role == "user")) do
+      nil -> ui(socket, "New chat")
       message -> String.slice(message.content, 0, 60)
     end
   end
@@ -433,6 +487,23 @@ defmodule WebWidgetWeb.WidgetLive do
       (is_nil(context.conversation_id) or nonblank_string?(context.conversation_id)) and
       (is_nil(context.prompt_context) or is_binary(context.prompt_context))
   end
+
+  defp apply_settings(socket, settings) do
+    strings = Localization.strings(settings["language"])
+
+    config =
+      Map.merge(socket.assigns.config, %{
+        locale: settings["language"],
+        theme: settings["theme"],
+        strings: strings,
+        placeholder: strings["Ask a question…"],
+        follow_up_placeholder: strings["Ask a follow-up…"]
+      })
+
+    assign(socket, settings: settings, config: config)
+  end
+
+  defp ui(socket, text), do: get_in(socket.assigns, [:config, :strings, text]) || text
 
   defp nonblank_string?(value), do: is_binary(value) and String.trim(value) != ""
 end

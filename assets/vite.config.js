@@ -48,7 +48,9 @@ export default defineConfig(({ command }) => {
       sourcemap: isDev, // enable source map in dev build
       manifest: false, // do not generate manifest.json
       rollupOptions: {
+        preserveEntrySignatures: "exports-only",
         input: {
+          "widget-client": path.resolve(__dirname, "./js/widget-client.ts"),
           app: path.resolve(__dirname, "./js/app.js"),
         },
         output: {
