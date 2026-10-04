@@ -43,20 +43,14 @@ defmodule WebWidget.RuntimeTest do
     assert Runtime.fetch_widget("missing") == {:error, :not_found}
   end
 
-  test "accepts supported themes and stylesheet URLs and rejects invalid values" do
+  test "discards runtime theme fields and validates stylesheet URLs" do
     config = config()
     [widget | _] = config.widgets
 
-    for theme <- ["light", "dark", "auto"] do
-      themed = Map.put(widget, :theme, theme)
-      start_supervised!({Runtime, %{config | widgets: [themed]}})
-      assert Runtime.fetch_widget(widget.widget_id) == {:ok, themed}
+    for theme <- ["light", "dark", "auto", nil, :dark, "system", true] do
+      start_supervised!({Runtime, %{config | widgets: [Map.put(widget, :theme, theme)]}})
+      assert Runtime.fetch_widget(widget.widget_id) == {:ok, widget}
       stop_supervised!({Runtime, config.channel_config_id})
-    end
-
-    for theme <- [nil, :dark, "system", "DARK", true] do
-      assert {:error, :invalid_runtime_config} =
-               Runtime.start_link(%{config | widgets: [Map.put(widget, :theme, theme)]})
     end
 
     for url <- [nil, "/css/theme.css?v=2", "https://cdn.example.com/theme.css"] do

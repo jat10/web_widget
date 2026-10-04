@@ -164,8 +164,9 @@ Identical retries are accepted; replacing context requires
 an iframe reload. Receiving context does not perform host initialization or
 load conversation history unless multiple conversations are enabled.
 
-Widget presentation accepts `theme: "light" | "dark" | "auto"` (default `"auto"`).
-Auto follows the browser color-scheme preference, including changes while open.
+Widget appearance is controlled by CSS inside the iframe, not a runtime `theme` field.
+Set `--zaq-widget-color-scheme` to `light`, `dark`, or `light dark` (default).
+The default follows browser appearance, including changes while open.
 The embedding iframe should use `color-scheme: light dark` to keep its transparent
 canvas compatible with either browser scheme. The chat controls apply the
 configured widget theme independently of that canvas.
@@ -173,7 +174,7 @@ The trusted host may provide `stylesheet_url` as an HTTP(S) URL or a root-relati
 asset path; the widget loads it inside the iframe. Theme defaults use the
 `zaq-widget-theme` CSS layer so an unlayered custom stylesheet can override
 `--zaq-widget-*` variables on `:root`, regardless of asset loading order.
-Theme and stylesheet changes require an iframe reload.
+Stylesheet URL changes require an iframe reload; CSS variable changes apply immediately.
 Origin configuration is checked on HTTP rendering and LiveView mounting;
 runtime changes require reloading existing iframes to refresh their HTTP policy.
 

@@ -135,8 +135,12 @@ export function WebWidget({ mode, messages, isRunning, isTyping, responseError, 
 
   useEffect(() => {
     if (previousConversation.current !== conversationId) {
-      runtime.thread.composer.setText("");
-      setError(null);
+      // Initial host binding may accompany a rejected first submission. Keep its
+      // restored draft and error; explicit switches away from a chat reset them.
+      if (previousConversation.current !== null) {
+        runtime.thread.composer.setText("");
+        setError(null);
+      }
       previousConversation.current = conversationId;
     }
   }, [conversationId, runtime]);

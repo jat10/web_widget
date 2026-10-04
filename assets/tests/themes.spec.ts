@@ -2,12 +2,16 @@ import { expect, test } from "@playwright/test";
 
 for (const theme of ["light", "dark"] as const) {
   test(`${theme} stays fixed when browser appearance changes`, async ({ page }, testInfo) => {
+    await page.route(`**/theme-${theme}.css`, route => route.fulfill({
+      contentType: "text/css",
+      body: `:root { --zaq-widget-color-scheme: ${theme}; }`
+    }));
     await page.emulateMedia({ colorScheme: theme === "light" ? "dark" : "light" });
     await page.goto(`/widget-demo?widget_id=theme-${theme}`);
     const widget = page.frameLocator("#zaq-demo-widget");
     const input = widget.getByRole("textbox", { name: "Message", exact: true });
     await expect(input).toBeVisible();
-    await expect(widget.locator("html")).toHaveAttribute("data-widget-theme", theme);
+    await expect(widget.locator("html")).not.toHaveAttribute("data-widget-theme");
     // A dark iframe canvas becomes opaque over a light parent, even with transparent CSS.
     await expect(widget.locator("html")).toHaveCSS("color-scheme", "light dark");
     await expect(widget.locator(".zaq-widget")).toHaveCSS("color-scheme", theme);
@@ -49,7 +53,7 @@ test("default auto follows browser changes in launcher and conversation", async 
   const widget = page.frameLocator("#zaq-demo-widget");
   const composer = widget.locator(".zaq-composer");
   await expect(composer).toHaveCSS("background-color", "rgb(255, 255, 255)");
-  await expect(widget.locator("html")).toHaveAttribute("data-widget-theme", "auto");
+  await expect(widget.locator("html")).not.toHaveAttribute("data-widget-theme");
   await page.emulateMedia({ colorScheme: "dark" });
   await expect(composer).toHaveCSS("background-color", "rgb(13, 20, 28)");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
@@ -73,7 +77,21 @@ test("host stylesheet overrides theme defaults even before the React CSS loads",
   await expect(widget.locator(".zaq-composer-send")).toHaveCSS("background-color", "rgb(115, 86, 199)");
 });
 
+test("changing the CSS color scheme updates the palette without reloading", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/widget-demo");
+  const widget = page.frameLocator("#zaq-demo-widget");
+  await expect(widget.locator(".zaq-composer")).toBeVisible();
+  for (const [scheme, surface] of [["dark", "rgb(13, 20, 28)"], ["light", "rgb(255, 255, 255)"]]) {
+    await widget.locator("html").evaluate((el, value) => {
+      el.style.setProperty("--zaq-widget-color-scheme", value);
+    }, scheme);
+    await expect(widget.locator(".zaq-composer")).toHaveCSS("background-color", surface);
+  }
+});
+
 test("unavailable custom stylesheet retains the built-in theme", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/custom-widget.css", route => route.fulfill({ status: 404, body: "" }));
   await page.goto("/widget-demo?widget_id=theme-custom");
   await expect(page.frameLocator("#zaq-demo-widget").locator(".zaq-composer")).toHaveCSS("background-color", "rgb(13, 20, 28)");

@@ -71,14 +71,7 @@ defmodule WebWidget.Conversation.State do
 
   def apply_event(state, %{type: "response.message.failed", payload: payload}) do
     state
-    |> update_message(payload.message_id, fn message ->
-      %{
-        message
-        | status: "failed",
-          error: payload.message,
-          steps: finish_steps(message.steps, "failed")
-      }
-    end)
+    |> fail_message(payload.message_id, payload.message)
     |> finish(payload.message_id)
   end
 

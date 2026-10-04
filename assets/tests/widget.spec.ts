@@ -167,7 +167,7 @@ test("missing user_id keeps chat hidden and console guidance allows late recover
   await expect(widget.locator("#web-widget")).toHaveCount(0);
   for (const selector of ["html", "body"]) {
     await expect(widget.locator(selector)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
-    await expect(widget.locator(selector)).toHaveCSS("color-scheme", "normal");
+    await expect(widget.locator(selector)).toHaveCSS("color-scheme", "light dark");
   }
   await page.clock.runFor(5100);
   await expect.poll(() => errors.some((error) => error.includes("No valid user_id received"))).toBe(true);

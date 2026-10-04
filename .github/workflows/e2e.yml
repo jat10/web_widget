@@ -13,9 +13,13 @@ concurrency:
 
 jobs:
   e2e:
-    name: E2E Chromium
+    name: E2E ${{ matrix.browser }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
     env:
       MIX_ENV: dev
 
@@ -70,16 +74,16 @@ jobs:
           mix ecto.create
           mix ecto.migrate
           cd assets
-          npx playwright install --with-deps chromium
+          npx playwright install --with-deps ${{ matrix.browser }}
 
       - name: Run browser tests
-        run: npm --prefix assets run test:e2e
+        run: npm --prefix assets run test:e2e -- --project=${{ matrix.browser }}
 
       - name: Upload Playwright artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-artifacts-chromium
+          name: playwright-artifacts-${{ matrix.browser }}
           path: |
             assets/playwright-report
             assets/test-results

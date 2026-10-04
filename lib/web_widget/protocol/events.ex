@@ -11,6 +11,8 @@ defmodule WebWidget.Protocol.Events do
   alias WebWidget.Protocol.Init
   alias WebWidget.Protocol.Message
 
+  import WebWidget.Protocol.Validation, only: [nonblank?: 1]
+
   @type result :: {:ok, map()} | {:error, atom()}
 
   @doc "Builds a synchronous init event from the parent bootstrap context."
@@ -128,6 +130,4 @@ defmodule WebWidget.Protocol.Events do
 
   defp message_event(_type, _widget_id, _context, _message, _channel),
     do: {:error, :invalid_message_context}
-
-  defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
 end

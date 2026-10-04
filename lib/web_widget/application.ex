@@ -43,7 +43,6 @@ defmodule WebWidget.Application do
              %{
                widget_id: "demo",
                display_name: "Website assistant",
-               theme: Application.get_env(:web_widget, :demo_theme, "auto"),
                multiple_conversations:
                  Application.get_env(:web_widget, :demo_multiple_conversations, false),
                allowed_domains: Application.get_env(:web_widget, :demo_allowed_domains, [])

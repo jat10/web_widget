@@ -1,6 +1,8 @@
 defmodule WebWidget.Protocol.Response do
   @moduledoc "Validates host response maps and discards fields outside the public contract."
 
+  import WebWidget.Protocol.Validation, only: [nonblank?: 1]
+
   def normalize(%{type: type, widget_id: widget, conversation_id: conversation} = event) do
     with true <- nonblank?(widget) and nonblank?(conversation),
          {:ok, payload} <- payload(type, Map.get(event, :payload), event) do
@@ -86,18 +88,7 @@ defmodule WebWidget.Protocol.Response do
 
   defp payload(_, _, _), do: :error
 
-  defp history_messages(messages) when is_list(messages) do
-    normalized = Enum.map(messages, &history_message/1)
-
-    if Enum.all?(normalized, &match?({:ok, _}, &1)) do
-      messages = Enum.map(normalized, &elem(&1, 1))
-      if unique_ids?(messages), do: {:ok, messages}, else: :error
-    else
-      :error
-    end
-  end
-
-  defp history_messages(_), do: :error
+  defp history_messages(messages), do: normalize_list(messages, &history_message/1)
 
   defp history_message(%{id: id, role: role, content: content} = message) do
     with true <- nonblank?(id) and role in ["user", "assistant"] and is_binary(content),
@@ -110,28 +101,35 @@ defmodule WebWidget.Protocol.Response do
 
   defp history_message(_), do: :error
 
-  defp conversations(conversations) when is_list(conversations) do
-    result =
-      Enum.reduce_while(conversations, {:ok, []}, fn
-        %{id: id, title: title, messages: messages}, {:ok, acc} ->
-          with true <- nonblank?(id) and nonblank?(title),
-               {:ok, messages} <- history_messages(messages) do
-            {:cont, {:ok, acc ++ [%{id: id, title: title, messages: messages}]}}
-          else
-            _ -> {:halt, :error}
-          end
+  defp conversations(conversations), do: normalize_list(conversations, &conversation/1)
 
-        _, _ ->
-          {:halt, :error}
-      end)
-
-    case result do
-      {:ok, items} -> if unique_ids?(items), do: {:ok, items}, else: :error
+  defp conversation(%{id: id, title: title, messages: messages}) do
+    with true <- nonblank?(id) and nonblank?(title),
+         {:ok, messages} <- history_messages(messages) do
+      {:ok, %{id: id, title: title, messages: messages}}
+    else
       _ -> :error
     end
   end
 
-  defp conversations(_), do: :error
+  defp conversation(_), do: :error
+
+  defp normalize_list(items, normalize) when is_list(items) do
+    result =
+      Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->
+        case normalize.(item) do
+          {:ok, item} -> {:cont, {:ok, [item | acc]}}
+          :error -> {:halt, :error}
+        end
+      end)
+
+    case result do
+      {:ok, items} -> if unique_ids?(items), do: {:ok, Enum.reverse(items)}, else: :error
+      _ -> :error
+    end
+  end
+
+  defp normalize_list(_, _), do: :error
 
   defp unique_ids?(items), do: length(Enum.uniq_by(items, & &1.id)) == length(items)
 
@@ -147,6 +145,4 @@ defmodule WebWidget.Protocol.Response do
 
   defp timestamp(%{timestamp: _}), do: :error
   defp timestamp(_), do: {:ok, %{}}
-
-  defp nonblank?(value), do: is_binary(value) and String.trim(value) != ""
 end
