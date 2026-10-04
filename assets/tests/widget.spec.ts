@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("demo registers bootstrap before navigating the iframe when its script loads late", async ({ page }) => {
+test("demo initializes an already loaded iframe when its script loads late", async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   let requested!: () => void;
@@ -16,13 +16,14 @@ test("demo registers bootstrap before navigating the iframe when its script load
   try {
     await page.goto("/widget-demo", { waitUntil: "commit" });
     await parentScript;
-    // Loading the iframe before the listener exists can lose its only ready message.
-    await expect(page.locator("#zaq-demo-widget")).not.toHaveAttribute("src");
+    // The embed client must recover readiness after the iframe has already loaded.
+    await expect(page.frameLocator("#zaq-widget").locator("#widget-state")).toBeAttached();
+    await expect(page.frameLocator("#zaq-widget").locator(".zaq-widget")).toHaveCount(0);
   } finally {
     release();
   }
 
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeVisible();
   await input.fill("hello");
@@ -34,8 +35,8 @@ test("floating iframe expands through React → LiveView and preserves the conve
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/widget-demo");
-  const frame = page.locator("#zaq-demo-widget");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const frame = page.locator("#zaq-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
 
   await expect(input).toBeVisible();
@@ -78,7 +79,7 @@ test("floating iframe expands through React → LiveView and preserves the conve
 test("the conversation scrolls independently of its bottom composer", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 600 });
   await page.goto("/widget-demo");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("Tell me about local places to visit. ".repeat(30));
   await input.press("Enter");
@@ -96,7 +97,7 @@ test("the conversation scrolls independently of its bottom composer", async ({ p
 test("mobile launcher fits the viewport and Shift+Enter does not submit", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/widget-demo");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeVisible();
   await input.fill("  ");
@@ -104,7 +105,7 @@ test("mobile launcher fits the viewport and Shift+Enter does not submit", async 
   await input.fill("First line");
   await input.press("Shift+Enter");
   await input.pressSequentially("Second line");
-  await expect(page.locator("#zaq-demo-widget")).toHaveAttribute("data-mode", "launcher");
+  await expect(page.locator("#zaq-widget")).toHaveAttribute("data-mode", "launcher");
   const composer = await widget.locator(".zaq-composer").boundingBox();
   expect(composer!.x).toBeGreaterThanOrEqual(12);
   expect(composer!.x + composer!.width).toBeLessThanOrEqual(378);
@@ -129,7 +130,7 @@ test("bootstrap accepts only valid parent context and announces readiness after 
     });
   });
   await page.goto("/widget-demo");
-  const state = page.frameLocator("#zaq-demo-widget").locator("#widget-state");
+  const state = page.frameLocator("#zaq-widget").locator("#widget-state");
   await expect(page.locator("html")).toHaveAttribute("data-ready-count", "1");
   await expect(state).toHaveAttribute("data-context-received", "false");
   const child = page.frames().find((frame) => frame.parentFrame())!;
@@ -144,7 +145,7 @@ test("bootstrap accepts only valid parent context and announces readiness after 
     }));
   });
   await page.evaluate(() => {
-    const child = document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!;
+    const child = document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!;
     for (const data of [
       { type: "unrelated", user_id: "user_123" },
       { type: "zaq.widget.init", user_id: " " },
@@ -161,7 +162,7 @@ test("bootstrap accepts only valid parent context and announces readiness after 
   await expect(state).toHaveAttribute("data-context-received", "false");
 
   await page.evaluate(() => {
-    document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!.postMessage({
+    document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!.postMessage({
       type: "zaq.widget.init",
       user_id: "user_123",
       prompt_context: "Current page: /billing",
@@ -193,7 +194,7 @@ test("missing user_id keeps chat hidden and console guidance allows late recover
   });
   await page.goto("/widget-demo");
   await expect(page.locator("html")).toHaveAttribute("data-widget-ready", "true");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   await expect(widget.locator("#web-widget")).toHaveCount(0);
   for (const selector of ["html", "body"]) {
     await expect(widget.locator(selector)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
@@ -204,21 +205,21 @@ test("missing user_id keeps chat hidden and console guidance allows late recover
   expect(errors[0]).toContain('iframe.contentWindow.postMessage');
   expect(errors[0]).toContain('zaq.widget.ready');
   await page.evaluate(() => {
-    document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!.postMessage({
+    document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!.postMessage({
       type: "zaq.widget.init", prompt_context: "Billing",
     }, window.location.origin);
   });
   await expect.poll(() => errors.some((error) => error.includes("Missing or invalid user_id"))).toBe(true);
   await expect(widget.locator("#web-widget")).toHaveCount(0);
   await page.evaluate(() => {
-    document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!.postMessage({
+    document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!.postMessage({
       type: "zaq.widget.init", user_id: "user_123", prompt_context: { page: "/billing" },
     }, window.location.origin);
   });
   await expect.poll(() => errors.some((error) => error.includes("Invalid prompt_context"))).toBe(true);
   await expect(widget.locator("#web-widget")).toHaveCount(0);
   await page.evaluate(() => {
-    document.querySelector<HTMLIFrameElement>("#zaq-demo-widget")!.contentWindow!.postMessage({
+    document.querySelector<HTMLIFrameElement>("#zaq-widget")!.contentWindow!.postMessage({
       type: "zaq.widget.init", user_id: "user_123", prompt_context: "Billing", conversation_id: null,
     }, window.location.origin);
   });
@@ -230,8 +231,8 @@ test("missing user_id keeps chat hidden and console guidance allows late recover
 
 test("close collapses the iframe and reopening preserves drafts and live responses", async ({ page }) => {
   await page.goto("/widget-demo");
-  const frame = page.locator("#zaq-demo-widget");
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const frame = page.locator("#zaq-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("research");
   await input.press("Enter");

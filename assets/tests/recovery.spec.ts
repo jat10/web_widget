@@ -199,7 +199,7 @@ test("keyboard navigation reaches send, activity, close and reopen with visible 
   // macOS WebKit uses Option-Tab to include buttons in keyboard navigation.
   const tab = browserName === "webkit" && await page.evaluate(() => navigator.platform.startsWith("Mac"))
     ? "Alt+Tab" : "Tab";
-  const widget = page.frameLocator("#zaq-demo-widget");
+  const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.focus();
   await input.fill("research");

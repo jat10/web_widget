@@ -1,7 +1,7 @@
 export type WidgetSettings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 export type WidgetInit = { user_id: string; prompt_context?: string | null; conversation_id?: string | null; settings?: Partial<WidgetSettings> };
 
-/** Create before loading the iframe. Each client is scoped to one iframe and exact origin. */
+/** Each client is scoped to one iframe and exact origin, including already loaded frames. */
 export function createWidgetClient(iframe: HTMLIFrameElement, url: string) {
   const widgetUrl = new URL(url, window.location.href);
   if (!["https:", "http:"].includes(widgetUrl.protocol)) throw new Error("Widget URL must use HTTP(S).");
@@ -28,6 +28,7 @@ export function createWidgetClient(iframe: HTMLIFrameElement, url: string) {
     if (event.source !== iframe.contentWindow || event.origin !== origin) return;
     const data = event.data;
     if (data?.type === "zaq.widget.ready") {
+      if (ready) return;
       ready = true;
       for (const send of waiting) send();
       waiting.clear();
@@ -43,8 +44,12 @@ export function createWidgetClient(iframe: HTMLIFrameElement, url: string) {
       else entry.reject(new Error(data.error || "Widget request rejected."));
     }
   };
+  const probe = () => iframe.contentWindow?.postMessage({ type: "zaq.widget.ready.request" }, origin);
+  const onLoad = () => { ready = false; probe(); };
   window.addEventListener("message", onMessage);
-  iframe.src = widgetUrl.href;
+  iframe.addEventListener("load", onLoad);
+  if (iframe.src !== widgetUrl.href) iframe.src = widgetUrl.href;
+  probe();
 
   return {
     async init(context: WidgetInit) {
@@ -57,6 +62,7 @@ export function createWidgetClient(iframe: HTMLIFrameElement, url: string) {
     dispose() {
       disposed = true;
       window.removeEventListener("message", onMessage);
+      iframe.removeEventListener("load", onLoad);
       for (const entry of pending.values()) { window.clearTimeout(entry.timer); entry.reject(new Error("Widget client is disposed.")); }
       pending.clear(); waiting.clear();
     },

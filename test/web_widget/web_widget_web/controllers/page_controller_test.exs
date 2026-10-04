@@ -17,13 +17,14 @@ defmodule WebWidgetWeb.PageControllerTest do
 
       document = LazyHTML.from_document(html_response(conn, 200))
 
-      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "data-src") == [
+      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-widget"), "src") == [
                path
              ]
 
-      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "src") == []
+      assert LazyHTML.query(document, ~s(script[src="/web_widget/assets/embed.js"]))
+             |> Enum.count() == 1
 
-      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "title") == [
+      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-widget"), "title") == [
                "Website assistant"
              ]
 
