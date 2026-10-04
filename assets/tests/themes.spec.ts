@@ -1,13 +1,47 @@
 import { expect, test } from "@playwright/test";
 
 for (const theme of ["light", "dark"] as const) {
+  test(`${theme} input and launcher surroundings stay transparent`, async ({ page }) => {
+    await page.goto(`/widget-demo?theme=${theme}`);
+    const iframe = page.locator("#zaq-demo-widget");
+    const widget = page.frameLocator("#zaq-demo-widget");
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    const composer = widget.locator(".zaq-composer");
+    await expect(input).toBeVisible();
+    await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-theme", theme);
+    await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-mode", "launcher");
+    for (const selector of ["html", "body", ".zaq-widget", ".zaq-widget-footer"]) {
+      await expect(widget.locator(selector)).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    }
+    await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await expect(input).toHaveCSS("background-image", "none");
+
+    // Remove the intentional shadow so pixels outside the rounded corner must
+    // match the parent page exactly, including the browser's iframe canvas.
+    await composer.evaluate(el => { el.style.boxShadow = "none"; });
+    for (const parentScheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: parentScheme });
+      await page.evaluate(scheme => { document.documentElement.style.colorScheme = scheme; }, parentScheme);
+      const box = (await composer.boundingBox())!;
+      const clip = { x: box.x + 1, y: box.y + 1, width: 2, height: 2 };
+      const actual = await page.screenshot({ clip });
+      await iframe.evaluate(el => { el.style.visibility = "hidden"; });
+      const underlyingPage = await page.screenshot({ clip });
+      await iframe.evaluate(el => { el.style.visibility = "visible"; });
+      expect(actual.equals(underlyingPage)).toBe(true);
+    }
+
+    await input.fill("hello");
+    await expect(input).toBeFocused();
+    await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+    await input.press("Enter");
+    await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-mode", "conversation");
+    await expect(input).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  });
+
   test(`${theme} stays fixed when browser appearance changes`, async ({ page }, testInfo) => {
-    await page.route(`**/theme-${theme}.css`, route => route.fulfill({
-      contentType: "text/css",
-      body: `:root { --zaq-widget-color-scheme: ${theme}; }`
-    }));
     await page.emulateMedia({ colorScheme: theme === "light" ? "dark" : "light" });
-    await page.goto(`/widget-demo?widget_id=theme-${theme}`);
+    await page.goto(`/widget-demo?widget_id=theme-${theme}&theme=${theme}`);
     const widget = page.frameLocator("#zaq-demo-widget");
     const input = widget.getByRole("textbox", { name: "Message", exact: true });
     await expect(input).toBeVisible();
@@ -75,19 +109,6 @@ test("host stylesheet overrides theme defaults even before the React CSS loads",
   await expect(widget.locator(".zaq-composer")).toHaveCSS("background-color", "rgb(48, 38, 64)");
   await expect(widget.locator(".zaq-composer")).toHaveCSS("border-radius", "12px");
   await expect(widget.locator(".zaq-composer-send")).toHaveCSS("background-color", "rgb(115, 86, 199)");
-});
-
-test("changing the CSS color scheme updates the palette without reloading", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "light" });
-  await page.goto("/widget-demo");
-  const widget = page.frameLocator("#zaq-demo-widget");
-  await expect(widget.locator(".zaq-composer")).toBeVisible();
-  for (const [scheme, surface] of [["dark", "rgb(13, 20, 28)"], ["light", "rgb(255, 255, 255)"]]) {
-    await widget.locator("html").evaluate((el, value) => {
-      el.style.setProperty("--zaq-widget-color-scheme", value);
-    }, scheme);
-    await expect(widget.locator(".zaq-composer")).toHaveCSS("background-color", surface);
-  }
 });
 
 test("unavailable custom stylesheet retains the built-in theme", async ({ page }) => {

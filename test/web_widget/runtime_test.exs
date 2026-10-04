@@ -73,6 +73,17 @@ defmodule WebWidget.RuntimeTest do
     end
   end
 
+  test "locale and language are excluded from persisted runtime configuration" do
+    config = config()
+    [widget | _] = config.widgets
+
+    start_supervised!(
+      {Runtime, %{config | widgets: [Map.merge(widget, %{locale: "ar", language: "fr"})]}}
+    )
+
+    assert Runtime.fetch_widget(widget.widget_id) == {:ok, widget}
+  end
+
   test "stopping removes widgets and restarting applies replacement configuration" do
     config = config()
     [widget | _] = config.widgets

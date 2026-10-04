@@ -2,6 +2,7 @@
 const frame = document.querySelector<HTMLIFrameElement>("#zaq-demo-widget");
 
 if (frame) {
+  const params = new URLSearchParams(window.location.search);
   const originalOverflow = document.documentElement.style.overflow;
   window.addEventListener("message", (event: MessageEvent) => {
     if (event.source !== frame.contentWindow || event.origin !== window.location.origin) return;
@@ -12,6 +13,7 @@ if (frame) {
         user_id: "demo-user",
         prompt_context: `Current page: ${window.location.pathname}`,
         conversation_id: null,
+        settings: { theme: params.get("theme") || "auto", language: params.get("language") || "en" },
       }, window.location.origin);
       return;
     }

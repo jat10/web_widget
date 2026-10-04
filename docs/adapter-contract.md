@@ -102,6 +102,30 @@ Example:
 }
 ```
 
+### Parent-owned presentation settings
+
+Theme and language are not persisted ZAQ widget configuration. Each iframe starts
+with `%{theme: "auto", language: "en"}`. Its allowed parent may include a partial
+`settings` object in `zaq.widget.init`, then send `zaq.widget.settings.update` at
+any time or optionally inspect current values with `zaq.widget.settings.get`.
+Supported values: theme `auto/light/dark`, language `en/fr/ar`. Unknown keys and
+invalid values reject the entire update. Settings cannot change identity, routing,
+origins, stylesheet URLs, or conversation ownership. Startup settings apply only
+on the first accepted context; repeated init does not rewind runtime preferences.
+
+Requests may carry `request_id`; the iframe replies to the validated parent origin
+with `zaq.widget.result`, the same ID, and either `ok: true, settings: {...}` after
+application or `ok: false, error: "..."`. Both sides verify source and exact origin.
+The parent client uses these messages and a timeout; it owns no conversation state.
+Settings survive LiveView reconnects in the same iframe document. Reloading the
+iframe resets its defaults; the parent client reapplies its latest preferences.
+
+Gettext supplies UI strings and plural summaries, and the browser formats dates
+in the selected language and local time zone. Arabic switches the document to RTL.
+Host content remains unchanged. Runtime updates preserve drafts, messages, pending
+responses, and selected conversations. Custom CSS may override color tokens but
+there is no theme-selection CSS variable. ZAQ owns its response language.
+
 ### IDs
 
 `widget_id` and `channel_config_id` are separate.
@@ -164,9 +188,8 @@ Identical retries are accepted; replacing context requires
 an iframe reload. Receiving context does not perform host initialization or
 load conversation history unless multiple conversations are enabled.
 
-Widget appearance is controlled by CSS inside the iframe, not a runtime `theme` field.
-Set `--zaq-widget-color-scheme` to `light`, `dark`, or `light dark` (default).
-The default follows browser appearance, including changes while open.
+The parent selects theme through presentation settings. `auto` follows browser
+appearance, including changes while open.
 The embedding iframe should use `color-scheme: light dark` to keep its transparent
 canvas compatible with either browser scheme. The chat controls apply the
 configured widget theme independently of that canvas.
@@ -174,7 +197,7 @@ The trusted host may provide `stylesheet_url` as an HTTP(S) URL or a root-relati
 asset path; the widget loads it inside the iframe. Theme defaults use the
 `zaq-widget-theme` CSS layer so an unlayered custom stylesheet can override
 `--zaq-widget-*` variables on `:root`, regardless of asset loading order.
-Stylesheet URL changes require an iframe reload; CSS variable changes apply immediately.
+Stylesheet URL changes require an iframe reload. Theme and language updates apply immediately.
 Origin configuration is checked on HTTP rendering and LiveView mounting;
 runtime changes require reloading existing iframes to refresh their HTTP policy.
 

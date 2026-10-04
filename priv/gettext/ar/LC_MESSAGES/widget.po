@@ -1,0 +1,212 @@
+msgid ""
+msgstr ""
+"Language: ar\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=6; plural=(n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 && n%100<=10 ? 3 : n%100>=11 && n%100<=99 ? 4 : 5);\n"
+
+msgid "Ask a question…"
+msgstr "اطرح سؤالًا…"
+
+msgid "Ask a follow-up…"
+msgstr "اطرح سؤالًا إضافيًا…"
+
+msgid "Today"
+msgstr "اليوم"
+
+msgid "Yesterday"
+msgstr "أمس"
+
+msgid "Message"
+msgstr "الرسالة"
+
+msgid "Send message"
+msgstr "إرسال الرسالة"
+
+msgid "Working…"
+msgstr "جارٍ العمل…"
+
+msgid "Send"
+msgstr "إرسال"
+
+msgid "Open conversation"
+msgstr "فتح المحادثة"
+
+msgid "Conversations"
+msgstr "المحادثات"
+
+msgid "New chat"
+msgstr "محادثة جديدة"
+
+msgid "Your conversations"
+msgstr "محادثاتك"
+
+msgid "Conversation history"
+msgstr "سجل المحادثات"
+
+msgid "No conversations yet."
+msgstr "لا توجد محادثات بعد."
+
+msgid "Here to help you find your next step"
+msgstr "هنا لمساعدتك في خطوتك التالية"
+
+msgid "Assistant is working…"
+msgstr "المساعد يعمل…"
+
+msgid "Close chat"
+msgstr "إغلاق المحادثة"
+
+msgid "Conversation"
+msgstr "المحادثة"
+
+msgid "How can I help?"
+msgstr "كيف يمكنني مساعدتك؟"
+
+msgid "Start a new conversation or choose one from your history."
+msgstr "ابدأ محادثة جديدة أو اختر محادثة من السجل."
+
+msgid "Latest messages"
+msgstr "أحدث الرسائل"
+
+msgid "Assistant"
+msgstr "المساعد"
+
+msgid "Writing response"
+msgstr "جارٍ كتابة الرد"
+
+msgid "Working with tools"
+msgstr "جارٍ استخدام الأدوات"
+
+msgid "Preparing your answer"
+msgstr "جارٍ إعداد إجابتك"
+
+msgid "Couldn't finish this response"
+msgstr "تعذر إكمال هذا الرد"
+
+msgid "You can send another message below."
+msgstr "يمكنك إرسال رسالة أخرى أدناه."
+
+msgid "Activity needs attention"
+msgstr "نشاط يحتاج إلى انتباه"
+
+msgid "Working on your request"
+msgstr "جارٍ معالجة طلبك"
+
+msgid "View response activity"
+msgstr "عرض نشاط الرد"
+
+msgid "Response activity"
+msgstr "نشاط الرد"
+
+msgid "Tool call"
+msgstr "استدعاء أداة"
+
+msgid "Tool result"
+msgstr "نتيجة الأداة"
+
+msgid "Reasoning"
+msgstr "التفكير"
+
+msgid "Activity"
+msgstr "النشاط"
+
+msgid "Running"
+msgstr "قيد التنفيذ"
+
+msgid "Done"
+msgstr "مكتمل"
+
+msgid "Failed"
+msgstr "فشل"
+
+msgid "Progress"
+msgstr "التقدم"
+
+msgid "Error details"
+msgstr "تفاصيل الخطأ"
+
+msgid "Result"
+msgstr "النتيجة"
+
+msgid "Waiting for the tool to return a result…"
+msgstr "بانتظار نتيجة الأداة…"
+
+msgid "This step could not be completed."
+msgstr "تعذر إكمال هذه الخطوة."
+
+msgid "This step finished without additional output."
+msgstr "اكتملت هذه الخطوة دون مخرجات إضافية."
+
+msgid "Unable to complete response"
+msgstr "تعذر إكمال الرد"
+
+msgid "Connection interrupted. Please try again."
+msgstr "انقطع الاتصال. يُرجى المحاولة مجددًا."
+
+msgid "Unable to send. Please try again."
+msgstr "تعذر الإرسال. يُرجى المحاولة مجددًا."
+
+msgid "Unable to change conversations."
+msgstr "تعذر تبديل المحادثات."
+
+msgid "Widget unavailable."
+msgstr "الأداة غير متاحة."
+
+msgid "No conversation to reopen."
+msgstr "لا توجد محادثة لإعادة فتحها."
+
+msgid "Conversation switching is unavailable."
+msgstr "تبديل المحادثات غير متاح."
+
+msgid "Wait for the current response before switching chats."
+msgstr "انتظر الرد الحالي قبل تبديل المحادثات."
+
+msgid "Conversation unavailable."
+msgstr "المحادثة غير متاحة."
+
+msgid "Unable to open this conversation."
+msgstr "تعذر فتح هذه المحادثة."
+
+msgid "Wait for the current response or enable multiple conversations."
+msgstr "انتظر الرد الحالي أو فعّل المحادثات المتعددة."
+
+msgid "Invalid widget context."
+msgstr "سياق الأداة غير صالح."
+
+msgid "Reload the widget to change context."
+msgstr "أعد تحميل الأداة لتغيير السياق."
+
+msgid "Widget context with user_id is required."
+msgstr "يلزم سياق للأداة يتضمن user_id."
+
+msgid "Please wait for the current response."
+msgstr "يُرجى انتظار الرد الحالي."
+
+msgid "Enter a message of 1–2000 characters."
+msgstr "أدخل رسالة من حرف واحد إلى 2000 حرف."
+
+msgid "Unable to initialize chat. Please try again."
+msgstr "تعذر بدء المحادثة. يُرجى المحاولة مجددًا."
+
+msgid "Enter a text message."
+msgstr "أدخل رسالة نصية."
+
+msgid "Unable to load conversations. Please try again."
+msgstr "تعذر تحميل المحادثات. يُرجى المحاولة مجددًا."
+
+msgid "Unable to send your message. Please try again."
+msgstr "تعذر إرسال رسالتك. يُرجى المحاولة مجددًا."
+
+msgid "%{completed} of %{total} completed"
+msgstr "اكتمل %{completed} من %{total}"
+
+msgid "%{failed} failed · %{completed} completed"
+msgstr "فشل %{failed} · اكتمل %{completed}"
+
+msgid "%{count} step completed"
+msgid_plural "%{count} steps completed"
+msgstr[0] "لم تكتمل أي خطوة"
+msgstr[1] "اكتملت خطوة واحدة"
+msgstr[2] "اكتملت خطوتان"
+msgstr[3] "اكتملت %{count} خطوات"
+msgstr[4] "اكتملت %{count} خطوة"
+msgstr[5] "اكتملت %{count} خطوة"

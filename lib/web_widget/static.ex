@@ -12,6 +12,7 @@ defmodule WebWidget.Static do
       from: :web_widget,
       only: ~w(assets),
       gzip: true,
+      headers: [{"access-control-allow-origin", "*"}],
       cache_control_for_etags: "public, max-age=0, must-revalidate"
     )
   end

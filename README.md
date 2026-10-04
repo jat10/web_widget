@@ -224,36 +224,123 @@ demo restores host-page scrolling when the iframe returns to launcher mode.
 
 ### iframe sizing and customization
 
-The iframe sends `{type: "zaq.widget.ready"}` when its LiveView listener is ready
-and after reconnection. Reply from the parent with the iframe's exact origin:
+The parent website owns language and theme, both at startup and while chatting.
+ZAQ keeps trusted configuration such as `allowed_domains`, widget identity,
+`stylesheet_url`, and host callbacks. Do not put `locale`, `language`, or `theme`
+in ZAQ's widget configuration.
 
-```js
-const widgetOrigin = new URL(iframe.src, window.location.href).origin;
-window.addEventListener("message", (event) => {
-  if (event.source !== iframe.contentWindow || event.origin !== widgetOrigin) return;
-  if (event.data?.type !== "zaq.widget.ready") return;
-  iframe.contentWindow.postMessage({
-    type: "zaq.widget.init",
+Create the iframe **without `src`**, then create the client. The client installs
+its listener before navigating the iframe, waits for readiness, and validates
+both the sender window and the exact widget origin.
+
+```html
+<iframe id="support-chat" title="Support chat"
+        style="width: 100%; height: 180px; border: 0; color-scheme: light dark"></iframe>
+<script type="module">
+  import { createWidgetClient } from "https://chat.example.com/web_widget/assets/widget-client.js";
+
+  const iframe = document.querySelector("#support-chat");
+  const widgetUrl = "https://chat.example.com/widget/support";
+  const widgetOrigin = new URL(widgetUrl).origin;
+  const onResize = (event) => {
+    if (event.source !== iframe.contentWindow || event.origin !== widgetOrigin) return;
+    const data = event.data;
+    if (data?.type !== "zaq.widget.resize") return;
+    if (data.mode === "conversation") iframe.style.height = "100dvh";
+    if (data.mode === "launcher" && Number.isFinite(data.height)) {
+      iframe.style.height = `${Math.min(260, Math.max(96, data.height))}px`;
+    }
+  };
+  window.addEventListener("message", onResize);
+  const widget = createWidgetClient(iframe, widgetUrl);
+
+  // Required identity plus optional context and startup preferences.
+  await widget.init({
     user_id: "user_123",
     prompt_context: "Current page: /billing",
     conversation_id: null,
-  }, widgetOrigin);
-});
+    settings: { theme: "auto", language: "en" },
+  });
+
+  // Call these from the website's controls whenever preferences change.
+  await widget.updateSettings({ theme: "dark" });
+  await widget.updateSettings({ language: "fr" });
+
+  // Optional inspection, never required before an update.
+  console.log(await widget.getSettings()); // { theme: "dark", language: "fr" }
+
+  // When removing the iframe:
+  // widget.dispose();
+  // window.removeEventListener("message", onResize);
+</script>
 ```
 
-Register this listener before loading the iframe so you receive its ready message.
-Only parents listed in the widget’s `allowed_domains` can embed it. The demo handles this
-handshake automatically. `user_id` is required; the other fields default to null. `prompt_context` accepts
-a string only (or null), not a JSON object. The chat UI remains hidden until valid
-context arrives. Invalid messages or five seconds without valid context produce
-a developer console error explaining how to send `zaq.widget.init` after
-`zaq.widget.ready`. A later valid message unlocks the UI. Opening `/widget/demo`
-directly has no parent to initialize it; use `/widget-demo` or an embedding page.
-LiveView retains the context without exposing it in React props or treating it as
-authenticated identity. Identical retries are safe; changing context requires an
-iframe reload. The first submission initializes through the host callback,
-subscribes to the accepted conversation topic, and loads history when resuming
-a conversation before dispatching the message.
+Replace the URL and widget ID with your deployment. The parent origin must be in
+that widget's `allowed_domains`. The standalone demo is `/widget-demo`; its parent
+can select startup settings via `?theme=dark&language=ar`.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `theme` | `"auto"`, `"light"`, `"dark"` | `"auto"` |
+| `language` | `"en"`, `"fr"`, `"ar"` | `"en"` |
+
+Updates merge only the supplied fields. Unsupported values, null, arrays, and
+unknown keys reject the whole request without applying a partial change. Methods
+resolve with effective settings after application, or reject with an error.
+They time out after 20 seconds; after a timeout, inspect settings before retrying
+because a delayed request may have reached the iframe. No settings request can
+change identity, conversation IDs, permissions, origins, or stylesheet URLs.
+
+Language and theme changes preserve drafts, messages, pending replies, and the
+selected conversation. Preferences survive LiveView reconnects. A document reload
+resets widget defaults; a living parent client automatically reinitializes using
+its last accepted context and effective settings. The parent decides whether to
+persist preferences across page loads. Repeated init with the same context does
+not overwrite runtime settings; changing identity requires a new iframe document.
+
+`user_id` is required. `prompt_context` accepts a string or null, and
+`conversation_id` accepts a nonblank string or null; both default to null.
+These values remain untrusted until accepted by ZAQ. The chat stays hidden until
+valid initialization. The first submission initializes through the host callback
+and loads history when resuming a conversation before dispatching the message.
+
+#### Using postMessage directly
+
+The client is optional. Register your listener **before** setting `iframe.src`.
+After receiving `zaq.widget.ready` from the expected iframe and origin, send:
+
+```js
+iframe.contentWindow.postMessage({
+  type: "zaq.widget.init",
+  request_id: "init-1",
+  user_id: "user_123",
+  conversation_id: null,
+  prompt_context: "Current page: /billing",
+  settings: { language: "ar", theme: "dark" },
+}, widgetOrigin);
+
+// Later: partial update, with a unique ID for each request.
+iframe.contentWindow.postMessage({
+  type: "zaq.widget.settings.update",
+  request_id: "settings-2",
+  settings: { theme: "light" },
+}, widgetOrigin);
+
+// Optional inspection:
+iframe.contentWindow.postMessage({
+  type: "zaq.widget.settings.get",
+  request_id: "settings-3",
+}, widgetOrigin);
+```
+
+Replies are `{type: "zaq.widget.result", request_id, ok: true, settings: {...}}`
+or `{type: "zaq.widget.result", request_id, ok: false, error: "..."}`. Always verify
+`event.source === iframe.contentWindow` and `event.origin === widgetOrigin`, then
+match the request ID. Invalid senders are ignored. Legacy init without a request
+ID still works but receives no acknowledgement. Reply to readiness after reconnects
+with the same bootstrap context; the iframe retains its effective settings.
+
+#### Sizing and custom CSS
 
 React sends `window.parent.postMessage({type: "zaq.widget.resize", mode, height}, "*")`
 on mode and size changes. Launcher height is measured from the composer; conversation
@@ -262,11 +349,16 @@ height is `"100%"`. No message content is included. The demo listener in
 then changes only the iframe dimensions. The compact iframe leaves host content
 clickable and scrollable. This listener is a demo, not a parent SDK.
 
-Theme is controlled by CSS inside the iframe, not ZAQ runtime configuration.
-Set `--zaq-widget-color-scheme: light` or `dark` for a fixed palette, or
-`light dark` (the default) to follow browser appearance changes immediately.
-Set `style="color-scheme: light dark"` on the embedding `<iframe>` so its canvas
-stays transparent on both light and dark host pages. The demo includes this.
+Language controls Gettext UI strings, validation errors, accessibility labels,
+plural summaries, and browser-local dates. Arabic uses right-to-left layout.
+Host-provided messages, display names, conversation titles, tool labels, and errors
+retain their original text. Translations live in
+`priv/gettext/{en,fr,ar}/LC_MESSAGES/widget.po`.
+
+Theme is selected exclusively through settings. `auto` follows browser appearance.
+There is no `--zaq-widget-color-scheme` CSS variable. Keep
+`color-scheme: light dark` on the **iframe element** to preserve its transparent
+canvas; this does not select the widget's theme.
 
 Set `stylesheet_url: "https://your-site.example/widget.css"` (or a root-relative
 asset path) to load custom CSS inside the iframe. The URL is trusted host
@@ -281,7 +373,6 @@ so your overrides take priority even when the widget CSS loads afterward:
 
 ```css
 :root {
-  --zaq-widget-color-scheme: dark;
   --zaq-widget-primary: #7356c7;
   --zaq-widget-on-primary: #fff;
   --zaq-widget-radius: 12px;

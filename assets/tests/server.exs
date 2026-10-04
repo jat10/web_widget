@@ -52,12 +52,22 @@ Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
   sink_mfa: {WebWidget.MockHost, :handle_event, []},
      pubsub_server: WebWidget.PubSub,
   widgets: [
-    %{widget_id: "theme-light", display_name: "Light assistant", stylesheet_url: "/theme-light.css", allowed_domains: ["http://127.0.0.1:4019"]},
-    %{widget_id: "theme-dark", display_name: "Dark assistant", stylesheet_url: "/theme-dark.css", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-light", display_name: "Light assistant", allowed_domains: ["http://127.0.0.1:4019"]},
+    %{widget_id: "theme-dark", display_name: "Dark assistant", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "theme-custom", display_name: "Custom assistant", stylesheet_url: "/custom-widget.css", allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "multi", display_name: "Conversation history", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "cross-origin", display_name: "Cross origin", allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "no-origins", display_name: "Disabled"},
     %{widget_id: "empty-origins", display_name: "Disabled", allowed_domains: []}
   ]
+}})
+
+{:ok, _} = Supervisor.start_child(WebWidget.Supervisor, {WebWidget.Runtime, %{
+  channel_config_id: :locale_tests,
+  sink_mfa: {WebWidget.MockHost, :handle_event, []},
+  pubsub_server: WebWidget.PubSub,
+  widgets: Enum.map(["en", "fr", "ar"], fn locale ->
+    %{widget_id: "locale-#{locale}", display_name: "Host assistant",
+      multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]}
+  end)
 }})

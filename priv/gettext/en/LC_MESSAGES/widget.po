@@ -1,0 +1,208 @@
+msgid ""
+msgstr ""
+"Language: en\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+msgid "Ask a question…"
+msgstr "Ask a question…"
+
+msgid "Ask a follow-up…"
+msgstr "Ask a follow-up…"
+
+msgid "Today"
+msgstr "Today"
+
+msgid "Yesterday"
+msgstr "Yesterday"
+
+msgid "Message"
+msgstr "Message"
+
+msgid "Send message"
+msgstr "Send message"
+
+msgid "Working…"
+msgstr "Working…"
+
+msgid "Send"
+msgstr "Send"
+
+msgid "Open conversation"
+msgstr "Open conversation"
+
+msgid "Conversations"
+msgstr "Conversations"
+
+msgid "New chat"
+msgstr "New chat"
+
+msgid "Your conversations"
+msgstr "Your conversations"
+
+msgid "Conversation history"
+msgstr "Conversation history"
+
+msgid "No conversations yet."
+msgstr "No conversations yet."
+
+msgid "Here to help you find your next step"
+msgstr "Here to help you find your next step"
+
+msgid "Assistant is working…"
+msgstr "Assistant is working…"
+
+msgid "Close chat"
+msgstr "Close chat"
+
+msgid "Conversation"
+msgstr "Conversation"
+
+msgid "How can I help?"
+msgstr "How can I help?"
+
+msgid "Start a new conversation or choose one from your history."
+msgstr "Start a new conversation or choose one from your history."
+
+msgid "Latest messages"
+msgstr "Latest messages"
+
+msgid "Assistant"
+msgstr "Assistant"
+
+msgid "Writing response"
+msgstr "Writing response"
+
+msgid "Working with tools"
+msgstr "Working with tools"
+
+msgid "Preparing your answer"
+msgstr "Preparing your answer"
+
+msgid "Couldn't finish this response"
+msgstr "Couldn't finish this response"
+
+msgid "You can send another message below."
+msgstr "You can send another message below."
+
+msgid "Activity needs attention"
+msgstr "Activity needs attention"
+
+msgid "Working on your request"
+msgstr "Working on your request"
+
+msgid "View response activity"
+msgstr "View response activity"
+
+msgid "Response activity"
+msgstr "Response activity"
+
+msgid "Tool call"
+msgstr "Tool call"
+
+msgid "Tool result"
+msgstr "Tool result"
+
+msgid "Reasoning"
+msgstr "Reasoning"
+
+msgid "Activity"
+msgstr "Activity"
+
+msgid "Running"
+msgstr "Running"
+
+msgid "Done"
+msgstr "Done"
+
+msgid "Failed"
+msgstr "Failed"
+
+msgid "Progress"
+msgstr "Progress"
+
+msgid "Error details"
+msgstr "Error details"
+
+msgid "Result"
+msgstr "Result"
+
+msgid "Waiting for the tool to return a result…"
+msgstr "Waiting for the tool to return a result…"
+
+msgid "This step could not be completed."
+msgstr "This step could not be completed."
+
+msgid "This step finished without additional output."
+msgstr "This step finished without additional output."
+
+msgid "Unable to complete response"
+msgstr "Unable to complete response"
+
+msgid "Connection interrupted. Please try again."
+msgstr "Connection interrupted. Please try again."
+
+msgid "Unable to send. Please try again."
+msgstr "Unable to send. Please try again."
+
+msgid "Unable to change conversations."
+msgstr "Unable to change conversations."
+
+msgid "Widget unavailable."
+msgstr "Widget unavailable."
+
+msgid "No conversation to reopen."
+msgstr "No conversation to reopen."
+
+msgid "Conversation switching is unavailable."
+msgstr "Conversation switching is unavailable."
+
+msgid "Wait for the current response before switching chats."
+msgstr "Wait for the current response before switching chats."
+
+msgid "Conversation unavailable."
+msgstr "Conversation unavailable."
+
+msgid "Unable to open this conversation."
+msgstr "Unable to open this conversation."
+
+msgid "Wait for the current response or enable multiple conversations."
+msgstr "Wait for the current response or enable multiple conversations."
+
+msgid "Invalid widget context."
+msgstr "Invalid widget context."
+
+msgid "Reload the widget to change context."
+msgstr "Reload the widget to change context."
+
+msgid "Widget context with user_id is required."
+msgstr "Widget context with user_id is required."
+
+msgid "Please wait for the current response."
+msgstr "Please wait for the current response."
+
+msgid "Enter a message of 1–2000 characters."
+msgstr "Enter a message of 1–2000 characters."
+
+msgid "Unable to initialize chat. Please try again."
+msgstr "Unable to initialize chat. Please try again."
+
+msgid "Enter a text message."
+msgstr "Enter a text message."
+
+msgid "Unable to load conversations. Please try again."
+msgstr "Unable to load conversations. Please try again."
+
+msgid "Unable to send your message. Please try again."
+msgstr "Unable to send your message. Please try again."
+
+msgid "%{completed} of %{total} completed"
+msgstr "%{completed} of %{total} completed"
+
+msgid "%{failed} failed · %{completed} completed"
+msgstr "%{failed} failed · %{completed} completed"
+
+msgid "%{count} step completed"
+msgid_plural "%{count} steps completed"
+msgstr[0] "%{count} step completed"
+msgstr[1] "%{count} steps completed"
