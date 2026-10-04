@@ -16,7 +16,12 @@ defmodule WebWidgetWeb.PageControllerTest do
         |> WebWidgetWeb.PageController.call(:widget_demo)
 
       document = LazyHTML.from_document(html_response(conn, 200))
-      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "src") == [path]
+
+      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "data-src") == [
+               path
+             ]
+
+      assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "src") == []
 
       assert LazyHTML.attribute(LazyHTML.query(document, "#zaq-demo-widget"), "title") == [
                "Website assistant"

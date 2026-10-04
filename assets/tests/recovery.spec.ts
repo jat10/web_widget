@@ -194,13 +194,16 @@ test("message length limit accepts the boundary and rejects oversized submission
   await expect(widget.getByRole("alert")).toHaveCount(0);
 });
 
-test("keyboard navigation reaches send, activity, close and reopen with visible focus", async ({ page }) => {
+test("keyboard navigation reaches send, activity, close and reopen with visible focus", async ({ page, browserName }) => {
   await page.goto("/widget-demo");
+  // macOS WebKit uses Option-Tab to include buttons in keyboard navigation.
+  const tab = browserName === "webkit" && await page.evaluate(() => navigator.platform.startsWith("Mac"))
+    ? "Alt+Tab" : "Tab";
   const widget = page.frameLocator("#zaq-demo-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.focus();
   await input.fill("research");
-  await page.keyboard.press("Tab");
+  await page.keyboard.press(tab);
   const send = widget.getByRole("button", { name: "Send message" });
   await expect(send).toBeFocused();
   await expect(send).toHaveCSS("outline-style", "solid");
@@ -210,7 +213,7 @@ test("keyboard navigation reaches send, activity, close and reopen with visible 
   await expect(input).toBeFocused();
   // Walk backwards through the rendered controls instead of clicking them.
   for (let i = 0; i < 8 && !(await activity.evaluate(el => el === document.activeElement)); i++) {
-    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press(`Shift+${tab}`);
   }
   await expect(activity).toBeFocused();
   expect(await activity.evaluate(el => el.matches(":focus-visible"))).toBe(true);
@@ -220,7 +223,7 @@ test("keyboard navigation reaches send, activity, close and reopen with visible 
   await page.keyboard.press("Enter");
   const close = widget.getByRole("button", { name: "Close chat", exact: true });
   for (let i = 0; i < 8 && !(await close.evaluate(el => el === document.activeElement)); i++) {
-    await page.keyboard.press("Shift+Tab");
+    await page.keyboard.press(`Shift+${tab}`);
   }
   await expect(close).toBeFocused();
   expect(await close.evaluate(el => el.matches(":focus-visible"))).toBe(true);

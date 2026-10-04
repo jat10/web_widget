@@ -35,6 +35,10 @@ for (const widgetId of ["cross-origin", "no-origins", "empty-origins", "missing"
       document.body.append(frame);
     }, widgetId);
     await expect.poll(() => violations.length).toBeGreaterThan(0);
-    expect(page.frames().some(frame => frame.url().endsWith(`/widget/${widgetId}`) && frame !== page.mainFrame())).toBe(false);
+    // WebKit retains the requested URL even when CSP prevents the document loading.
+    const rendered = await page.locator("#blocked-widget").evaluate((frame: HTMLIFrameElement) =>
+      frame.contentDocument?.querySelector("#widget-state, #widget-unavailable") != null,
+    );
+    expect(rendered).toBe(false);
   });
 }

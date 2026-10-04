@@ -1,5 +1,35 @@
 import { expect, test } from "@playwright/test";
 
+test("demo registers bootstrap before navigating the iframe when its script loads late", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let requested!: () => void;
+  const parentScript = new Promise<void>(resolve => { requested = resolve; });
+  await page.route("**/assets/app.js", async route => {
+    if (route.request().frame() === page.mainFrame()) {
+      requested();
+      await gate;
+    }
+    await route.continue();
+  });
+
+  try {
+    await page.goto("/widget-demo", { waitUntil: "commit" });
+    await parentScript;
+    // Loading the iframe before the listener exists can lose its only ready message.
+    await expect(page.locator("#zaq-demo-widget")).not.toHaveAttribute("src");
+  } finally {
+    release();
+  }
+
+  const widget = page.frameLocator("#zaq-demo-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toBeVisible();
+  await input.fill("hello");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content")).toHaveText("Hello! How can I help you today?");
+});
+
 test("floating iframe expands through React → LiveView and preserves the conversation", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -125,7 +155,7 @@ test("bootstrap accepts only valid parent context and announces readiness after 
   });
 
   // A reconnect is also a barrier: previously queued context would now be visible.
-  await child.evaluate(() => (window as any).liveSocket.disconnect());
+  await child.evaluate(() => new Promise<void>(resolve => (window as any).liveSocket.disconnect(resolve)));
   await child.evaluate(() => (window as any).liveSocket.connect());
   await expect(page.locator("html")).toHaveAttribute("data-ready-count", "2");
   await expect(state).toHaveAttribute("data-context-received", "false");
@@ -139,7 +169,7 @@ test("bootstrap accepts only valid parent context and announces readiness after 
     }, window.location.origin);
   });
   await expect(state).toHaveAttribute("data-context-received", "true");
-  await child.evaluate(() => (window as any).liveSocket.disconnect());
+  await child.evaluate(() => new Promise<void>(resolve => (window as any).liveSocket.disconnect(resolve)));
   await child.evaluate(() => (window as any).liveSocket.connect());
   await expect(page.locator("html")).toHaveAttribute("data-ready-count", "3");
   expect(errors).toEqual([]);
