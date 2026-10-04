@@ -27,4 +27,6 @@ if (frame) {
       document.documentElement.style.overflow = "hidden";
     }
   });
+  // Register the parent listener before the iframe can announce readiness.
+  if (frame.dataset.src) frame.src = frame.dataset.src;
 }
