@@ -206,6 +206,11 @@ function FloatingComposer({ mode, config, busy, error }: { mode: Mode; config: C
           {busy ? t["Working…"] : t["Send"]}
         </ComposerPrimitive.Send>
       </ComposerPrimitive.Root>
+      <div className="zaq-widget-signature" dir="ltr">
+        <a href="https://www.zaq.ai/open-source" target="_blank" rel="noopener noreferrer">
+          Powered by <span>ZAQ.AI</span>
+        </a>
+      </div>
     </footer>
   );
 }

@@ -73,8 +73,6 @@ zaq.widget.init({ user_id: getVisitorId() }).catch(console.error);
 
 Generate the ID once for initialization, not for each message or opening of chat. Storage lets the same browser reuse it across visits. If storage is unavailable, this example's ID lasts for the current widget instance. Clearing storage or using another browser produces a new ID. Random browser IDs are not authentication; ZAQ remains responsible for validating access.
 
-See [the website integration guide](widget-guideline.md) for a complete anonymous-visitor setup.
-
 ## Language and theme
 
 The website owns these settings. Pass them during initialization or update them while the visitor is chatting:

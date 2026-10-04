@@ -60,6 +60,11 @@ body.zaq-widget-page { margin: 0; overflow: hidden; }
 .zaq-message-user { align-self: flex-end; max-width: 85%; border-radius: var(--zaq-widget-radius); background: var(--zaq-widget-elevated); padding: 12px 18px; }
 .zaq-message-assistant { align-self: stretch; }
 .zaq-widget-footer { flex-shrink: 0; width: 100%; }
+.zaq-widget-signature { padding-top: 6px; text-align: center; font-size: 11px; line-height: 18px; color: var(--zaq-widget-muted); }
+.zaq-widget-signature a { display: inline-block; color: inherit; text-decoration: none; }
+.zaq-widget-signature span { font-weight: 600; }
+.zaq-widget-signature a:hover { text-decoration: underline; }
+.zaq-widget-signature a:focus-visible { outline: 2px solid var(--zaq-widget-primary); outline-offset: 2px; border-radius: 2px; }
 [data-mode="conversation"] .zaq-widget-footer { max-width: calc(var(--zaq-widget-max-width) + 2 * var(--zaq-widget-edge)); margin: 0 auto; padding: 12px var(--zaq-widget-edge) max(var(--zaq-widget-edge), env(safe-area-inset-bottom)); }
 .zaq-composer { display: flex; align-items: flex-end; gap: 12px; padding: 10px 12px; border: 1px solid var(--zaq-widget-border); border-radius: var(--zaq-widget-radius); background: var(--zaq-widget-composer-background); box-shadow: 0 5px 24px var(--zaq-widget-shadow); }
 .zaq-composer:focus-within { outline: 2px solid color-mix(in srgb, var(--zaq-widget-primary) 45%, transparent); outline-offset: 2px; }
