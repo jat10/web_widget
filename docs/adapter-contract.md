@@ -1,108 +1,294 @@
 # Web Widget Adapter Contract
 
-This document defines how the `web_widget` Phoenix dependency integrates with ZAQ as a communication channel.
+## Status and source of truth
 
-## Purpose
+Decision recorded in wiring milestone 0, 2026-10-05. This document defines the
+selected ZAQ integration against shared web protocol **version 1** at
+[`c38e7e4e5`](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/services/web-bridge.md).
+ZAQ's [installation handoff](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/guides/web-widget-integration.md)
+and published constructors own the host protocol. This document owns the widget's
+integration decisions and presentation mapping, not a second shared schema.
 
-`web_widget` owns:
+The package now implements the milestone 1 runtime builder and server-side
+session/ingress boundary. LiveView still uses the plain-map mock callback, eager
+conversation initialization and conversation-topic delivery; those remain
+migration gaps, summarized under [implemented delivery boundary](#implemented-delivery-boundary).
+The [wiring plan](exec-plans/wiring-widget.md) tracks implementation and acceptance.
+Do not infer deployed support from the target contract below.
 
-- iframe / LiveView delivery
-- React + `live_react` + assistant-ui presentation
-- browser-side widget lifecycle
-- parent-page `postMessage` integration
-- publishing widget events to ZAQ
-- receiving ZAQ response events and delivering them to the correct `WidgetLive`
+## Responsibilities and boundary
 
-ZAQ owns:
+`web_widget` owns iframe delivery, parent postMessage validation, server-side
+verification of parent identity/session, subscription authorization, LiveView
+browser state and assistant-ui presentation. It translates widget actions using
+host-supplied constructors and encodes public responses for its UI.
 
-- channel configuration
-- widget runtime startup
-- identity resolution / validation
-- conversation persistence
-- routing and agent selection
-- permissions
-- translating widget events into ZAQ `Incoming`
-- producing response events
+ZAQ owns connector configuration and lifecycle, People identity resolution,
+conversation ownership and durable history, permissions, routing, agent selection,
+and shared Message/Command admission through WebBridge and existing role dispatch.
+The widget does not call Engine or construct Incoming/Outgoing directly.
 
-The boundary between ZAQ and `web_widget` should use plain maps. Do not require ZAQ to construct `WebWidget.*` structs.
-
----
+ZAQ depends on `web_widget`; the package has no compile-time dependency on ZAQ
+internals. Constructor inputs and UI events are plain maps. Host-supplied
+constructors produce shared boundary values consumed through trusted runtime
+hooks, without `%Zaq.*{}` struct literals in the package. ZAQ never constructs
+`WebWidget.*` structs. This replaces the earlier plain-map-only callback decision.
 
 ## Runtime integration
 
-`web_widget` is a dependency of ZAQ and runs inside the same BEAM application.
-
-ZAQ should expose the widget LiveView route through the host router, for example:
-
-```elixir
-import WebWidget.Router
-
-web_widget("/widget")
-```
-
-The iframe can then use:
-
-```text
-/widget/:widget_id
-```
-
-The widget reuses ZAQ's Phoenix endpoint and LiveView socket. It does not start a second HTTP server or a separate browser WebSocket.
-
-### Channel configuration
-
-Conceptually:
+Use the existing channel lifecycle and BridgeSupervisor. The provider entry in
+ZAQ's existing Channels map is:
 
 ```elixir
-config :zaq, :channels, %{
-  web: %{
-    bridge: Zaq.Channels.WebBridge,
-    adapter: WebWidget.Adapter,
-    sink_mfa: {Zaq.Channels.WebBridge, :from_listener, []}
-  }
+web_widget: %{
+  bridge: Zaq.Channels.WebBridge,
+  runtime_builder: WebWidget.Integration.RuntimeBuilder
 }
 ```
 
-`sink_mfa` is an in-process callback destination. It is not a WebSocket configuration.
+`WebWidget.Integration.RuntimeBuilder.build(config, hooks)` returns
+`{:ok, {state_child_spec_or_nil, listener_specs}}` or `{:error, reason}`.
+It reuses the package runtime registry. ZAQ owns startup, rollback, restart and
+teardown lifecycle; do not independently start a duplicate runtime. The local
+ZAQ installation now selects this builder through configuration and a path
+dependency; no ZAQ module or test changes are needed for runtime startup.
 
-The LiveView WebSocket is owned by Phoenix / LiveView.
+Hooks supply `widget_id = config.id`, presentation settings, the shared
+`message`, `command`, `context`, `delivery`, `response` modules, and the
+config-bound `sink_mfa`. They do **not** supply a PubSub server. For this host,
+the adapter receives `Zaq.PubSub` through trusted application configuration.
+`config :web_widget, :integration` supplies `pubsub_server` and `identity_verifier`
+(an MFA); `build/3` accepts these options explicitly for isolated consumers/tests.
 
----
+One persisted connector identifies one widget. Keep its positive integer ID in
+Context/Delivery and use its string form in the registry and `/widget/:widget_id`.
+Do not persist a separate `widget_id` setting. Host settings are `display_name`,
+`allowed_domains` (exact HTTP(S) origins). Stylesheets are not connector settings
+or runtime hooks. Optional `params.stylesheet_url` belongs to instance initialization
+and must be absolute HTTP(S); shared constructors validate it without fetching it.
+Theme and language remain parent-owned. Start with `multiple_conversations: false`;
+ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
-## Runtime configuration handoff
+The local ZAQ install now mounts the package router/static plug on its existing
+endpoint, as explicitly requested by the user after milestone 1a. Its `/live`
+socket serves the iframe; BO authentication does not apply to the widget mount.
+This supersedes the earlier configuration-only choice for this installation.
 
-When the Web Widget channel is enabled, ZAQ should use the existing channel runtime lifecycle:
+For hosts retaining configuration-only installation, opt in to
+`start_integration_server: true` to start the package endpoint and its socket
+PubSub once, without the Repo/demo. Connector runtimes remain ZAQ-owned and use
+`Zaq.PubSub` for responses. The iframe uses this endpoint's existing `/live`
+connection; no additional browser realtime connection is introduced.
 
-```text
-ChannelConfig
-  -> CommunicationBridge / Bridge lifecycle
-  -> WebBridge.build_runtime_specs/1
-  -> ChannelSupervisor
-  -> WebWidget runtime
-```
+`RuntimeBuilder.embed_script(widget_id, base_url)` returns one escaped script tag
+with `data-widget-id`. The optional trusted integration `public_url` overrides
+the supplied base URL; otherwise the deployment must proxy `/widget`,
+`/web_widget/assets` and `/live` at the ZAQ base origin to the package endpoint.
+Only root HTTP(S) origins are supported. The loader creates a single iframe at
+`/widget/<id>` on its own origin and applies the existing layout/client behavior.
+It never invents identity or embeds credentials. Manual iframe initialization
+remains supported. See [host integration](host-integration.md).
 
-`WebBridge.build_runtime_specs/1` should pass the widget runtime only the fields it needs.
+## Identity, embedding and parent bootstrap
 
-Example:
+An allowed origin and a nonblank browser `user_id` do not authenticate a sender.
+The adapter must verify parent-app identity/session server-side before constructing
+Context, accepting protected operations or subscribing. Keep only the verified
+external sender, scope and expiry in trusted session state. It is not a ZAQ Person
+ID or People bearer. ZAQ separately authorizes the sender against connector and
+conversation ownership on every operation.
+
+The parent owns its authenticated session and supplies proof through the widget
+bootstrap. The proof transport and production verifier are still to be implemented; no current
+`init({user_id})` example establishes this security property. Signing/key enrollment
+is host configuration, not a shared `widget.authenticate` command. Never retain
+credentials in prompt context, history or canonical routing metadata.
+
+The implemented server entry point is `Runtime.authenticate(widget_id, proof)`.
+The configured verifier receives `args ++ [proof, scope]`, where scope contains
+the string widget ID and integer channel configuration ID. It must verify proof
+against that scope and return `{:ok, %{sender_id: external_id, expires_at: unix_seconds}}`.
+Missing/invalid/expired verification fails closed. The package retains no proof.
+The resulting server-only Session is bound to the calling process and current
+runtime generation. Never construct it from browser maps. `Runtime.dispatch/2`
+and `Runtime.subscribe/1` reject expired, foreign-process and replaced-runtime
+sessions. Connected expiry timers and automatic unsubscribe are still LiveView
+integration work; callers currently own subscription cleanup.
+
+Both sides check postMessage source and exact origin. Use the iframe origin as
+`targetOrigin`. The ready/ready-request handshake means the hook is listening,
+not that the sender is authenticated. Reject missing, expired or foreign proof;
+reject claimed-user disagreement and browser-selected topics/configuration IDs.
+Reverify on reconnect, enforce expiry while connected and remove subscriptions
+when authorization ends. Renewal must not silently change the session's sender.
+
+`allowed_domains` denies embedding when absent/empty, including same-origin
+embedding. Enforce CSP `frame-ancestors` and the parent source/origin checks; remove
+conflicting X-Frame-Options only on the widget route. Preserve other CSP directives.
+HTTP framing policy changes require iframe reload. Runtime/identity revocation
+must also block existing sessions from new sends/history/response delivery.
+
+Parent inputs include user identity/proof, optional `conversation_id` and optional
+`prompt_context`. Validate a raw resume ID before calling shared constructors:
+invalid optional identifiers can normalize to nil. Reject malformed supplied IDs
+rather than silently treating them as a new conversation. Parent context is ordinary
+user input, never permission, agent selection or privileged prompting.
+
+## Inbound communication: web_widget -> ZAQ
+
+Use the host constructor modules supplied in trusted hooks. Unknown wire events
+and all inbound `message.edit` requests are rejected. Widget actions map as follows:
+
+| Widget action | Shared operation |
+| --- | --- |
+| `widget.init` | Command `:conversation_init`, with request ID and optional validated resume ID |
+| `conversation.history.request` | Command `:conversation_history`, with request ID, conversation ID and bounded history params |
+| `message.create` | Message with request ID, message ID, UTC `DateTime`, content, channel, mode, optional conversation ID and first-question parent context |
+
+The adapter chooses mode; the initial integration uses async questions. Channel
+is a routing selector, not authority to select an internal agent. Do not send
+capabilities, supplied history, actors, internal IDs or dispatch choices in messages.
+Shared constructors validate the definitive fields and constraints.
+
+Build Delivery for `consumer: :widget`, trusted integer configuration ID and an
+authorized session topic, with all seven mappings:
 
 ```elixir
 %{
-  channel_config_id: 42,
-  pubsub_server: Zaq.PubSub,
-  sink_mfa: {Zaq.Channels.WebBridge, :from_listener, []},
-  widgets: [
-    %{
-      widget_id: "widget_support",
-      display_name: "Support Assistant",
-      allowed_domains: [
-        "https://customer.com"
-      ],
-      stylesheet_url: "https://customer.com/widget.css"
-    }
-  ]
+  typing: "response.typing",
+  message_create: "response.message.create",
+  message_edit: "response.message.edit",
+  message_step: "response.message.step",
+  message_complete: "response.message.complete",
+  message_failed: "response.message.failed",
+  error: "response.error"
 }
 ```
 
-### Parent-owned presentation settings
+Build Context with nil actor, `consumer: :widget`, verified `sender_id`, integer
+`channel_config_id` and Delivery. Nil actor grants no capability. Do not supply
+BO bypasses, agent selection, history or content-filter overrides.
+
+Invoke the published config-bound sink with its argument prefix:
+
+```elixir
+{module, function, args} = hooks.sink_mfa
+apply(module, function, args ++ [payload, [context: verified_context]])
+```
+
+`sink_mfa` is an in-process callback, not a transport. Browser input cannot replace
+it, its bound config, constructor modules or Context.
+
+## Sync vs async events
+
+| Operation | Sink result |
+| --- | --- |
+| Command | Semantic Response directly, including semantic `:error` on command failure |
+| Async message accepted | `{:ok, Response}` creation/status receipt; terminal comes later |
+| Sync message | One terminal Response directly; no duplicate live terminal |
+| Failure before acceptance | May return `{:error, reason}` |
+
+Do not wrap all responses as `{:ok, map}` or reduce accepted receipts to `:ok`.
+Distinguish valid semantic errors from success. Keep request, conversation and
+message correlation through result handling and UI encoding.
+
+## Widget initialization
+
+Opening a widget creates no chat or history. A fresh init returns
+`:widget_initialized`, `created: false`, and no new conversation ID. Authorized
+resume returns the existing ID; unknown, foreign, deleted or unbound IDs fail
+without replacement creation.
+
+The first-question sequence is:
+
+```text
+verify parent session -> readiness (conversation_id nil)
+  -> subscribe to authorized session destination
+  -> submit first async question with retained optional prompt_context
+  <- accepted conversation_created receipt with new conversation ID
+  <- live typing / assistant events on the pre-existing subscription
+```
+
+Retain parent context until the first actual Message. ZAQ persists it as ordinary
+user history when creating that conversation. Resume/later questions do not reseed.
+An accepted resumed question returns `:status`, `accepted: true`, `created: false`.
+
+Only a matching receipt establishes a new active conversation. Wait for its ID
+before another submission and preserve the active-response guard. Live events
+may queue before the callback returns; process them only after acceptance is
+bound. If dispatch moves to another process, explicitly buffer this race.
+
+## Outbound communication: ZAQ -> web_widget
+
+Subscribe on the configured host PubSub server before the first question using
+a server-generated unpredictable destination authorized for the verified iframe
+session. It must exist without a conversation ID. Keep it stable for that session;
+reconnect creates/reestablishes an authorized subscription after verification.
+
+ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
+single ingress and encode once into widget UI events; do not republish into the
+old broad conversation topic. ZAQ keeps no LiveView PID. Its RequestOwner's internal
+reply topic is separate from the adapter session destination.
+
+Check protocol version, trusted event mapping, request ID, accepted conversation
+and transport message ID before applying events. Widget ID and sender come from
+the session. Reject stale/foreign responses; unsolicited events cannot switch
+conversations. UI output retains the `response.*` namespace.
+
+## Outbound payloads
+
+Shared Response uses semantic `type`, `protocol_version: 1`, `request_id`, optional
+`conversation_id`/`message_id` and public `payload`. Map this into the existing UI
+vocabulary while preserving correlation; do not make ZAQ emit widget-private maps.
+
+| Shared semantic type | Widget encoding / handling |
+| --- | --- |
+| `:widget_initialized` | `response.widget.initialized`; readiness with optional ID; displayed user comes from verified session |
+| `:conversation_created` | `response.conversation.created`; direct correlated receipt establishes the conversation |
+| `:conversation_history` | `response.conversation.history`; ordered public messages and separately retained pagination positions |
+| `:status` with accepted true | Direct resumed receipt, not assistant text or a terminal |
+| `:typing` | `response.typing`, boolean `active` |
+| `:message_create`, `:message_edit`, `:message_complete` | Corresponding `response.message.*`; top-level transport `message_id` becomes UI payload `id`, public `body` becomes `content` |
+| `:message_step` | `response.message.step`; public `step_id` and message ID, safe label; `:activity/:running` maps to `status/started` or `updated` for an existing step |
+| `:message_failed` | `response.message.failed`; correlated message ID, known public code/error mapped to safe UI code/text |
+| `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
+
+Streaming edits replace the full content snapshot; never append as token deltas.
+The assistant transport ID is stable across create/edit/step/terminal and may differ
+from persisted assistant/user message references. Retain those references separately.
+Never expose BO traces, private reasoning, raw tool calls or agent metadata.
+
+Live ordering is typing active -> assistant create -> optional edits/steps -> typing
+inactive -> one correlated terminal. A create precedes subsequent assistant events.
+Update steps by step ID; terminal message/step states cannot regress. Ignore duplicate
+or late terminals and typing resets from earlier requests.
+
+## Conversation ownership and history
+
+ZAQ owns durable history; LiveView owns current browser state. Do not send complete
+history with each question. Resume must verify identity, authorize the selected ID
+and load history before accepting another send. Full page reload restoration requires
+an explicit parent resume mechanism retaining the accepted ID; browser identity alone
+or prior LiveView memory does not guarantee restoration.
+
+Shared history params are `limit` (default 50, maximum 100), `after_position` and
+`up_to_position`. Preserve returned positions for bounded pagination, distinct from
+conversation/transcript identifiers. Render oldest to newest, normalizing public IDs,
+roles and timestamps. Never invent timestamps for untimestamped history. Preserve
+message creation times during streaming; format dates in the selected language and
+browser time zone.
+
+PubSub offers no durable replay or exactly-once execution. Timeout is an unknown
+outcome, not cancellation or permission to retry. Accepted work can finish later.
+Recover through authorized history when the conversation ID is known. If an initial
+timeout returns no ID, surface unresolved outcome rather than inventing an ID or
+silently resending. Consult the host contract for timeout bounds.
+
+Multiple-conversation listing/sidebar integration is deferred. The existing mock's
+`include_conversations` response is not part of the shared ZAQ v1 history command.
+
+## Parent-owned presentation settings
+
 
 Theme and language are not persisted ZAQ widget configuration. Each iframe starts
 with `%{theme: "auto", language: "en"}`. Its allowed parent may include a partial
@@ -135,738 +321,39 @@ An allowed parent can send `zaq.widget.ready.request`; a ready hook replies with
 `zaq.widget.ready`. This handshake supports clients attaching after iframe load
 without navigating the iframe again. Source and origin checks apply to the probe.
 
-### IDs
 
-`widget_id` and `channel_config_id` are separate.
-
-One ZAQ channel configuration may own multiple widgets:
-
-```text
-channel_config_id = 42
-  -> widget_support
-  -> widget_sales
-```
-
-Each widget may have different:
-
-- allowed origins
-- display name
-- stylesheet
-- other UI configuration
-
-Routing / agent selection remains owned by ZAQ.
-
----
-
-## Parent-page bootstrap
-
-The parent page communicates with the iframe through `window.postMessage`.
-
-On initial iframe bootstrap, the parent provides:
-
-- `user_id`
-- optional `prompt_context`
-- optional `conversation_id` (`nil` for a new conversation)
-
-The iframe announces `{type: "zaq.widget.ready"}` once its LiveView hook is
-listening, and again after reconnecting. The parent replies with
-`{type: "zaq.widget.init", user_id, prompt_context, conversation_id}` using the
-iframe's exact origin as `targetOrigin`. A load event alone is too early to
-guarantee that LiveView is listening.
-
-The `/widget/:widget_id` route denies embedding by default. ZAQ must provide
-`allowed_domains` for each widget: exact HTTP(S) origins (scheme, hostname, and
-port), without paths, queries, credentials, fragments, or wildcards. A trailing
-slash is accepted and normalized. Missing, null, or empty lists disable the
-widget; malformed entries reject runtime configuration. There is no implicit
-same-origin allowance. The HTTP response enforces the list using CSP
-`frame-ancestors` (or `'none'` for unavailable widgets), preserving other CSP
-directives. The widget route removes the default `X-Frame-Options` header so
-explicitly allowed cross-origin parents can embed it.
-
-The browser checks both the parent window and its configured origin. LiveView validates the
-payload and retains only these three fields as untrusted bootstrap context.
-`user_id` must be a nonblank string; `conversation_id` may be a nonblank string
-or null; `prompt_context` may be a string or null. Omitted optional
-fields become null. The chat UI stays unmounted and submissions are rejected
-until valid context with a nonblank `user_id` is received. Invalid bootstrap
-messages produce a developer console error with postMessage instructions; if
-no valid context arrives within five seconds of readiness, the same guidance
-is logged. A later valid message can still initialize the widget.
-Identical retries are accepted; replacing context requires
-an iframe reload. Receiving context does not perform host initialization or
-load conversation history unless multiple conversations are enabled.
-
-The parent selects theme through presentation settings. `auto` follows browser
-appearance, including changes while open.
-The embedding iframe should use `color-scheme: light dark` to keep its transparent
-canvas compatible with either browser scheme. The chat controls apply the
-configured widget theme independently of that canvas.
-The trusted host may provide `stylesheet_url` as an HTTP(S) URL or a root-relative
-asset path; the widget loads it inside the iframe. Theme defaults use the
-`zaq-widget-theme` CSS layer so an unlayered custom stylesheet can override
-`--zaq-widget-*` variables on `:root`, regardless of asset loading order.
-Stylesheet URL changes require an iframe reload. Theme and language updates apply immediately.
-Origin configuration is checked on HTTP rendering and LiveView mounting;
-runtime changes require reloading existing iframes to refresh their HTTP policy.
-
-The widget does not own authentication cookies or user identity resolution.
-
-This allows the same widget to be embedded on authenticated or anonymous host pages.
-
-Example parent context:
-
-```json
-{
-  "user_id": "user_123",
-  "prompt_context": "Current page: /billing. Account type: premium."
-}
-```
-
-`prompt_context` may steer the agent but must not be treated as an authorization source.
-
-The host should eventually provide verifiable identity if `user_id` is security-sensitive. A raw browser-supplied `user_id` alone is not authentication.
-
----
-
-## Inbound communication: web_widget -> ZAQ
-
-The widget sends events into ZAQ through the configured `sink_mfa`.
-
-Conceptual flow:
-
-```text
-WidgetLive
-  -> WebWidget runtime / adapter
-  -> sink_mfa
-  -> Zaq.Channels.WebBridge.from_listener/3
-  -> Incoming / existing ZAQ channel flow
-```
-
-The `web_widget` dependency must not hard-code ZAQ modules.
-
-It only knows that it has a configured callback.
-
-### Event shape
-
-`WebWidget.Protocol.Events` prepares inbound event maps without dispatching:
-
-```elixir
-{:ok, init} = WebWidget.Protocol.Events.init(widget_id, parent_context)
-{:ok, create} = WebWidget.Protocol.Events.create(widget_id, accepted_context, %{id: message_id, content: text})
-{:ok, edit} = WebWidget.Protocol.Events.edit(widget_id, accepted_context, %{id: message_id, content: updated_text})
-{:ok, history} = WebWidget.Protocol.Events.history(widget_id, accepted_context)
-```
-
-These builders accept internal atom-keyed maps and return `{:ok, event_map}` or
-`{:error, reason}`. Init/history use `:sync`; create/edit use `:async` and require a
-nonblank conversation ID from the host-accepted context. Both message builders
-accept an optional fourth argument for the public channel alias (`"default"`
-otherwise), and set `timestamp` at build time. The caller supplies and retains
-the message ID for edits and retries. Extra input fields are discarded.
-Payload preparation does not invoke `sink_mfa` or validate identity/ownership;
-host initialization and authorization remain ZAQ's responsibility.
-
-The widget may use its own internal structs, but the callback boundary should be a plain map.
-
-Example:
-
-```elixir
-%{
-  type: "message.create",
-  widget_id: "widget_abc",
-  mode: :async,
-  user_id: "user_123",
-  conversation_id: "conv_123",
-  channel: "default",
-  message: %{
-    id: "msg_456",
-    content: "Hello"
-  }
-}
-```
-
-Notes:
-
-- `widget_id` identifies the widget instance.
-- `conversation_id` may be `nil` before initialization.
-- `message` is an object because it contains multiple meaningful fields.
-- Single-value identifiers should stay flat rather than being wrapped in `%{id: ...}`.
-- `mode` is chosen by the widget and expresses whether it expects an immediate result.
-- Message create/edit requests include a required `timestamp` (`DateTime.t()`), set by the caller when the event is created, for example with `DateTime.utc_now()`.
-- `channel` is currently intended as a public routing/agent-selection alias. If the meaning stays agent-specific, consider renaming it later to `route` or `agent_alias` to avoid confusion with ZAQ channel terminology.
-
----
-
-## Widget initialization
-
-Before the first user message is processed, the widget sends a `widget.init` request.
-
-Conceptual internal struct:
-
-```elixir
-%WebWidget.Protocol.Init{
-  conversation_id: nil | "conv_123",
-  user_id: "user_123",
-  mode: :sync | :async,
-  prompt_context: "..." | nil
-}
-```
-
-The transport/callback boundary can still be represented as a plain map.
-
-Example:
-
-```elixir
-%{
-  type: "widget.init",
-  widget_id: "widget_abc",
-  mode: :sync,
-  conversation_id: nil,
-  user_id: "user_123",
-  prompt_context: ""
-}
-```
-
-Typical first-message flow:
-
-```text
-Parent page
-  -> postMessage(user_id, prompt_context)
-
-User submits first message
-  -> widget.init (sync)
-  -> ZAQ validates / resolves context
-  <- response.widget.initialized
-
-Widget now has conversation_id
-  -> message.create (async)
-```
-
-A successful synchronous init response should include at least:
-
-```elixir
-%{
-  type: "response.widget.initialized",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  user_id: "user_123"
-}
-```
-
-`user_id` is included here so the widget knows which identity context ZAQ accepted/bound.
-
----
-
-## Multiple conversations and timestamps
-
-Each runtime widget accepts `multiple_conversations: false` (default). Only trusted
-runtime configuration enables this feature; browser bootstrap cannot override it.
-When enabled, bootstrap loads history without expanding the launcher. The first
-message submission opens the conversation and sidebar; typing a draft alone does
-not expand it. Bootstrap initializes the host context and requests history with
-`include_conversations: true`. The synchronous `response.conversation.history`
-payload keeps `messages` for the accepted conversation and adds `conversations`:
-
-```elixir
-%{
-  messages: [],
-  conversations: [
-    %{id: "conv_1", title: "Research notes", messages: [
-      %{id: "msg_1", role: "user", content: "Hello", timestamp: "2026-10-03T09:00:00Z"}
-    ]}
-  ]
-}
-```
-
-ZAQ must return only conversations authorized for the accepted user and widget.
-Selection is limited to that list and reinitializes through the host before
-subscribing to the selected topic. Switching and New chat are disabled during an
-active response. Session updates are cached in LiveView; this is not persistence.
-New chat initializes with a null conversation ID on its first submission. The
-original parent bootstrap remains immutable across selections.
-
-Message `timestamp` is an optional ISO 8601 timestamp with offset (or DateTime
-at the in-process boundary), normalized to ISO 8601. Creation time is preserved
-through streaming edits and completion. History messages must be ordered oldest
-to newest by the host. Untimestamped legacy history is still
-accepted, without inventing historical dates. The UI formats times and calendar
-day separators in the browser's local time zone: Today, Yesterday, or a date.
-The mock history response supplies three fixture conversations containing 4, 6,
-and 7 timestamped messages across yesterday and today.
-
----
+The current explicit `init({user_id})` API above describes presentation/bootstrap
+behavior, not sufficient identity proof for ZAQ v1. Add verified bootstrap without
+changing the settings ownership boundary. ZAQ stylesheets are optional absolute
+HTTP(S) URLs in initialization params, scoped to one iframe. Browser loading and
+CSP handling remain milestone 2 work; bundled default styles work without them.
 
 ## Implemented delivery boundary
 
-Runtime configuration includes `pubsub_server`, the host-owned Phoenix.PubSub
-server name. `sink_mfa: {module, function, args}` is invoked as
-`apply(module, function, [event | args])`. Use a host wrapper or configured extra
-arguments to adapt an existing bridge signature. Callbacks must return promptly:
-init/history return `{:ok, response_map}`, message create/edit return `:ok` once
-accepted, and failures return `{:error, reason}`. Callback exceptions are reported
-as unavailable, without exposing exception details to the browser.
-
-`WebWidget.Adapter.send_event/1` accepts atom-keyed plain maps and validates the
-response namespace and payload. It resolves the PubSub server from the widget's
-runtime and publishes to a topic scoped by widget and conversation IDs. LiveView
-subscribes after synchronous initialization and before history or message dispatch.
-No widget-wide subscription is used for initialization: pre-conversation errors
-are returned synchronously. PubSub delivery requires a nonblank conversation ID.
-
-Message edits contain the full replacement text, not token deltas. A create event
-must precede edits, steps, completion, or failure for its message ID. Steps update
-by step ID within their assistant message; terminal messages/steps cannot regress
-on duplicate or late events. Producers must serialize events for each response and stop typing before the
-terminal message event, so a delayed typing reset cannot affect the next turn.
-Conversation IDs cannot change through unsolicited PubSub events. History is a
-snapshot loaded before a resumed conversation accepts a new message.
-
-The development/test mock uses this exact callback and adapter path. It does not
-authenticate users or persist history. The mock supplies three dated conversation fixtures; `mock-history` is an alias
-for the first. Unknown mock histories are empty. Reconnects reinitialize on
-the next submission. PubSub is live delivery, without replay or persistence.
-
----
-
-## Sync vs async events
-
-The widget owns whether it expects an immediate result.
-
-Use:
-
-```elixir
-mode: :sync
-```
-
-when the caller waits for the callback result.
-
-Use:
-
-```elixir
-mode: :async
-```
-
-when the callback only acknowledges acceptance and later results arrive through outbound response events.
-
-Example:
-
-```text
-widget.init
-mode: :sync
-
-message.create
-mode: :async
-```
-
-ZAQ may still validate whether a given event supports the requested mode.
-
-### Sync flow
-
-```text
-WidgetLive
-  -> sink_mfa
-  -> WebBridge
-  <- {:ok, response}
-WidgetLive
-```
-
-### Async flow
-
-```text
-WidgetLive
-  -> sink_mfa
-  -> WebBridge
-  <- :ok / accepted
-
-Later:
-
-ZAQ
-  -> WebWidget.Adapter
-  -> PubSub
-  -> WidgetLive
-```
-
----
-
-## Inbound events required for V1
-
-### `widget.init`
-
-Initialize the widget context.
-
-Expected fields:
-
-```elixir
-%{
-  type: "widget.init",
-  widget_id: "widget_abc",
-  mode: :sync | :async,
-  user_id: "user_123",
-  conversation_id: nil | "conv_123",
-  prompt_context: nil | String.t()
-}
-```
-
-### `message.create`
-
-Create a user message.
-
-```elixir
-%{
-  type: "message.create",
-  widget_id: "widget_abc",
-  mode: :async | :sync,
-  timestamp: DateTime.utc_now(),
-  user_id: "user_123",
-  conversation_id: "conv_123",
-  channel: "default",
-  message: %{
-    id: "msg_456",
-    content: "Hello"
-  }
-}
-```
-
-`WebBridge` should translate this into the existing ZAQ `Incoming` / channel flow.
-
-### `message.edit`
-
-Edit an existing user message.
-
-Same base shape as `message.create`, with:
-
-```elixir
-type: "message.edit"
-```
-
-### `conversation.history.request`
-
-Load persisted conversation history.
-
-Example:
-
-```elixir
-%{
-  type: "conversation.history.request",
-  widget_id: "widget_abc",
-  mode: :sync,
-  user_id: "user_123",
-  conversation_id: "conv_123"
-}
-```
-
----
-
-## Outbound communication: ZAQ -> web_widget
-
-ZAQ should not build `WebWidget.Protocol.Response` structs.
-
-`WebBridge` sends plain maps to the adapter:
-
-```text
-ZAQ
-  -> WebBridge
-  -> WebWidget.Adapter
-  -> PubSub
-  -> WidgetLive
-  -> live_react / assistant-ui
-```
-
-The adapter may convert maps into internal structs if useful, but that is owned by `web_widget`.
-
-### Why PubSub
-
-Asynchronous agent work may finish in another process.
-
-ZAQ should not keep or propagate LiveView PIDs.
-
-Instead, `web_widget` can route response events by stable identifiers such as:
-
-- `widget_id`
-- `conversation_id`
-
-Conceptually:
-
-```text
-WebBridge
-  -> WebWidget.Adapter.send_event(map)
-  -> publish to widget/conversation topic
-  -> WidgetLive receives handle_info
-  -> LiveView updates browser over its existing WebSocket
-```
-
-No custom Phoenix Channel or second browser WebSocket is required.
-
----
-
-## Outbound event namespace
-
-Everything sent from ZAQ to the widget uses the `response.*` namespace.
-
-Required V1 events:
-
-```text
-response.widget.initialized
-
-response.conversation.created
-response.conversation.history
-
-response.message.create
-response.message.edit
-response.message.step
-response.message.complete
-response.message.failed
-
-response.typing
-response.error
-```
-
----
-
-## Outbound payloads
-
-All payloads are plain maps.
-
-### `response.widget.initialized`
-
-```elixir
-%{
-  type: "response.widget.initialized",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  user_id: "user_123"
-}
-```
-
-### `response.conversation.created`
-
-```elixir
-%{
-  type: "response.conversation.created",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123"
-}
-```
-
-### `response.conversation.history`
-
-```elixir
-%{
-  type: "response.conversation.history",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    messages: [
-      %{
-        id: "msg_1",
-        role: "user",
-        content: "Hello"
-      },
-      %{
-        id: "msg_2",
-        role: "assistant",
-        content: "Hi"
-      }
-    ]
-  }
-}
-```
-
-### `response.message.create`
-
-```elixir
-%{
-  type: "response.message.create",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    id: "resp_456",
-    content: ""
-  }
-}
-```
-
-### `response.message.edit`
-
-Used for streaming or updating the assistant message.
-
-```elixir
-%{
-  type: "response.message.edit",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    id: "resp_456",
-    content: "Here is the answer..."
-  }
-}
-```
-
-### `response.message.step`
-
-Used for visible intermediate activity such as:
-
-- reasoning/status
-- tool calls
-- tool results
-
-Example:
-
-```elixir
-%{
-  type: "response.message.step",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    id: "step_1",
-    message_id: "resp_456",
-    kind: "tool_call",
-    state: "started",
-    label: "Searching knowledge base",
-    content: nil,
-    metadata: %{}
-  }
-}
-```
-
-Suggested `kind` values:
-
-```text
-reasoning
-tool_call
-tool_result
-status
-```
-
-Suggested `state` values:
-
-```text
-started
-updated
-completed
-failed
-```
-
-### `response.message.complete`
-
-```elixir
-%{
-  type: "response.message.complete",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    id: "resp_456",
-    content: "Final answer"
-  }
-}
-```
-
-### `response.message.failed`
-
-```elixir
-%{
-  type: "response.message.failed",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    message_id: "resp_456",
-    code: "agent_execution_failed",
-    message: "Unable to generate a response"
-  }
-}
-```
-
-### `response.typing`
-
-```elixir
-%{
-  type: "response.typing",
-  widget_id: "widget_abc",
-  conversation_id: "conv_123",
-  payload: %{
-    active: true
-  }
-}
-```
-
-### `response.error`
-
-Used for protocol/request failures that may happen before an assistant response exists.
-
-Examples:
-
-- unknown widget
-- disabled widget
-- invalid conversation
-- unsupported event
-- invalid initialization
-- invalid identity context
-
-```elixir
-%{
-  type: "response.error",
-  widget_id: "widget_abc",
-  conversation_id: nil,
-  payload: %{
-    request_type: "widget.init",
-    code: "invalid_user",
-    message: "Unable to initialize widget"
-  }
-}
-```
-
----
-
-## Conversation ownership
-
-ZAQ owns durable conversation history.
-
-The widget should not resend complete history with every message.
-
-The widget only keeps the current `conversation_id`.
-
-```text
-Widget refresh / reconnect
-  -> conversation.history.request
-  -> ZAQ loads persisted messages
-  <- response.conversation.history
-```
-
-This allows LiveView state to be rebuilt after process loss.
-
----
-
-## Security / trust boundary
-
-The widget must not send or decide:
-
-- ZAQ actor/person structs
-- permissions
-- internal agent IDs
-- retrieval IDs
-- credentials
-- internal routing state
-
-ZAQ resolves these internally from trusted configuration and validated widget/user/conversation context.
-
-Parent-provided `prompt_context` may affect prompting but must not grant permissions.
-
-Allowed iframe origins belong to widget runtime configuration and should be enforced when serving the widget.
-
----
-
-## Design rules
-
-1. Keep the protocol small.
-2. Use plain maps at the ZAQ <-> `web_widget` boundary.
-3. Use nested objects only when the concept contains multiple meaningful fields.
-4. Keep single IDs flat (`widget_id`, `conversation_id`, `user_id`).
-5. `message` is nested because it contains both `id` and `content`.
-6. `response.*` is reserved for ZAQ -> widget events.
-7. `message.*`, `widget.*`, and `conversation.*` are widget -> ZAQ events.
-8. `sink_mfa` is the inbound callback into ZAQ, not a transport.
-9. PubSub is the asynchronous server-side return path to `WidgetLive`.
-10. LiveView's existing WebSocket is the only browser realtime transport.
-11. Do not add AG-UI, SSE, or a second WebSocket for this integration.
-12. Reuse ZAQ's existing `Incoming`, conversation, routing, and channel abstractions after the WebBridge boundary.
+This section records migration evidence, **not another supported ZAQ contract**.
+At package revision `a134225f3f059768be6742cc92acfd1192e1fce7`:
+
+- `Runtime.dispatch/1` calls `apply(module, function, [event | args])` and its mock
+  returns `{:ok, response_map}` for init/history or `:ok` for accepted messages.
+- `Events` and `Response.normalize/1` require a nonblank conversation ID before
+  message delivery; initialization supplies that ID eagerly.
+- `Adapter.send_event/1` publishes `{:web_widget_response, event}` on an encoded
+  widget/conversation topic; WidgetLive subscribes after initialization.
+- Bootstrap checks ID shape, origin and source, but does not verify identity proof.
+  Mounted views are not automatically revoked by runtime changes.
+- Mock history is fixture data; multi-conversation UI and callbacks do not prove
+  canonical persistence, authorization or the shared ZAQ lifecycle.
+
+Milestone 1 adds `Integration.RuntimeBuilder`, `Integration.Protocol` and
+`Integration.Session` while preserving public configuration lookup. The old
+`Runtime.dispatch/1` rejects integrated runtimes with `:authentication_required`;
+authenticated callers use `Runtime.dispatch(event, session)`. The new internal
+event maps carry the operation/request fields only, not `widget_id` or `user_id`:
+the session supplies trusted identity/scope. Unknown fields/events and message
+editing are rejected. Raw resume IDs are checked before shared construction.
+Responses retain the host's return shapes; UI encoding is milestone 2.
+
+The remaining LiveView/mock paths must migrate together in milestone 2. Update mocks alongside
+the production lifecycle and retain meaningful assertions. Do not connect the old
+callback directly to the new sink or retain an alternate ZAQ integration to make
+legacy tests pass. The current iframe cannot yet send through the new boundary.

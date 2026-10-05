@@ -16,9 +16,16 @@ defmodule WebWidget.Application do
   # Hosts may use the supervised runtime without starting the standalone Phoenix
   # server and database. Runtime children remain owned by the host supervisor.
   defp web_children do
-    if Application.get_env(:web_widget, :start_web_server, false),
-      do: standalone_children(),
-      else: []
+    cond do
+      Application.get_env(:web_widget, :start_integration_server, false) ->
+        [{Phoenix.PubSub, name: WebWidget.PubSub}, WebWidgetWeb.Endpoint]
+
+      Application.get_env(:web_widget, :start_web_server, false) ->
+        standalone_children()
+
+      true ->
+        []
+    end
   end
 
   defp standalone_children do

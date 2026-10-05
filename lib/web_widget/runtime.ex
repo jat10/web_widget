@@ -3,8 +3,10 @@ defmodule WebWidget.Runtime do
   Supervised, server-side configuration for one channel's widgets.
 
   Start with `{WebWidget.Runtime, config}`. The config contains
-  `:channel_config_id`, `:sink_mfa` and `:widgets`. Widget IDs are unique across
-  running runtimes and are independent of the owning channel config ID.
+  `:channel_config_id`, `:widgets` and either mock `:sink_mfa` configuration or
+  private `:integration` configuration supplied by the integration builder.
+  Widget IDs are unique across running runtimes. The shared integration uses
+  the owning connector ID's string form as its single widget ID.
   Replace the child to apply configuration changes. Stopping it removes its
   widget registrations. `fetch_widget/1` exposes presentation configuration only.
   Callbacks are invoked in the caller, outside the configuration process.
@@ -13,6 +15,7 @@ defmodule WebWidget.Runtime do
   use GenServer
 
   alias WebWidget.Embedding.Origins
+  alias WebWidget.Integration.{Protocol, Session}
 
   @widget_fields [
     :widget_id,
@@ -27,7 +30,7 @@ defmodule WebWidget.Runtime do
   end
 
   def start_link(config) do
-    with {:ok, config} <- normalize_config(config) do
+    with {:ok, config} <- prepare(config) do
       GenServer.start_link(__MODULE__, config)
     end
   end
@@ -47,16 +50,62 @@ defmodule WebWidget.Runtime do
     end
   end
 
-  @doc "Invokes the configured host callback with the event followed by configured arguments."
+  @doc "Invokes a legacy/mock callback; integrated runtimes require dispatch/2 with a session."
   def dispatch(%{widget_id: widget_id} = event) do
-    with {:ok, %{sink_mfa: {module, function, args}}} <- delivery_config(widget_id) do
-      apply(module, function, [event | args])
+    case delivery_config(widget_id) do
+      {:ok, %{integration: %Protocol{}}} -> {:error, :authentication_required}
+      {:ok, %{sink_mfa: {module, function, args}}} -> apply(module, function, [event | args])
+      error -> error
     end
   rescue
     _ -> {:error, :unavailable}
   catch
     _, _ -> {:error, :unavailable}
   end
+
+  @doc "Verifies identity through the runtime's configured verifier; never trusts a browser ID."
+  def authenticate(widget_id, proof) do
+    with {:ok, %{allowed_domains: [_ | _]}} <- fetch_widget(widget_id),
+         {:ok, %{integration: integration, runtime_ref: runtime_ref}} <-
+           delivery_config(widget_id),
+         {:ok, session} <- Protocol.authenticate(integration, proof, runtime_ref),
+         {:ok, _config} <- session_config(session) do
+      {:ok, session}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  @doc "Dispatches an internal request using a verified, process-bound session."
+  def dispatch(event, session) do
+    with {:ok, config} <- session_config(session) do
+      Protocol.dispatch(config.integration, event, session)
+    end
+  end
+
+  @doc "Subscribes the verified caller before its first question; no conversation ID is needed."
+  def subscribe(session) do
+    with {:ok, config} <- session_config(session),
+         :ok <- Phoenix.PubSub.subscribe(config.pubsub_server, session.topic) do
+      {:ok, {config.pubsub_server, session.topic}}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    :exit, _ -> {:error, :unavailable}
+  end
+
+  defp session_config(%Session{} = session) do
+    with {:ok, %{integration: %Protocol{}, runtime_ref: runtime_ref} = config} <-
+           delivery_config(session.widget_id),
+         true <- Session.valid?(session, runtime_ref, config.channel_config_id) do
+      {:ok, config}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp session_config(_), do: {:error, :unauthorized}
 
   defp delivery_config(widget_id), do: call_widget(widget_id, :delivery_config)
 
@@ -71,6 +120,8 @@ defmodule WebWidget.Runtime do
 
   @impl true
   def init(config) do
+    config = Map.put(config, :runtime_ref, make_ref())
+
     Enum.reduce_while(config.widgets, {:ok, config}, fn widget, acc ->
       case Registry.register(WebWidget.RuntimeRegistry, widget.widget_id, nil) do
         {:ok, _} -> {:cont, acc}
@@ -81,13 +132,35 @@ defmodule WebWidget.Runtime do
 
   @impl true
   def handle_call(:delivery_config, _from, config) do
-    {:reply, {:ok, Map.take(config, [:sink_mfa, :pubsub_server])}, config}
+    fields = [:channel_config_id, :sink_mfa, :pubsub_server, :integration, :runtime_ref]
+    {:reply, {:ok, Map.take(config, fields)}, config}
   end
 
   def handle_call({:fetch_widget, widget_id}, _from, config) do
     widget = Enum.find(config.widgets, &(&1.widget_id == widget_id))
     {:reply, if(widget, do: {:ok, widget}, else: {:error, :not_found}), config}
   end
+
+  @doc false
+  def prepare(%{integration: %Protocol{} = integration, channel_config_id: id} = config) do
+    if integration.hooks.widget_id == id do
+      config
+      |> Map.put(:sink_mfa, integration.hooks.sink_mfa)
+      |> normalize_config()
+      |> case do
+        {:ok, normalized} ->
+          {:ok, normalized |> Map.delete(:sink_mfa) |> Map.put(:integration, integration)}
+
+        error ->
+          error
+      end
+    else
+      {:error, :invalid_runtime_config}
+    end
+  end
+
+  def prepare(%{integration: _}), do: {:error, :invalid_runtime_config}
+  def prepare(config), do: normalize_config(config)
 
   defp normalize_config(
          %{

@@ -52,6 +52,7 @@ Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
   sink_mfa: {WebWidget.MockHost, :handle_event, []},
      pubsub_server: WebWidget.PubSub,
   widgets: [
+    %{widget_id: "42", display_name: "Installed widget", allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "theme-light", display_name: "Light assistant", allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "theme-dark", display_name: "Dark assistant", multiple_conversations: true, allowed_domains: ["http://127.0.0.1:4019"]},
     %{widget_id: "theme-custom", display_name: "Custom assistant", stylesheet_url: "/custom-widget.css", allowed_domains: ["http://127.0.0.1:4019"]},

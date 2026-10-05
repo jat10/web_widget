@@ -24,7 +24,7 @@
 
 ## Essential constraints
 
-- Keep `web_widget` independent from ZAQ internals. The integration boundary uses plain maps and configured callbacks/adapters.
+- Keep `web_widget` independent from ZAQ internals. Follow the adapter contract for plain-map inputs/UI events and host-supplied shared constructor hooks; do not add a compile-time ZAQ dependency.
 - Browser realtime communication uses the existing LiveView WebSocket. Do not add AG-UI, SSE, or a second browser WebSocket unless explicitly required.
 - `sink_mfa` is an inbound callback into the host application, not a transport.
 - ZAQ owns routing, permissions, identity resolution, and durable conversation state.
@@ -38,9 +38,9 @@
 | Work | Read first |
 | --- | --- |
 | Elixir / Phoenix / LiveView / OTP | [Elixir guidelines](docs/elixir-guidlines.md) |
-| ZAQ adapter integration | [Web Widget adapter contract](docs/web_widget_adapter_contract.md) |
-| Event contract / sync-async behavior | [Web Widget adapter contract](docs/web_widget_adapter_contract.md) |
-| Widget runtime config / iframe / PubSub | [Web Widget adapter contract](docs/web_widget_adapter_contract.md) |
+| ZAQ adapter integration | [Web Widget adapter contract](docs/adapter-contract.md) |
+| Event contract / sync-async behavior | [Web Widget adapter contract](docs/adapter-contract.md) |
+| Widget runtime config / iframe / PubSub | [Web Widget adapter contract](docs/adapter-contract.md) |
 | React / assistant-ui UI work | Inspect the existing React components and preserve the LiveView ownership boundary |
 
 ## Working rule
