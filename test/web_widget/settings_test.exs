@@ -4,7 +4,7 @@ defmodule WebWidget.Embedding.SettingsTest do
 
   test "partial settings merge and invalid patches fail atomically" do
     defaults = Settings.defaults()
-    assert defaults == %{"theme" => "auto", "language" => "en"}
+    assert defaults == %{"theme" => "light", "language" => "en"}
 
     assert {:ok, %{"theme" => "dark", "language" => "en"}} =
              Settings.update(defaults, %{"theme" => "dark"})

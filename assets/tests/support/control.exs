@@ -10,7 +10,8 @@ defmodule WebWidget.E2EControl do
     conn = fetch_query_params(conn)
     conn
     |> put_resp_content_type("application/json")
-    |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.bootstrap(conn.query_params["conversation_id"])))
+    |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.bootstrap(
+      conn.query_params["conversation_id"], if(conn.query_params["short"] == "true", do: 3, else: 300))))
   end
 
   post "/sessions/:id" do

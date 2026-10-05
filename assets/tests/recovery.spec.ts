@@ -38,6 +38,67 @@ async function embed(page: Page, user: string, id = "test-widget", multiple = fa
   return widget;
 }
 
+test("date separators group dated messages across untimestamped assistant history", async ({ page, request }) => {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const history = [yesterday, today].flatMap((date, index) => [
+    { id: `user-${index}-a`, role: "user", content: "First question", timestamp: date.toISOString() },
+    { id: `assistant-${index}`, role: "assistant", content: "Answer without a timestamp" },
+    { id: `user-${index}-b`, role: "user", content: "Second question", timestamp: date.toISOString() },
+  ]);
+  const id = await session(request, { history });
+  await page.goto("/widget/missing");
+  const widget = await embed(page, id);
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Continue today");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content").last()).toHaveText("Controlled host reply");
+  await expect(widget.locator(".zaq-date-separator")).toHaveText(["Yesterday", "Today"]);
+  await expect(widget.locator('[data-role="assistant"]').first().locator("time")).toHaveCount(0);
+  await input.fill("Another question today");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content")).toHaveCount(4);
+  await expect(widget.locator(".zaq-date-separator")).toHaveText(["Yesterday", "Today"]);
+});
+
+test("message updates do not resend unrelated history over the LiveView websocket", async ({ page, request }) => {
+  const previousAnswer = "UNRELATED-HISTORY-" + "saved text ".repeat(200);
+  const frames: string[] = [];
+  page.on("websocket", socket => socket.on("framereceived", frame => {
+    frames.push(typeof frame.payload === "string" ? frame.payload : frame.payload.toString());
+  }));
+  const id = await session(request, {
+    hold: true,
+    answer: "The new final answer",
+    history: [{ id: "saved-answer", role: "assistant", content: previousAnswer }],
+  });
+  await page.goto("/widget/missing");
+  const widget = await embed(page, id);
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Load the conversation");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content").first()).toHaveText(previousAnswer);
+  await expect(widget.locator(".zaq-answer-content").last()).toHaveText("Partial reply");
+  await complete(request, id);
+  await expect(widget.locator(".zaq-answer-content").last()).toHaveText("The new final answer");
+  expect(frames.join("\n")).toContain("UNRELATED-HISTORY-");
+  frames.length = 0;
+
+  await input.fill("A new question");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content").last()).toHaveText("Partial reply");
+  expect(frames.join("\n")).toContain("Partial reply");
+  expect(frames.join("\n")).not.toContain("UNRELATED-HISTORY-");
+  frames.length = 0;
+
+  await complete(request, id);
+  await expect(widget.locator(".zaq-answer-content")).toHaveText([previousAnswer, "The new final answer", "The new final answer"]);
+  expect(frames.join("\n")).toContain("The new final answer");
+  expect(frames.join("\n")).not.toContain("UNRELATED-HISTORY-");
+  expect(frames.join("\n")).not.toContain("A new question");
+});
+
 for (const kind of ["none", "status", "reasoning", "tool_call", "tool_result"]) {
   test(`${kind} progress uses tool presentation only for explicit tool steps`, async ({ page, request }) => {
     const id = await session(request, { hold: true, step_kind: kind, partial: "" });

@@ -2,7 +2,7 @@ import { ViewHook } from "phoenix_live_view";
 
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
-let sessionSettings: Settings = { theme: "auto", language: "en" };
+let sessionSettings: Settings = { theme: "light", language: "en" };
 let hasSettings = false;
 const nonblank = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 

@@ -174,7 +174,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
                     _}
   end
 
-  test "connected expiry revokes without waiting for another request", ctx do
+  test "connected expiry preserves the mounted view but blocks sending until renewed", ctx do
     {:ok, proof} =
       SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
         issuer: "parent",
@@ -184,9 +184,32 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     render_event(ctx.view, "widget.context", %{identity_token: proof}, %{ok: true})
     assert_push_event(ctx.view, "widget.authentication.required", %{}, 1500)
-    refute has_element?(ctx.view, "#web-widget")
+    assert has_element?(ctx.view, "#web-widget")
     render_event(ctx.view, "widget.submit", %{text: "after expiry"}, %{ok: false})
     refute_receive {:shared_request, %{content: "after expiry"}, _, _}
+    render_event(ctx.view, "widget.context", %{identity_token: "invalid"}, %{ok: false})
+    assert has_element?(ctx.view, "#web-widget")
+    render_event(ctx.view, "widget.submit", %{text: "still expired"}, %{ok: false})
+    refute_receive {:shared_request, %{content: "still expired"}, _, _}
+    init(ctx)
+    render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "instant"}, _, _}
+  end
+
+  test "runtime revocation still clears an expired view waiting for renewal", ctx do
+    {:ok, proof} =
+      SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
+        issuer: "parent",
+        audience: "widget",
+        ttl: 1
+      )
+
+    render_event(ctx.view, "widget.context", %{identity_token: proof}, %{ok: true})
+    assert_push_event(ctx.view, "widget.authentication.required", %{}, 1500)
+    assert has_element?(ctx.view, "#web-widget")
+    stop_supervised!(ctx.spec.id)
+    assert_push_event(ctx.view, "widget.authentication.required", %{})
+    refute has_element?(ctx.view, "#web-widget")
   end
 
   test "terminal failure releases send guard and never exposes private error details", ctx do

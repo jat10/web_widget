@@ -1,7 +1,7 @@
 defmodule WebWidget.Embedding.Settings do
   @moduledoc false
 
-  def defaults, do: %{"theme" => "auto", "language" => "en"}
+  def defaults, do: %{"theme" => "light", "language" => "en"}
 
   def update(current, patch) when is_map(patch) do
     if Enum.all?(patch, fn

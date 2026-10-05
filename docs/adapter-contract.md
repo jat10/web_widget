@@ -126,6 +126,11 @@ permits reuse only by the same LiveView process. A new LiveView/reload therefore
 requires a fresh proof. Deploy a single widget node until a shared replay store is
 configured/implemented. Never put the connector key in browser code.
 Runtime monitoring and expiry timers revoke subscriptions and prevent late delivery.
+JWT expiry keeps the already displayed chat and composer mounted while the parent
+obtains a fresh proof. Sending and inbound response application are blocked during
+renewal; failed renewal leaves the view read-only. Successful same-sender init
+restores authorized history without remounting React. The runtime monitor remains
+active during renewal, so connector revocation/replacement still clears the view.
 Standalone legacy demo fixtures remain isolated from integrated runtimes; shared
 protocol fixtures exercise the production LiveView path without ZAQ dependencies.
 
@@ -316,6 +321,12 @@ and load history before accepting another send. Full page reload restoration req
 an explicit parent resume mechanism retaining the accepted ID; browser identity alone
 or prior LiveView memory does not guarantee restoration.
 
+LiveView delivers message rows to React through a LiveReact stream. Ordinary
+updates insert or replace only changed messages; typing-only updates carry no
+message rows. History restoration and conversation changes may reset the stream.
+Locale changes refresh localized row summaries. The server retains canonical
+conversation state; the stream only changes browser delivery.
+
 Shared history params are `limit` (default 50, maximum 100), `after_position` and
 `up_to_position`. Preserve returned positions for bounded pagination, distinct from
 conversation/transcript identifiers. Render oldest to newest, normalizing public IDs,
@@ -336,7 +347,7 @@ Multiple-conversation listing/sidebar integration is deferred. The existing mock
 
 
 Theme and language are not persisted ZAQ widget configuration. Each iframe starts
-with `%{theme: "auto", language: "en"}`. Its allowed parent sends
+with `%{theme: "light", language: "en"}`. Its allowed parent sends
 `zaq.widget.settings.update` separately from init, or optionally inspects current
 values with `zaq.widget.settings.get`. Settings in init are rejected.
 Supported values: theme `auto/light/dark`, language `en/fr/ar`. Unknown keys and

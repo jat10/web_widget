@@ -16,7 +16,7 @@ if (installation) {
       prompt_context: `Current page: ${window.location.pathname}`,
       conversation_id: null,
     }).then(() => window.zaq.widget.updateSettings({
-        theme: (params.get("theme") || "auto") as WidgetSettings["theme"],
+        theme: (params.get("theme") || "light") as WidgetSettings["theme"],
         language: (params.get("language") || "en") as WidgetSettings["language"],
     })).catch(error => console.error("Could not initialize demo widget", error));
   };

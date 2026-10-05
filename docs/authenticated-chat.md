@@ -189,6 +189,15 @@ verifier for the single-node smoke; a clustered/durable replay policy requires a
 custom verifier. Runtime replacement/rotation and expiry revoke connected sessions
 and subscriptions. Renewal cannot change an iframe's verified sender.
 
+On token expiry, the existing chat and unsent draft remain visible, with sending
+disabled, while the parent requests a new token. A successful init restores
+authorized history and enables sending without remounting the composer. Failed
+renewal leaves sending blocked; connector revocation/replacement still clears the
+view. Previously expiry cleared `parent_context` and messages, removing the React
+root before token issuance completed and causing a visible blink. Browser coverage
+now verifies composer DOM identity and draft preservation across real expiry and
+renewal using a short-lived test token.
+
 Resume loads the first 50 canonical messages and preserves their transcript
 positions separately. Pagination UI and longer-transcript acceptance are outside
 this first smoke. Timeouts are unknown outcomes: the widget blocks further sends
