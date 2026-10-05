@@ -3,7 +3,6 @@ import { ViewHook } from "phoenix_live_view";
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
 let sessionSettings: Settings = { theme: "auto", language: "en" };
-let initialized = false;
 let hasSettings = false;
 const nonblank = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0;
 
@@ -13,8 +12,13 @@ export class WidgetContext extends ViewHook {
   private contextTimer?: number;
   private allowedDomains: string[] = [];
   private queue = Promise.resolve();
+  private parentOrigin?: string;
 
   private reportError(reason: string) {
+    if (this.el.dataset.authenticated === "true") {
+      console.error(`[WebWidget] ${reason} Obtain a fresh identity_token from your authenticated backend and call zaq.widget.init. Never send the connector key to the browser.`);
+      return;
+    }
     console.error(`[WebWidget] ${reason} The chat requires a valid user_id. In the parent page, listen for "zaq.widget.ready", verify event.source === iframe.contentWindow and event.origin === the widget origin, then call iframe.contentWindow.postMessage({ type: "zaq.widget.init", user_id: "user_123", prompt_context: "Current page: /billing", conversation_id: null }, widgetOrigin). prompt_context must be a string or null. Use the exact widget origin; the parent origin must be listed in the widget’s allowed_domains.`);
   }
 
@@ -33,18 +37,25 @@ export class WidgetContext extends ViewHook {
     try {
       let reply: any;
       if (data.type === "zaq.widget.init") {
-        if (!nonblank(data.user_id)) throw new Error("Missing or invalid user_id in zaq.widget.init.");
-        const conversation_id = data.conversation_id ?? null;
-        const prompt_context = data.prompt_context ?? null;
-        if (conversation_id !== null && !nonblank(conversation_id)) throw new Error("conversation_id must be a nonblank string or null.");
-        if (prompt_context !== null && typeof prompt_context !== "string") throw new Error("Invalid prompt_context: objects and arrays are not supported.");
-        reply = await this.dispatch("widget.context", {
-          user_id: data.user_id, conversation_id, prompt_context,
-          settings: initialized ? sessionSettings : (data.settings === undefined ? {} : data.settings),
-        });
+        const authenticated = this.el.dataset.authenticated === "true";
+        if (authenticated && !nonblank(data.identity_token)) throw new Error("Missing identity_token in zaq.widget.init.");
+        if (!authenticated && !nonblank(data.user_id)) throw new Error("Missing or invalid user_id in zaq.widget.init.");
+        const allowed = authenticated
+          ? ["type", "request_id", "identity_token"]
+          : ["type", "request_id", "user_id", "conversation_id", "prompt_context"];
+        if (Object.keys(data).some(key => !allowed.includes(key))) throw new Error("Unsupported init field. Sign initialization context in the token; use updateSettings for presentation.");
+        if (authenticated) {
+          reply = await this.dispatch("widget.context", { identity_token: data.identity_token });
+        } else {
+          const conversation_id = data.conversation_id ?? null;
+          const prompt_context = data.prompt_context ?? null;
+          if (conversation_id !== null && !nonblank(conversation_id)) throw new Error("conversation_id must be a nonblank string or null.");
+          if (prompt_context !== null && typeof prompt_context !== "string") throw new Error("Invalid prompt_context: objects and arrays are not supported.");
+          reply = await this.dispatch("widget.context", { user_id: data.user_id, conversation_id, prompt_context });
+        }
         if (reply.ok) {
           this.accepted = true;
-          initialized = true;
+          this.parentOrigin = event.origin;
           window.clearTimeout(this.contextTimer);
         }
       } else {
@@ -99,6 +110,13 @@ export class WidgetContext extends ViewHook {
 
   mounted() {
     this.allowedDomains = JSON.parse(this.el.dataset.allowedDomains || "[]");
+    this.handleEvent("widget.conversation", data => {
+      if (this.parentOrigin) window.parent.postMessage({ type: "zaq.widget.conversation", ...data }, this.parentOrigin);
+    });
+    this.handleEvent("widget.authentication.required", () => {
+      this.accepted = false;
+      if (this.parentOrigin) window.parent.postMessage({ type: "zaq.widget.authentication.required" }, this.parentOrigin);
+    });
     window.addEventListener("message", this.receiveContext);
     void this.restoreAndAnnounce();
   }

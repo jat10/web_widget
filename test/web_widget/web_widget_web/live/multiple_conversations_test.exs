@@ -37,12 +37,15 @@ defmodule WebWidgetWeb.MultipleConversationsTest do
 
   defp bootstrap(conn, id) do
     {:ok, view, _} = live(conn, "/widget/#{id}")
-    render_hook(view, "widget.context", %{user_id: "user", multiple_conversations: true})
+    render_hook(view, "widget.context", %{user_id: "user"})
     view
   end
 
   test "runtime flag defaults off and cannot be enabled by browser context", %{conn: conn} do
     view = bootstrap(conn, "single-test")
+    render_hook(view, "widget.context", %{user_id: "user", multiple_conversations: true})
+    assert_reply(view, %{ok: true})
+    assert_reply(view, %{ok: false})
     refute state(view).config.multiple_conversations
     assert state(view).conversations == []
     render_hook(view, "widget.conversation.select", %{id: "mock-weekend"})

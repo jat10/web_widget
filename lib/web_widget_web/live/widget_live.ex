@@ -4,6 +4,7 @@ defmodule WebWidgetWeb.WidgetLive do
   alias WebWidget.Adapter
   alias WebWidget.Conversation.State, as: Conversation
   alias WebWidget.Embedding.Settings
+  alias WebWidget.Integration.Chat
   alias WebWidget.Protocol.Events
   alias WebWidget.Protocol.Response
   alias WebWidget.Runtime
@@ -27,6 +28,9 @@ defmodule WebWidgetWeb.WidgetLive do
     {:ok,
      assign(socket,
        widget: true,
+       integrated: Runtime.integrated?(widget.widget_id),
+       chat: nil,
+       verified_sender: nil,
        settings: Settings.defaults(),
        widget_locale: locale,
        widget_direction: if(locale == "ar", do: "rtl", else: "ltr"),
@@ -82,6 +86,7 @@ defmodule WebWidgetWeb.WidgetLive do
           phx-hook="WidgetContext"
           phx-update="ignore"
           data-allowed-domains={Jason.encode!(@allowed_domains)}
+          data-authenticated={to_string(@integrated)}
         />
         <.react
           :if={@parent_context != nil}
@@ -195,6 +200,36 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
+  def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
+    with true <- is_nil(socket.assigns.pending_reply),
+         {:ok, chat} <- Chat.open(socket.assigns.widget_id, params) do
+      if socket.assigns.verified_sender in [nil, chat.session.sender_id] do
+        if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
+
+        socket =
+          socket
+          |> assign_chat(chat)
+          |> assign(
+            verified_sender: chat.session.sender_id,
+            parent_context: %{user_id: chat.session.sender_id}
+          )
+
+        socket = restore_mode(socket, chat.conversation_id)
+
+        {:reply,
+         %{ok: true, settings: socket.assigns.settings, conversation_id: chat.conversation_id},
+         socket}
+      else
+        Chat.close(chat)
+        {:reply, %{ok: false, error: "Reload the widget to change identity."}, socket}
+      end
+    else
+      _ ->
+        {:reply, %{ok: false, error: "Unable to authenticate or restore this widget session."},
+         socket}
+    end
+  end
+
   def handle_event("widget.context", %{"user_id" => user_id} = params, socket) do
     context = %{
       user_id: user_id,
@@ -203,7 +238,8 @@ defmodule WebWidgetWeb.WidgetLive do
     }
 
     cond do
-      not valid_parent_context?(context) ->
+      not Enum.all?(Map.keys(params), &(&1 in ["user_id", "conversation_id", "prompt_context"])) or
+          not valid_parent_context?(context) ->
         {:reply, %{ok: false, error: ui(socket, "Invalid widget context.")}, socket}
 
       socket.assigns.parent_context not in [nil, context] ->
@@ -213,7 +249,10 @@ defmodule WebWidgetWeb.WidgetLive do
         {:reply, %{ok: true, settings: socket.assigns.settings}, socket}
 
       true ->
-        initialize_settings(socket, context, Map.get(params, "settings", %{}))
+        settings_reply(
+          initialize_context(assign(socket, :parent_context, context), socket),
+          socket.assigns.settings
+        )
     end
   end
 
@@ -223,6 +262,29 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.submit", _params, %{assigns: %{parent_context: nil}} = socket) do
     {:reply, %{ok: false, error: ui(socket, "Widget context with user_id is required.")}, socket}
+  end
+
+  def handle_event("widget.submit", %{"text" => text}, %{assigns: %{integrated: true}} = socket)
+      when is_binary(text) do
+    text = String.trim(text)
+
+    if text != "" and String.length(text) <= socket.assigns.config.max_length and
+         socket.assigns.chat do
+      case Chat.submit(socket.assigns.chat, text) do
+        {:ok, chat} ->
+          {:reply, %{ok: true},
+           socket
+           |> assign_chat(chat)
+           |> assign(mode: :conversation, conversation_opened: true)
+           |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
+
+        {:error, chat, error} ->
+          {:reply, %{ok: false, error: error},
+           socket |> assign_chat(chat) |> assign(error: error)}
+      end
+    else
+      {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
+    end
   end
 
   def handle_event("widget.submit", %{"text" => text}, socket) when is_binary(text) do
@@ -253,6 +315,28 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   @impl true
+  def handle_info({:web_response, event, response}, %{assigns: %{chat: chat}} = socket)
+      when not is_nil(chat) do
+    if Runtime.authorized?(chat.session) do
+      {:noreply, assign_chat(socket, Chat.receive_response(chat, event, response))}
+    else
+      {:noreply, revoke_chat(socket)}
+    end
+  end
+
+  def handle_info({:widget_session_expired, ref}, %{assigns: %{chat: chat}} = socket)
+      when not is_nil(chat) do
+    {:noreply, if(chat.session.topic == ref, do: revoke_chat(socket), else: socket)}
+  end
+
+  def handle_info({:DOWN, ref, :process, _pid, _reason}, %{assigns: %{chat: chat}} = socket)
+      when not is_nil(chat) do
+    {:noreply, if(chat.monitor == ref, do: revoke_chat(socket), else: socket)}
+  end
+
+  def handle_info({:web_widget_response, _}, %{assigns: %{integrated: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_info({:web_widget_response, event}, socket) do
     with %{conversation_id: conversation_id} <- socket.assigns[:accepted_context],
          {:ok, %{widget_id: widget_id, conversation_id: ^conversation_id} = response} <-
@@ -266,6 +350,36 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   def handle_info(_, socket), do: {:noreply, socket}
+
+  defp restore_mode(socket, nil), do: socket
+
+  defp restore_mode(socket, _id),
+    do: assign(socket, mode: :conversation, conversation_opened: true)
+
+  defp assign_chat(socket, chat) do
+    socket
+    |> assign(chat.state)
+    |> assign(
+      chat: chat,
+      accepted_context: %{user_id: chat.session.sender_id, conversation_id: chat.conversation_id}
+    )
+  end
+
+  defp revoke_chat(socket) do
+    Chat.close(socket.assigns.chat)
+
+    socket
+    |> assign(
+      chat: nil,
+      parent_context: nil,
+      accepted_context: nil,
+      pending_reply: nil,
+      typing: false,
+      messages: [],
+      error: "Widget session expired. Reconnect to continue."
+    )
+    |> push_event("widget.authentication.required", %{})
+  end
 
   defp initialize(socket, requested_id \\ :bootstrap)
 
@@ -295,17 +409,6 @@ defmodule WebWidgetWeb.WidgetLive do
       |> finish_initialization(socket, subscription)
     else
       _ -> {:error, socket}
-    end
-  end
-
-  defp initialize_settings(socket, context, patch) do
-    case Settings.update(socket.assigns.settings, patch) do
-      {:ok, settings} ->
-        candidate = socket |> assign(:parent_context, context) |> apply_settings(settings)
-        settings_reply(initialize_context(candidate, socket), settings)
-
-      {:error, error} ->
-        {:reply, %{ok: false, error: error}, socket}
     end
   end
 

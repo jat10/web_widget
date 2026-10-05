@@ -25,8 +25,9 @@ assets built, paste the generated tag once:
 It creates the iframe automatically and attaches the existing client/layout
 behavior. No separate iframe markup is needed. `zaq.widget.dispose()` removes
 an automatically created iframe; it preserves one supplied by your page.
-The script supplies no identity or secrets. Authenticated ZAQ bootstrap and chat
-remain milestone 2; the manual examples below use the existing mock/demo API.
+The script supplies no identity or secrets. For authenticated ZAQ chat, follow
+the [signed bootstrap smoke guide](docs/authenticated-chat.md). The manual
+examples below use the existing mock/demo API.
 See [endpoint configuration](docs/host-integration.md#zaq-configuration-only-endpoint).
 
 ### 1. Get your widget URL
@@ -41,7 +42,8 @@ The administrator must add your website's exact origin to the widget's `allowed_
 If you are deploying the widget inside ZAQ or another Phoenix application, start with the [host integration guide](docs/host-integration.md) and [adapter contract](docs/adapter-contract.md).
 
 ZAQ shared protocol v1 has a package runtime/session boundary and a verified local
-host runtime installation. LiveView wiring and production identity are still pending.
+host runtime installation. Signed bootstrap, shared-response LiveView delivery
+and short-transcript restoration are implemented and tested with host fixtures.
 The examples below describe the current embed/demo API. Production ZAQ integration
 requires server-verified identity before chat access; `init({user_id})` alone is
 insufficient. See the [wiring milestones](docs/exec-plans/wiring-widget.md).
@@ -61,7 +63,6 @@ Add this once to your website's shared layout. Replace the URLs and supply the c
 <script>
   zaq.widget.init({
     user_id: "YOUR-VISITOR-ID",
-    settings: { theme: "auto", language: "en" },
   }).catch(error => console.error("Could not initialize chat", error));
 </script>
 ```
@@ -96,7 +97,7 @@ Generate the ID once for initialization, not for each message or opening of chat
 
 ## Language and theme
 
-The website owns these settings. Pass them during initialization or update them while the visitor is chatting:
+The website owns these settings. Set them through the separate settings API before or after initialization:
 
 ```js
 await zaq.widget.updateSettings({ theme: "dark" });
@@ -120,12 +121,17 @@ Settings survive LiveView reconnects. If the iframe document reloads while the p
 
 ## Initialization and conversations
 
+For ZAQ, the backend signs all three fields below into `identity_token`; the
+frontend calls only `zaq.widget.init({identity_token})`. Unsigned fields, settings
+and unknown additions are rejected. See the [signed bootstrap guide](docs/authenticated-chat.md)
+for the signing helper and backend resume flow. The raw example below is only
+for standalone mock/demo fixtures.
+
 ```js
 await zaq.widget.init({
   user_id: "visitor-123",
   prompt_context: "Current page: /menu",
   conversation_id: null,
-  settings: { language: "en", theme: "auto" },
 });
 ```
 
@@ -134,7 +140,6 @@ await zaq.widget.init({
 | `user_id` | Required, nonblank visitor ID validated by ZAQ. |
 | `prompt_context` | Optional string with context for the host; defaults to `null`. |
 | `conversation_id` | Optional real conversation ID to resume; defaults to `null`. |
-| `settings` | Optional language and theme preferences. |
 
 A visitor ID and a conversation ID are different. Do not invent a conversation ID or substitute the visitor ID. Conversation history and authorization depend on the ZAQ integration; keeping the visitor ID alone does not guarantee that a specific conversation reopens.
 

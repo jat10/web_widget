@@ -5,8 +5,9 @@
 Routing and assets below are implemented package capabilities. The selected ZAQ
 integration targets shared protocol v1 at revision
 `c38e7e4e5`. The package runtime builder, verified
-server session and shared ingress are implemented; LiveView and shared-response
-encoding still need migration. Follow the
+server session, shared ingress, LiveView response encoding and signed bootstrap
+are implemented. Start with the [authenticated chat smoke](authenticated-chat.md).
+Follow the
 [adapter contract](adapter-contract.md) and [wiring plan](exec-plans/wiring-widget.md).
 The existing mock host is not a working ZAQ installation.
 
@@ -125,8 +126,8 @@ start a second widget runtime alongside it.
 Use one enabled `web_widget` connector per widget. Its persisted positive integer
 ID is the trusted Context/Delivery configuration ID; its string form is the route
 and registry ID, for example `/widget/42`. Configure `display_name`, exact
-`allowed_domains`. Do not persist `stylesheet_url`: optional absolute HTTP(S)
-stylesheets are supplied per instance through initialization params.
+`allowed_domains`. Do not persist `stylesheet_url`. Browser initialization currently
+accepts only the signed three-field bootstrap; stylesheet params are not supported.
 Do not add a separate widget ID, theme or language setting. Keep multiple
 conversations disabled for this first integration.
 
@@ -145,7 +146,10 @@ config :web_widget, :integration,
 `MyApp.WidgetIdentity` is an application-owned verifier to implement, not supplied
 by the package. It receives `(proof, %{widget_id: string_id, channel_config_id: id})`
 after any configured prefix arguments, verifies proof and scope, and returns
-`{:ok, %{sender_id: external_id, expires_at: unix_seconds}}` or `{:error, reason}`.
+`{:ok, %{sender_id: external_id, expires_at: unix_seconds, init: verified_init}}`
+or `{:error, reason}`. `verified_init` contains only `user_id`, `conversation_id`
+and `prompt_context` from the verified proof. Omitting it permits only a fresh
+conversation with nil prompt context; browser input cannot supply overrides.
 It must not accept an unchecked browser ID. Absent verifier/PubSub configuration
 or invalid hooks fail builder construction. `build/3` accepts explicit options
 for tests without changing application environment.
@@ -244,9 +248,9 @@ or UI changes. Static responses revalidate with ETags.
 
 Embed `/widget/<connector-id>` on a configured allowed origin. The existing
 [website examples](../README.md#add-the-widget-to-your-website) demonstrate the
-embed script, readiness, settings and resizing; verified identity bootstrap still
-needs implementation before real ZAQ use. ZAQ's shared bridge is implemented at
-the pinned revision; the remaining work is this package's adapter and installation.
+embed script, readiness, settings and resizing. The
+[signed bootstrap guide](authenticated-chat.md) covers backend proof issuance
+and the configuration needed before real ZAQ use.
 
 ## Baseline and acceptance
 
@@ -305,7 +309,7 @@ MIX_ENV=test mix run ../web_widget/test/support/integration/host_bo_smoke.exs
 ```
 
 It verifies create/key generation/agent routing/enable/snippet/settings restart/
-rotation/disable/re-enable. Production proof and shared-response LiveView wiring
-remain milestone 2. See the wiring plan for the upstream baseline test runner:
+rotation/disable/re-enable. Signed proof and shared-response LiveView wiring
+are now implemented in the package; live agent acceptance remains separate. See the wiring plan for the upstream baseline test runner:
 upstream tests expecting an absent adapter must run separately from this installed
 package smoke.

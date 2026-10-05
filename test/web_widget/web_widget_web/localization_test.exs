@@ -27,12 +27,27 @@ defmodule WebWidgetWeb.LocalizationTest do
       message = %{
         content: "Host text",
         error: "Host error",
-        steps: List.duplicate(%{state: "completed", label: "Host label"}, count)
+        steps:
+          List.duplicate(%{kind: "tool_call", state: "completed", label: "Host label"}, count)
       }
 
       assert [localized] = Localization.messages([message], "ar")
       assert localized.activity.complete == expected
       assert Map.delete(localized, :activity) == message
     end
+  end
+
+  test "activity summaries count only tool steps and preserve status in canonical state" do
+    steps = [
+      %{kind: "status", state: "completed"},
+      %{kind: "reasoning", state: "completed"},
+      %{kind: "tool_call", state: "completed"},
+      %{kind: "tool_result", state: "started"}
+    ]
+
+    assert [message] = Localization.messages([%{steps: steps}], "en")
+    assert message.steps == steps
+    assert message.activity.running == "1 of 2 completed"
+    assert message.activity.complete == "2 steps completed"
   end
 end

@@ -1,4 +1,4 @@
-import { createWidgetClient, type WidgetInit, type WidgetSettings } from "./widget-client";
+import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings } from "./widget-client";
 
 function createEmbed() {
   let client: ReturnType<typeof createWidgetClient> | undefined;
@@ -76,7 +76,7 @@ function createEmbed() {
       }
       connect();
     },
-    async init(context: WidgetInit) { return connect().init(context); },
+    async init(context: WidgetInit | DemoWidgetInit) { return connect().init(context); },
     async updateSettings(settings: Partial<WidgetSettings>) { return connect().updateSettings(settings); },
     async getSettings() { return connect().getSettings(); },
     dispose() {

@@ -16,6 +16,8 @@ defmodule WebWidget.E2EHost do
     session = %{
       reject: config["reject"],
       hold: config["hold"] || false,
+      step_kind: config["step_kind"] || "tool_call",
+      partial: Map.get(config, "partial", "Partial reply"),
       answer: config["answer"] || "Controlled host reply",
       history:
         Enum.map(config["history"] || [], fn message ->
@@ -88,15 +90,17 @@ defmodule WebWidget.E2EHost do
     emit(event, "response.typing", %{active: true})
     emit(event, "response.message.create", %{id: id, content: ""})
 
-    emit(event, "response.message.step", %{
-      id: "step-#{id}",
-      message_id: id,
-      kind: "tool_call",
-      state: "started",
-      label: "Controlled search"
-    })
+    if session.step_kind != "none" do
+      emit(event, "response.message.step", %{
+        id: "step-#{id}",
+        message_id: id,
+        kind: session.step_kind,
+        state: "started",
+        label: "Controlled activity"
+      })
+    end
 
-    emit(event, "response.message.edit", %{id: id, content: "Partial reply"})
+    emit(event, "response.message.edit", %{id: id, content: session.partial})
     message = Map.put(event.message, :role, "user")
     session = %{session | messages: session.messages ++ [message], pending: event}
     {:ok, if(session.hold, do: session, else: complete(session, false))}

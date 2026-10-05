@@ -95,6 +95,29 @@ defmodule WebWidget.Runtime do
     :exit, _ -> {:error, :unavailable}
   end
 
+  @doc "Checks expiry and current runtime generation before consuming a response."
+  def authorized?(session), do: match?({:ok, _}, session_config(session))
+
+  @doc "Identifies shared-protocol runtimes without exposing their private config."
+  def integrated?(widget_id),
+    do: match?({:ok, %{integration: %Protocol{}}}, delivery_config(widget_id))
+
+  @doc "Monitors the exact runtime generation to revoke connected iframe sessions."
+  def monitor(session) do
+    with {:ok, _} <- session_config(session),
+         [{pid, _}] <- Registry.lookup(WebWidget.RuntimeRegistry, session.widget_id) do
+      ref = Process.monitor(pid)
+      if authorized?(session), do: {:ok, ref}, else: demonitor_session(ref)
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  defp demonitor_session(ref) do
+    Process.demonitor(ref, [:flush])
+    {:error, :unauthorized}
+  end
+
   defp session_config(%Session{} = session) do
     with {:ok, %{integration: %Protocol{}, runtime_ref: runtime_ref} = config} <-
            delivery_config(session.widget_id),
@@ -129,6 +152,9 @@ defmodule WebWidget.Runtime do
       end
     end)
   end
+
+  @impl true
+  def format_status(status), do: Map.put(status, :state, :private_widget_runtime)
 
   @impl true
   def handle_call(:delivery_config, _from, config) do

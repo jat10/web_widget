@@ -64,8 +64,9 @@ One persisted connector identifies one widget. Keep its positive integer ID in
 Context/Delivery and use its string form in the registry and `/widget/:widget_id`.
 Do not persist a separate `widget_id` setting. Host settings are `display_name`,
 `allowed_domains` (exact HTTP(S) origins). Stylesheets are not connector settings
-or runtime hooks. Optional `params.stylesheet_url` belongs to instance initialization
-and must be absolute HTTP(S); shared constructors validate it without fetching it.
+or runtime hooks. The host shared command supports validated stylesheet params,
+but this adapter no longer accepts them through browser initialization. A future
+stylesheet bootstrap field must first be added to the signed schema.
 Theme and language remain parent-owned. Start with `multiple_conversations: false`;
 ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
@@ -91,6 +92,43 @@ remains supported. See [host integration](host-integration.md).
 
 ## Identity, embedding and parent bootstrap
 
+JWT decision: signed initialization uses compact JWT with HS256 only, verified
+by JOSE with an explicit algorithm allowlist. The HMAC key is the exact UTF-8
+connector key shown by ZAQ BO, without Base64 decoding or salt. Header `typ` is
+`JWT`. Required claims are `widget_id` (positive integer), `user_id`, nullable
+`conversation_id` and `prompt_context`, `iss`, `aud`, integer Unix-second `iat`
+and `exp`, and random `jti` (16–255 characters). Lifetime is at most 300 seconds;
+future issuance/expiry violations fail closed. Optional `nbf` is enforced.
+Unknown claims/header extensions and non-HS256 algorithms are rejected. Existing
+Phoenix.Token proofs are not accepted. Issuer/audience/replay/session revocation
+rules remain unchanged.
+
+Updated initialization decision: the authenticated browser API accepts only
+`init({identity_token})`. The signed token contains `user_id`, `conversation_id`
+and `prompt_context` (the latter two may be nil), alongside widget scope,
+issuer/audience, expiry and nonce. The server derives all initialization context
+from verified claims; unsigned overrides, settings, params and unknown fields
+are rejected. Every future initialization field must be added to the signed
+claim schema and validator. Settings are excluded from init and changed only
+through the separate settings API. Per-instance stylesheet initialization is
+withdrawn until explicitly added to the signed schema. Standalone mock fixtures
+retain their three-field test bootstrap, without settings or params; they cannot
+initialize an integrated ZAQ runtime.
+
+Milestone 2 implementation decision: opt in with `identity_verifier: :connector_key`.
+The builder binds the resolved connector token privately to `SignedIdentity`.
+Proofs use HS256 JWT with a five-minute maximum lifetime, explicit
+issuer/audience, widget, sender, issue/expiry times and random token ID.
+`SignedIdentity.sign/4` runs only in the parent backend. The browser sends the
+result as `identity_token`; verified `user_id` becomes the internal sender identity.
+Nonce consumption is atomic and node-local, survives connector replacement, and
+permits reuse only by the same LiveView process. A new LiveView/reload therefore
+requires a fresh proof. Deploy a single widget node until a shared replay store is
+configured/implemented. Never put the connector key in browser code.
+Runtime monitoring and expiry timers revoke subscriptions and prevent late delivery.
+Standalone legacy demo fixtures remain isolated from integrated runtimes; shared
+protocol fixtures exercise the production LiveView path without ZAQ dependencies.
+
 An allowed origin and a nonblank browser `user_id` do not authenticate a sender.
 The adapter must verify parent-app identity/session server-side before constructing
 Context, accepting protected operations or subscribing. Keep only the verified
@@ -99,21 +137,25 @@ ID or People bearer. ZAQ separately authorizes the sender against connector and
 conversation ownership on every operation.
 
 The parent owns its authenticated session and supplies proof through the widget
-bootstrap. The proof transport and production verifier are still to be implemented; no current
-`init({user_id})` example establishes this security property. Signing/key enrollment
+bootstrap through `init({identity_token})`; no `init({user_id})` example alone
+establishes this security property. Signing/key enrollment
 is host configuration, not a shared `widget.authenticate` command. Never retain
 credentials in prompt context, history or canonical routing metadata.
 
 The implemented server entry point is `Runtime.authenticate(widget_id, proof)`.
 The configured verifier receives `args ++ [proof, scope]`, where scope contains
 the string widget ID and integer channel configuration ID. It must verify proof
-against that scope and return `{:ok, %{sender_id: external_id, expires_at: unix_seconds}}`.
+against that scope and return `{:ok, %{sender_id: external_id, expires_at: unix_seconds,
+init: %{user_id: external_id, conversation_id: id_or_nil, prompt_context: text_or_nil}}}`.
+For custom identity-only verifiers, omitted `init` defaults to the verified sender
+and nil optional fields; no browser data can fill them. To support resume/context,
+custom verifiers must validate and return those signed claims.
 Missing/invalid/expired verification fails closed. The package retains no proof.
 The resulting server-only Session is bound to the calling process and current
 runtime generation. Never construct it from browser maps. `Runtime.dispatch/2`
 and `Runtime.subscribe/1` reject expired, foreign-process and replaced-runtime
-sessions. Connected expiry timers and automatic unsubscribe are still LiveView
-integration work; callers currently own subscription cleanup.
+sessions. The shared Chat/LiveView path monitors runtime replacement, schedules
+expiry and unsubscribes on revocation; standalone callers own cleanup.
 
 Both sides check postMessage source and exact origin. Use the iframe origin as
 `targetOrigin`. The ready/ready-request handshake means the hook is listening,
@@ -128,8 +170,8 @@ conflicting X-Frame-Options only on the widget route. Preserve other CSP directi
 HTTP framing policy changes require iframe reload. Runtime/identity revocation
 must also block existing sessions from new sends/history/response delivery.
 
-Parent inputs include user identity/proof, optional `conversation_id` and optional
-`prompt_context`. Validate a raw resume ID before calling shared constructors:
+Verified token claims include `user_id`, `conversation_id` and `prompt_context`.
+Validate their raw values before calling shared constructors:
 invalid optional identifiers can normalize to nil. Reject malformed supplied IDs
 rather than silently treating them as a new conversation. Parent context is ordinary
 user input, never permission, agent selection or privileged prompting.
@@ -254,6 +296,9 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
 
 Streaming edits replace the full content snapshot; never append as token deltas.
+Status and reasoning steps use only transient progress presentation, not persistent
+activity cards. Only explicit `tool_call` and `tool_result` steps appear in the
+activity panel and its counts; generic activity labels never imply tool execution.
 The assistant transport ID is stable across create/edit/step/terminal and may differ
 from persisted assistant/user message references. Retain those references separately.
 Never expose BO traces, private reasoning, raw tool calls or agent metadata.
@@ -291,13 +336,13 @@ Multiple-conversation listing/sidebar integration is deferred. The existing mock
 
 
 Theme and language are not persisted ZAQ widget configuration. Each iframe starts
-with `%{theme: "auto", language: "en"}`. Its allowed parent may include a partial
-`settings` object in `zaq.widget.init`, then send `zaq.widget.settings.update` at
-any time or optionally inspect current values with `zaq.widget.settings.get`.
+with `%{theme: "auto", language: "en"}`. Its allowed parent sends
+`zaq.widget.settings.update` separately from init, or optionally inspects current
+values with `zaq.widget.settings.get`. Settings in init are rejected.
 Supported values: theme `auto/light/dark`, language `en/fr/ar`. Unknown keys and
 invalid values reject the entire update. Settings cannot change identity, routing,
-origins, stylesheet URLs, or conversation ownership. Startup settings apply only
-on the first accepted context; repeated init does not rewind runtime preferences.
+origins, stylesheet URLs, or conversation ownership. Init never changes settings;
+repeated init does not rewind runtime preferences.
 
 Requests may carry `request_id`; the iframe replies to the validated parent origin
 with `zaq.widget.result`, the same ID, and either `ok: true, settings: {...}` after
@@ -323,10 +368,9 @@ without navigating the iframe again. Source and origin checks apply to the probe
 
 
 The current explicit `init({user_id})` API above describes presentation/bootstrap
-behavior, not sufficient identity proof for ZAQ v1. Add verified bootstrap without
-changing the settings ownership boundary. ZAQ stylesheets are optional absolute
-HTTP(S) URLs in initialization params, scoped to one iframe. Browser loading and
-CSP handling remain milestone 2 work; bundled default styles work without them.
+behavior, not sufficient identity proof for ZAQ v1. Verified bootstrap preserves
+the settings ownership boundary. Browser initialization no longer accepts stylesheet
+params. Standalone runtime stylesheets and the bundled defaults remain available.
 
 ## Implemented delivery boundary
 
@@ -353,7 +397,10 @@ the session supplies trusted identity/scope. Unknown fields/events and message
 editing are rejected. Raw resume IDs are checked before shared construction.
 Responses retain the host's return shapes; UI encoding is milestone 2.
 
-The remaining LiveView/mock paths must migrate together in milestone 2. Update mocks alongside
-the production lifecycle and retain meaningful assertions. Do not connect the old
-callback directly to the new sink or retain an alternate ZAQ integration to make
-legacy tests pass. The current iframe cannot yet send through the new boundary.
+Milestone 2 adds `Integration.Chat` and semantic `Integration.Response` encoding.
+Integrated runtimes use only the verified shared path in WidgetLive. A shared host
+fixture and browser smoke exercise that path, including responses queued before
+acceptance. Legacy standalone demo callbacks remain supported for existing
+consumers, but cannot dispatch to integrated runtimes. See
+[authenticated chat](authenticated-chat.md) for configuration and current
+single-node replay/50-message history limits.
