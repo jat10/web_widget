@@ -3,6 +3,7 @@ import { createWidgetClient, type WidgetInit, type WidgetSettings } from "./widg
 function createEmbed() {
   let client: ReturnType<typeof createWidgetClient> | undefined;
   let cleanup: (() => void) | undefined;
+  let ownedFrame: HTMLIFrameElement | undefined;
 
   function connect() {
     if (client) return client;
@@ -60,12 +61,29 @@ function createEmbed() {
   }
 
   return {
+    mount(url: string) {
+      const target = new URL(url);
+      if (!["https:", "http:"].includes(target.protocol)) throw new Error("Widget URL must use HTTP(S).");
+      const existing = document.getElementById("zaq-widget");
+      if (existing && (!(existing instanceof HTMLIFrameElement) || existing.src !== target.href)) {
+        throw new Error("A different widget already uses #zaq-widget.");
+      }
+      if (!existing) {
+        ownedFrame = document.createElement("iframe");
+        ownedFrame.id = "zaq-widget";
+        ownedFrame.src = target.href;
+        document.body.append(ownedFrame);
+      }
+      connect();
+    },
     async init(context: WidgetInit) { return connect().init(context); },
     async updateSettings(settings: Partial<WidgetSettings>) { return connect().updateSettings(settings); },
     async getSettings() { return connect().getSettings(); },
     dispose() {
       client?.dispose();
       cleanup?.();
+      ownedFrame?.remove();
+      ownedFrame = undefined;
       client = undefined;
       cleanup = undefined;
     },
@@ -80,3 +98,14 @@ declare global {
 
 window.zaq = window.zaq || {} as Window["zaq"];
 window.zaq.widget = window.zaq.widget || createEmbed();
+
+// A bare embed.js include retains the manual iframe API.
+const script = document.currentScript;
+if (script instanceof HTMLScriptElement && script.hasAttribute("data-widget-id")) {
+  const widgetId = script.dataset.widgetId || "";
+  if (!/^[1-9][0-9]*$/.test(widgetId)) throw new Error("Invalid widget ID.");
+  const url = new URL(`/widget/${widgetId}`, script.src).href;
+  const mount = () => window.zaq.widget.mount(url);
+  if (document.body) mount();
+  else document.addEventListener("DOMContentLoaded", mount, { once: true });
+}

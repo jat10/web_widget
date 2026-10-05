@@ -14,6 +14,21 @@ The screenshots show the local demo with mock responses.
 
 ## Add the widget to your website
 
+ZAQ BO now offers a copyable installation script at
+`/bo/channels/retrieval/web_widget`. With the package endpoint configured and
+assets built, paste the generated tag once:
+
+```html
+<script src="https://YOUR-WIDGET-HOST/web_widget/assets/embed.js" data-widget-id="42" defer></script>
+```
+
+It creates the iframe automatically and attaches the existing client/layout
+behavior. No separate iframe markup is needed. `zaq.widget.dispose()` removes
+an automatically created iframe; it preserves one supplied by your page.
+The script supplies no identity or secrets. Authenticated ZAQ bootstrap and chat
+remain milestone 2; the manual examples below use the existing mock/demo API.
+See [endpoint configuration](docs/host-integration.md#zaq-configuration-only-endpoint).
+
 ### 1. Get your widget URL
 
 Ask your ZAQ administrator for:
@@ -24,6 +39,12 @@ Ask your ZAQ administrator for:
 The administrator must add your website's exact origin to the widget's `allowed_domains`, for example `https://yourwebsite.com`. Development and staging origins need separate entries. Include the scheme and any non-default port; do not include a page path.
 
 If you are deploying the widget inside ZAQ or another Phoenix application, start with the [host integration guide](docs/host-integration.md) and [adapter contract](docs/adapter-contract.md).
+
+ZAQ shared protocol v1 has a package runtime/session boundary and a verified local
+host runtime installation. LiveView wiring and production identity are still pending.
+The examples below describe the current embed/demo API. Production ZAQ integration
+requires server-verified identity before chat access; `init({user_id})` alone is
+insufficient. See the [wiring milestones](docs/exec-plans/wiring-widget.md).
 
 ### 2. Embed and initialize
 
@@ -187,7 +208,7 @@ Contributions to behavior, accessibility, translations, documentation, and tests
 | `test/` | Elixir tests. |
 | `assets/tests/` | Playwright browser tests and mock host fixtures. |
 
-Keep canonical conversation state in LiveView and preserve the plain-map host boundary. Browser updates use the existing LiveView WebSocket. ZAQ owns routing, permissions, identity resolution, and durable state; host response events use the `response.*` namespace.
+Keep canonical browser conversation state in LiveView. Use plain maps for UI events and inputs to the host-supplied shared constructors, following the [adapter contract](docs/adapter-contract.md); keep the package independent of ZAQ internals. Browser updates use the existing LiveView WebSocket. The adapter verifies parent identity, while ZAQ owns People resolution, routing, permissions and durable state. Host response events use the `response.*` namespace.
 
 ### Checks
 
