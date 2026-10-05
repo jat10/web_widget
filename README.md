@@ -172,7 +172,7 @@ mix setup
 mix phx.server
 ```
 
-Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` and `zaq.widget.init()` API as the website integration. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
+Open `http://localhost:4000/widget-demo`. The demo renders the same installation-script markup as ZAQ: `embed.js` creates the iframe from `data-widget-id`; no iframe is written into the demo HTML. The demo then supplies its mock identity through `zaq.widget.init()`. Named demo fixtures remain supported, while ZAQ's callback requires a positive integer connector ID. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
 
 | Message | Demo response |
 | --- | --- |

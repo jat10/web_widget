@@ -1,5 +1,34 @@
 import { expect, test } from "@playwright/test";
 
+test("demo waits for its installation script to create the iframe", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const errors: string[] = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.route("**/web_widget/assets/embed.js", async route => {
+    await gate;
+    await route.continue();
+  });
+  try {
+    await page.goto("/widget-demo", { waitUntil: "commit" });
+    await expect(page.locator('script[data-widget-id="demo"][defer]')).toHaveCount(1);
+    await expect(page.locator(".zaq-demo")).toBeAttached();
+    // Parsing the demo markup does not create a frame; the installation script owns it.
+    await expect(page.locator("#zaq-widget")).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(page.locator("#zaq-widget")).toHaveCount(1);
+  await expect(page.locator("#zaq-widget")).toHaveAttribute("src", /\/widget\/demo$/);
+  const widget = page.frameLocator("#zaq-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toBeVisible();
+  await input.fill("hello");
+  await input.press("Enter");
+  await expect(widget.locator(".zaq-answer-content")).toHaveText("Hello! How can I help you today?");
+  expect(errors).toEqual([]);
+});
+
 test("demo initializes an already loaded iframe when its script loads late", async ({ page }) => {
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });

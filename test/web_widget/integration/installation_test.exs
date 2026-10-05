@@ -3,6 +3,36 @@ defmodule WebWidget.Integration.InstallationTest do
 
   alias WebWidget.Integration.Installation
 
+  test "demo fixtures share the host snippet renderer without relaxing host IDs" do
+    assert Installation.widget_script("42", "https://widget.example") ==
+             Installation.script(42, "https://widget.example")
+
+    for id <- ["demo", "theme-dark", "locale_ar"] do
+      assert {:ok, script} = Installation.widget_script(id, "https://widget.example")
+      document = LazyHTML.from_fragment(script)
+
+      assert document |> LazyHTML.query("script[defer]") |> LazyHTML.attribute("data-widget-id") ==
+               [id]
+
+      assert {:error, :invalid_widget_installation} =
+               Installation.script(id, "https://widget.example")
+    end
+
+    for id <- [
+          "",
+          "../demo",
+          "demo/path",
+          "demo?x",
+          "demo\" onload=\"x",
+          String.duplicate("x", 201),
+          <<255>>,
+          nil
+        ] do
+      assert {:error, :invalid_widget_installation} =
+               Installation.widget_script(id, "https://widget.example")
+    end
+  end
+
   test "one script tag selects a connector and uses the proxy origin or explicit endpoint" do
     assert {:ok, snippet} = Installation.script(42, "https://zaq.example/")
     document = LazyHTML.from_fragment(snippet)

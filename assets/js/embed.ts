@@ -103,7 +103,9 @@ window.zaq.widget = window.zaq.widget || createEmbed();
 const script = document.currentScript;
 if (script instanceof HTMLScriptElement && script.hasAttribute("data-widget-id")) {
   const widgetId = script.dataset.widgetId || "";
-  if (!/^[1-9][0-9]*$/.test(widgetId)) throw new Error("Invalid widget ID.");
+  if (widgetId.length > 200 || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(widgetId)) {
+    throw new Error("Invalid widget ID.");
+  }
   const url = new URL(`/widget/${widgetId}`, script.src).href;
   const mount = () => window.zaq.widget.mount(url);
   if (document.body) mount();
