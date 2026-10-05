@@ -5,7 +5,18 @@ defmodule WebWidget.Integration.Installation do
   def script(widget_id, base_url, opts \\ [])
 
   def script(widget_id, base_url, opts) when is_integer(widget_id) and widget_id > 0 do
-    with true <- Keyword.keyword?(opts),
+    widget_script(Integer.to_string(widget_id), base_url, opts)
+  end
+
+  def script(_, _, _), do: {:error, :invalid_widget_installation}
+
+  @doc "Renders the same loader for named standalone widgets and numeric host connectors."
+  def widget_script(widget_id, base_url, opts \\ [])
+
+  def widget_script(widget_id, base_url, opts) when is_binary(widget_id) do
+    with true <- String.valid?(widget_id) and byte_size(widget_id) in 1..200,
+         true <- Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9_-]*\z/, widget_id),
+         true <- Keyword.keyword?(opts),
          {:ok, _} <- origin(base_url),
          {:ok, url} <- origin(Keyword.get(opts, :public_url, base_url)) do
       src = Phoenix.HTML.html_escape(url <> "/web_widget/assets/embed.js")
@@ -21,7 +32,7 @@ defmodule WebWidget.Integration.Installation do
     end
   end
 
-  def script(_, _, _), do: {:error, :invalid_widget_installation}
+  def widget_script(_, _, _), do: {:error, :invalid_widget_installation}
 
   defp origin(url) when is_binary(url) and byte_size(url) <= 2_048 do
     with true <- String.valid?(url),
