@@ -2,14 +2,50 @@
 
 Date: 2026-10-05. Status: milestones 0, 1 and 1a are complete. BO integration,
 runtime/constructor smokes and the single-script loader pass against ZAQ
-`c38e7e4e5`. Production identity and shared-protocol LiveView wiring are next
-in milestone 2. Live deployment configuration and authenticated iframe acceptance
+`c38e7e4e5`. Milestone 2 now implements signed identity and shared-protocol LiveView chat
+for the single-node, short-transcript smoke. Live deployment configuration and authenticated iframe acceptance
 remain pending; verification used isolated test fixtures.
 
 Scope correction: ZAQ changes are limited to dependency/configuration files and
 the generated lockfile. All adapter implementation and new test harnesses belong
 to `web_widget`. Earlier proposals below for ZAQ test/module edits are superseded
 by this constraint; no such source edits are authorized.
+
+## Follow-up: signed initialization schema
+
+The parent backend now signs exactly `user_id`, `conversation_id` and
+`prompt_context` using `SignedIdentity.sign(key, widget_id, init_map, opts)`.
+The public authenticated call is only `zaq.widget.init({identity_token})`.
+Unsigned overrides, settings, params and unknown fields are rejected at the
+browser and server boundaries. Future initialization fields must be added to the
+signed schema. Settings use `updateSettings()` separately, including in the demo.
+Per-instance stylesheet initialization from the earlier milestone is withdrawn
+under this user-requested scope; the shared host constructor remains unchanged.
+The follow-up JWT migration replaces Phoenix.Token entirely; old proofs are
+rejected and must be issued again as HS256 JWTs.
+Resume requires a newly issued token containing the chosen conversation ID;
+the frontend no longer rewrites bootstrap context itself. See
+[authenticated chat](../authenticated-chat.md) for the revised backend example.
+
+Validation for this follow-up: **143 package tests**, **61 Chromium tests**,
+**2 actual ZAQ constructor smokes**, TypeScript/Vite builds, strict Credo and
+formatting all passed. Logs: `/tmp/signed-init-checks.log`,
+`/tmp/signed-init-browser.log`, `/tmp/signed-init-host.log`,
+`/tmp/signed-init-build.log`.
+
+## JWT interoperability follow-up
+
+Replaced Phoenix.Token with JOSE-backed compact JWT/HS256. Signing uses the raw
+connector key as UTF-8 HMAC secret, without salt or Base64 decoding. `iss`, `aud`,
+`iat`, `exp`, `jti` accompany the three signed init fields and numeric widget ID.
+The verifier enforces HS256, header/schema allowlists, five-minute lifetime,
+optional `nbf`, scope and replay checks. The browser API is unchanged.
+
+Validation: **145 package tests** and the authenticated Chromium installation/chat/
+resume smoke pass. That browser smoke now uses independently Node-signed tokens;
+a separate interop test verifies both Node-to-Elixir and Elixir-to-Node signing.
+Only JOSE was added to `mix.lock`. ZAQ must fetch the new dependency before restart.
+Logs: `/tmp/jwt-checks.log`, `/tmp/jwt-browser.log`.
 
 ## Current installation decision — explicit host mount
 
@@ -377,15 +413,15 @@ Validation:
 
 ## Milestone 2 — make first question, delivery and restoration work
 
-- [ ] Refactor `WidgetLive` state into verified session/readiness plus optional active conversation and active request. Opening the widget and typing a draft must create no history.
-- [ ] Consume the resolved connector key only in private adapter verification state. Choose a vetted assertion format with widget, sender, audience/issuer, expiry and replay protection; do not invent a host authentication command. Reject absent/placeholder keys. Rebuilds must invalidate old-key proofs and actively revoke affected connected sessions/subscriptions, including delivery, not merely reject their next dispatch. Keep the reject-all verifier until this is implemented and tested.
-- [ ] Carry optional initialization `params.stylesheet_url` into instance-local browser styling after validation, with suitable CSP/origin policy and cleanup. Do not persist it in ZAQ or apply one visitor's stylesheet to other instances.
-- [ ] Verify the session, establish the private subscription, then dispatch the first question. Record the correlated creation receipt before processing queued live events. In the ordinary synchronous LiveView callback, PubSub messages queue while the sink returns; if dispatch is moved to a task, buffer events until acceptance is established.
-- [ ] Set the new conversation ID only from a matching accepted receipt. Refuse a second submission until the first has an established ID, and preserve the existing active-response send guard. A resumed acceptance with `created: false` must preserve the selected ID.
-- [ ] Normalize shared responses once, using semantic type plus the trusted event mapping. Check protocol version, request ID, transport message ID and accepted conversation before rendering. Widget ID and sender come from trusted session state, not response/browser claims.
-- [ ] Keep assistant transport IDs stable during streaming. Retain persisted message references separately for restoration; they are not interchangeable IDs.
-- [ ] Apply edit bodies as full replacement text. Stop typing before a terminal event, accept at most one terminal per active response and ignore late events from an old request/session.
-- [ ] Reconnect/resume re-verifies identity, reauthorizes the conversation and loads canonical history before sending again. Persist/return the accepted conversation ID through a defined parent resume mechanism; do not promise restoration across a full page reload from LiveView memory alone.
+- [x] Refactor `WidgetLive` state into verified session/readiness plus optional active conversation and active request. Opening the widget and typing a draft must create no history.
+- [x] Consume the resolved connector key only in private adapter verification state. Choose a vetted assertion format with widget, sender, audience/issuer, expiry and replay protection; do not invent a host authentication command. Reject absent/placeholder keys. Rebuilds must invalidate old-key proofs and actively revoke affected connected sessions/subscriptions, including delivery, not merely reject their next dispatch. Keep the reject-all verifier until this is implemented and tested.
+- [x] Original per-instance stylesheet initialization was implemented, then withdrawn by the signed-init follow-up above. Current init supports only the three signed application fields; no unsigned stylesheet params.
+- [x] Verify the session, establish the private subscription, then dispatch the first question. Record the correlated creation receipt before processing queued live events. In the ordinary synchronous LiveView callback, PubSub messages queue while the sink returns; if dispatch is moved to a task, buffer events until acceptance is established.
+- [x] Set the new conversation ID only from a matching accepted receipt. Refuse a second submission until the first has an established ID, and preserve the existing active-response send guard. A resumed acceptance with `created: false` must preserve the selected ID.
+- [x] Normalize shared responses once, using semantic type plus the trusted event mapping. Check protocol version, request ID, transport message ID and accepted conversation before rendering. Widget ID and sender come from trusted session state, not response/browser claims.
+- [x] Keep assistant transport IDs stable during streaming. Retain persisted message references separately for restoration; they are not interchangeable IDs.
+- [x] Apply edit bodies as full replacement text. Stop typing before a terminal event, accept at most one terminal per active response and ignore late events from an old request/session.
+- [x] Reconnect/resume re-verifies identity, reauthorizes the conversation and loads canonical history before sending again. Persist/return the accepted conversation ID through a defined parent resume mechanism; do not promise restoration across a full page reload from LiveView memory alone.
 
 Response encoding into the current UI vocabulary:
 
@@ -403,7 +439,40 @@ Response encoding into the current UI vocabulary:
 
 History defaults to 50 messages with a host maximum of 100. Use `after_position` / `up_to_position` for bounded retrieval; do not use conversation IDs as transcript cursors. A small first smoke transcript fits one page; test pagination before broader use. Unknown/foreign/deleted resume IDs fail without replacement creation. Timeout is an unknown outcome: never automatically retry or claim cancellation. If an initial timeout yields no conversation ID, show an unresolved outcome; do not invent an ID or pretend history recovery is possible without one.
 
-Exit: fresh question, resumed question, streaming, terminal failure and known-ID history recovery work through the shared boundary.
+Execution record (2026-10-05): `Integration.SignedIdentity` now uses HS256 JWT
+with widget/sender/issuer/audience/issue-time/expiry/token-ID claims, configured explicitly with
+`:connector_key`. The replay guard is node-local and volatile; it survives
+connector replacement but is not a distributed/durable replay service. The
+reject-all verifier remains available and existing ZAQ configuration is unchanged.
+See [signed bootstrap setup](../authenticated-chat.md).
+
+`Integration.Chat` owns the verified session, optional conversation, pending
+request, transport correlation and history positions. WidgetLive subscribes before
+admission, consumes semantic replies once, monitors runtime generation/expiry and
+removes subscriptions on revocation. It preserves prompt context until acceptance,
+keeps persisted references separate, blocks unknown-outcome retries and rejects
+late/foreign events. Browser bootstrap accepts `identity_token`; the client emits
+`zaq:conversation` for parent-owned resume storage and
+`zaq:authentication-required` for obtaining a fresh proof on a new connection.
+The later signed-init follow-up removes per-instance stylesheet parameters.
+
+The selected first smoke restores 50 canonical messages. Pagination UI and
+multi-node/durable replay storage remain broader deployment work. Legacy standalone
+demo consumers retain their existing callback API; a new shared-protocol fixture
+exercises the production path without adding a reverse dependency on ZAQ.
+
+Validation: `mix precommit` passed **141 tests**, formatting, strict Credo and
+compilation. TypeScript/Vite builds passed. The full Chromium suite passed
+**61 tests**; after the final reconnect-notification guard, all **5** affected
+embedding/authentication browser tests passed again. The actual ZAQ constructor
+smoke passed **2 tests** against sibling revision `c38e7e4e5`.
+Logs: `/tmp/m2-precommit.log`, `/tmp/m2-build.log`, `/tmp/m2-all-browser.log`,
+`/tmp/m2-final-browser.log`, `/tmp/m2-shared.log`.
+No ZAQ or test-widget source/configuration was changed in this milestone. Real
+agent/model acceptance is still milestone 3 and requires host/backend setup.
+
+Exit: fresh question, resumed question, streaming, terminal failure and known-ID
+history recovery work through the shared boundary in deterministic fixtures.
 
 ## Milestone 3 — deterministic smoke using the real package
 

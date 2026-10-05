@@ -96,7 +96,11 @@ defmodule WebWidgetWeb.Localization do
   def messages(messages, locale) do
     Gettext.with_locale(WebWidgetWeb.Gettext, locale, fn ->
       Enum.map(messages, fn message ->
-        steps = Map.get(message, :steps, [])
+        steps =
+          message
+          |> Map.get(:steps, [])
+          |> Enum.filter(&(Map.get(&1, :kind) in ["tool_call", "tool_result"]))
+
         completed = Enum.count(steps, &(&1.state == "completed"))
         failed = Enum.count(steps, &(&1.state == "failed"))
 

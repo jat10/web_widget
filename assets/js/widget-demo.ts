@@ -15,11 +15,10 @@ if (installation) {
       user_id: "demo-user",
       prompt_context: `Current page: ${window.location.pathname}`,
       conversation_id: null,
-      settings: {
+    }).then(() => window.zaq.widget.updateSettings({
         theme: (params.get("theme") || "auto") as WidgetSettings["theme"],
         language: (params.get("language") || "en") as WidgetSettings["language"],
-      },
-    }).catch(error => console.error("Could not initialize demo widget", error));
+    })).catch(error => console.error("Could not initialize demo widget", error));
   };
   installation.addEventListener("load", initialize, { once: true });
   initialize();

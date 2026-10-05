@@ -78,7 +78,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
 
   defp state(view), do: :sys.get_state(view.pid).socket.assigns
 
-  test "settings default to English and parent initialization selects language", %{conn: conn} do
+  test "settings default to English and explicit updates select language", %{conn: conn} do
     {:ok, default, _} = live(conn, ~p"/widget/live-test")
     assert state(default).config.locale == "en"
 
@@ -109,7 +109,8 @@ defmodule WebWidgetWeb.WidgetLiveTest do
       assert LazyHTML.attribute(LazyHTML.query(html, "html"), "lang") == ["en"]
       assert LazyHTML.attribute(LazyHTML.query(html, "html"), "dir") == ["ltr"]
       {:ok, view, _} = live(conn, "/widget/#{id}")
-      render_hook(view, "widget.context", %{user_id: "user", settings: %{language: locale}})
+      render_hook(view, "widget.settings.update", %{settings: %{language: locale}})
+      render_hook(view, "widget.context", %{user_id: "user"})
       assert state(view).config.locale == locale
       assert state(view).config.placeholder == placeholder
       assert state(view).config.title == "Host title"
@@ -126,10 +127,12 @@ defmodule WebWidgetWeb.WidgetLiveTest do
     params = %{
       user_id: "user_123",
       prompt_context: "Current page: /billing",
-      conversation_id: "conv_123",
-      permissions: ["admin"],
-      widget_id: "untrusted"
+      conversation_id: "conv_123"
     }
+
+    render_hook(view, "widget.context", Map.put(params, :permissions, ["admin"]))
+    assert_reply(view, %{ok: false})
+    assert state(view).parent_context == nil
 
     for _ <- 1..2 do
       render_hook(view, "widget.context", params)
@@ -149,10 +152,8 @@ defmodule WebWidgetWeb.WidgetLiveTest do
   test "runtime settings preserve context and repeated init cannot reset them", %{conn: conn} do
     {:ok, view, _} = live(conn, ~p"/widget/live-test")
 
-    render_hook(view, "widget.context", %{
-      user_id: "user",
-      settings: %{theme: "dark", language: "fr"}
-    })
+    render_hook(view, "widget.context", %{user_id: "user"})
+    render_hook(view, "widget.settings.update", %{settings: %{theme: "dark", language: "fr"}})
 
     before = state(view)
     render_hook(view, "widget.settings.update", %{settings: %{language: "ar"}})
@@ -174,12 +175,12 @@ defmodule WebWidgetWeb.WidgetLiveTest do
     assert state(view).parent_context == before.parent_context
   end
 
-  test "invalid startup settings leave context uninitialized", %{conn: conn} do
+  test "settings in init are rejected and leave context uninitialized", %{conn: conn} do
     {:ok, view, _} = live(conn, ~p"/widget/live-test")
 
     render_hook(view, "widget.context", %{
       user_id: "user",
-      settings: %{theme: "dark", language: "invalid"}
+      settings: %{theme: "dark", language: "fr"}
     })
 
     assert state(view).parent_context == nil

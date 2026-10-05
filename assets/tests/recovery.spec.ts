@@ -38,6 +38,32 @@ async function embed(page: Page, user: string, id = "test-widget", multiple = fa
   return widget;
 }
 
+for (const kind of ["none", "status", "reasoning", "tool_call", "tool_result"]) {
+  test(`${kind} progress uses tool presentation only for explicit tool steps`, async ({ page, request }) => {
+    const id = await session(request, { hold: true, step_kind: kind, partial: "" });
+    await page.goto("/widget/missing");
+    const widget = await embed(page, id);
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("A simple question");
+    await input.press("Enter");
+    const isTool = kind === "tool_call" || kind === "tool_result";
+    await expect(widget.locator(".zaq-working")).toHaveText(isTool ? "Working with tools" : "Preparing your answer");
+    if (!isTool) {
+      await expect(widget.locator(".zaq-activity")).toHaveCount(0);
+      await expect(widget.locator(".zaq-response-step")).toHaveCount(0);
+    } else {
+      const step = widget.locator(`.zaq-response-step[data-kind="${kind}"]`);
+      await step.locator("summary").click();
+      await expect(step.locator(".zaq-tool-output p")).toHaveText(isTool ? "Waiting for the tool to return a result…" : "Preparing your answer");
+      if (!isTool) await expect(widget.getByText("Working with tools", { exact: true })).toHaveCount(0);
+    }
+    await complete(request, id);
+    await expect(widget.locator(".zaq-working")).toHaveCount(0);
+    await expect(widget.locator(".zaq-answer-content")).toHaveText("Controlled host reply");
+    if (!isTool) await expect(widget.locator(".zaq-activity")).toHaveCount(0);
+  });
+}
+
 for (const rejection of ["widget.init", "message.create", "conversation.history.request"]) {
   test(`${rejection} rejection preserves the draft and retries without duplicate messages`, async ({ page, request }) => {
     const id = await session(request, {

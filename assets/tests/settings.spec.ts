@@ -16,7 +16,8 @@ async function client(page: Page, id = "settings-widget", path = "theme-dark", o
 test("parent client initializes across origins and updates partial settings with applied acknowledgements", async ({ page }) => {
   await page.goto("/widget/missing");
   const widget = await client(page, "settings-widget", "theme-dark", "http://127.0.0.1:4020");
-  expect(await page.evaluate(() => (window as any)["settings-widget"].init({ user_id: "settings-user", settings: { language: "fr", theme: "dark" } }))).toEqual({ theme: "dark", language: "fr" });
+  await page.evaluate(() => (window as any)["settings-widget"].init({ user_id: "settings-user" }));
+  expect(await page.evaluate(() => (window as any)["settings-widget"].updateSettings({ language: "fr", theme: "dark" }))).toEqual({ theme: "dark", language: "fr" });
   await expect(widget.getByRole("textbox", { name: "Message", exact: true })).toHaveAttribute("placeholder", "Posez une question…");
   await expect(widget.locator(".zaq-widget")).toHaveCSS("color-scheme", "dark");
   await page.emulateMedia({ colorScheme: "dark" });
@@ -75,13 +76,17 @@ test("settings preserve an active response, draft and selected conversation", as
 test("runtime preferences survive reconnect and stale init; client reapplies them after reload", async ({ page }) => {
   await page.goto("/widget/missing");
   const widget = await client(page);
-  await page.evaluate(() => (window as any)["settings-widget"].init({ user_id: "settings-user", settings: { language: "fr", theme: "light" } }));
+  await page.evaluate(() => (window as any)["settings-widget"].init({ user_id: "settings-user" }));
+  await page.evaluate(() => (window as any)["settings-widget"].updateSettings({ language: "fr", theme: "light" }));
   await page.evaluate(() => (window as any)["settings-widget"].updateSettings({ language: "ar", theme: "dark" }));
   const frame = page.frames().find(frame => frame.parentFrame())!;
   await frame.evaluate(() => new Promise<void>(resolve => (window as any).liveSocket.disconnect(resolve)));
   await frame.evaluate(() => (window as any).liveSocket.connect());
   expect(await page.evaluate(() => (window as any)["settings-widget"].getSettings())).toEqual({ theme: "dark", language: "ar" });
-  await page.evaluate(() => (window as any)["settings-widget"].init({ user_id: "settings-user", settings: { theme: "light", language: "en" } }));
+  expect(await page.evaluate(async () => {
+    try { await (window as any)["settings-widget"].init({ user_id: "settings-user", settings: { theme: "light", language: "en" } }); return false; }
+    catch { return true; }
+  })).toBe(true);
   await expect(widget.locator("html")).toHaveAttribute("lang", "ar");
   await frame.goto(frame.url());
   await expect(widget.getByRole("textbox", { name: "الرسالة", exact: true })).toBeVisible();

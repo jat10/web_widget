@@ -15,12 +15,23 @@ defmodule WebWidget.SharedProtocolSmokeTest do
   # credo:disable-for-next-line Credo.Check.Warning.WrongTestFilename
   use ExUnit.Case
 
+  alias WebWidget.Integration.Chat
   alias WebWidget.Integration.RuntimeBuilder
   alias WebWidget.Runtime
   alias Zaq.Channels.Web.{Command, Context, Delivery, Message, Response}
 
   def verify(:fixture_session, %{channel_config_id: 42}),
-    do: {:ok, %{sender_id: "verified-parent-user", expires_at: System.system_time(:second) + 60}}
+    do:
+      {:ok,
+       %{
+         sender_id: "verified-parent-user",
+         expires_at: System.system_time(:second) + 60,
+         init: %{
+           user_id: "verified-parent-user",
+           conversation_id: nil,
+           prompt_context: "Parent context"
+         }
+       }}
 
   def verify(_, _), do: {:error, :unauthorized}
 
@@ -53,6 +64,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
         request_id: message.request_id,
         type: :conversation_created,
         conversation_id: "fixture-chat",
+        message_id: "transport-assistant",
         payload: %{created: true, accepted: true}
       })
 
@@ -68,10 +80,58 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     Phoenix.PubSub.broadcast(
       __MODULE__.PubSub,
       delivery.topic,
+      {:web_response, delivery.events.message_create,
+       %{terminal | type: :message_create, payload: %{body: ""}}}
+    )
+
+    Phoenix.PubSub.broadcast(
+      __MODULE__.PubSub,
+      delivery.topic,
       {:web_response, delivery.events.message_complete, terminal}
     )
 
     {:ok, response}
+  end
+
+  test "chat lifecycle accepts actual semantic receipts and queued shared responses" do
+    start_supervised!({Phoenix.PubSub, name: __MODULE__.PubSub})
+    config = %{id: 42, provider: "web_widget"}
+
+    hooks = %{
+      widget_id: 42,
+      display_name: "Chat smoke",
+      allowed_domains: ["https://parent.example"],
+      message: Message,
+      command: Command,
+      response: Response,
+      context: Context,
+      delivery: Delivery,
+      sink_mfa: {__MODULE__, :ingress, [config]}
+    }
+
+    {:ok, {spec, []}} =
+      RuntimeBuilder.build(config, hooks,
+        pubsub_server: __MODULE__.PubSub,
+        identity_verifier: {__MODULE__, :verify, []}
+      )
+
+    start_supervised!(spec)
+
+    assert {:ok, chat} =
+             Chat.open("42", %{
+               "identity_token" => :fixture_session
+             })
+
+    assert chat.conversation_id == nil
+    assert {:ok, chat} = Chat.submit(chat, "Question")
+    assert chat.conversation_id == "fixture-chat"
+    assert_receive {:web_response, event, create}
+    chat = Chat.receive_response(chat, event, create)
+    assert_receive {:web_response, event, terminal}
+    chat = Chat.receive_response(chat, event, terminal)
+    assert chat.active == nil
+    assert List.last(chat.state.messages).content == "Fixture answer"
+    Chat.close(chat)
   end
 
   test "package builder and session use actual shared constructors and prefix-bound ingress" do

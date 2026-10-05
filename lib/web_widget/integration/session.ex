@@ -16,7 +16,7 @@ defmodule WebWidget.Integration.Session do
     :runtime_ref,
     :topic
   ]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [init: nil]
 
   @doc false
   def valid?(%__MODULE__{} = session, runtime_ref, config_id) do

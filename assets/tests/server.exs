@@ -19,6 +19,7 @@ Application.put_env(:web_widget, WebWidgetWeb.Endpoint, config)
 
 # Controls exist only in the Playwright server, never in application routes.
 Code.require_file("assets/tests/support/controlled_host.exs")
+Code.require_file("assets/tests/support/shared_host.exs")
 Code.require_file("assets/tests/support/control.exs")
 {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, WebWidget.E2EHost)
 {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, {Bandit, plug: WebWidget.E2EControl, ip: {127, 0, 0, 1}, port: 4021})

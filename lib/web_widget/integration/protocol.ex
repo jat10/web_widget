@@ -7,7 +7,7 @@ defmodule WebWidget.Integration.Protocol do
   command/acceptance/error shapes; browser response encoding belongs to LiveView.
   """
 
-  alias WebWidget.Integration.Session
+  alias WebWidget.Integration.{InitClaims, Session}
 
   @enforce_keys [:hooks, :pubsub_server, :identity_verifier]
   defstruct @enforce_keys
@@ -61,16 +61,20 @@ defmodule WebWidget.Integration.Protocol do
     id = integration.hooks.widget_id
     scope = %{widget_id: Integer.to_string(id), channel_config_id: id}
 
-    with {:ok, %{sender_id: sender, expires_at: expiry}} <-
+    with {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
            invoke(integration.identity_verifier, [proof, scope]),
          true <- identifier?(sender),
-         true <- is_integer(expiry) and expiry > System.system_time(:second) do
+         true <- is_integer(expiry) and expiry > System.system_time(:second),
+         {:ok, init} <-
+           InitClaims.normalize(Map.get(verified, :init, %{user_id: String.trim(sender)})),
+         true <- init.user_id == String.trim(sender) do
       {:ok,
        struct!(
          Session,
          Map.merge(scope, %{
            sender_id: String.trim(sender),
            expires_at: expiry,
+           init: init,
            runtime_ref: runtime_ref,
            owner: self(),
            topic:

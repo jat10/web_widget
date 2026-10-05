@@ -247,12 +247,14 @@ function AssistantMessage() {
   const error = useAuiState((s) => s.message.metadata.custom.error) as string | null | undefined;
   const running = useAuiState((s) => s.message.status?.type === "running");
   const hasContent = useAuiState((s) => s.message.metadata.custom.hasContent) as boolean;
-  const activeTools = steps?.some(step => step.state === "started" || step.state === "updated");
+  const toolSteps = steps?.filter(step => step.kind === "tool_call" || step.kind === "tool_result");
+  const activeTools = toolSteps?.some(step =>
+    (step.state === "started" || step.state === "updated"));
   return (
     <><MessageDate />
     <MessagePrimitive.Root className="zaq-message zaq-message-assistant" data-role="assistant" data-running={running}>
       <div className="zaq-answer-heading"><span className="zaq-assistant-mark zaq-assistant-mark-small" aria-hidden="true"><ActivityIcon kind="assistant" /></span><span>{t["Assistant"]}</span></div>
-      {!!steps?.length && <ResponseActivity steps={steps} running={running} failed={!!error} />}
+      {!!toolSteps?.length && <ResponseActivity steps={toolSteps} running={running} failed={!!error} />}
       <div dir="auto" className="zaq-answer-content" data-streaming={running && hasContent}>
         <MessagePrimitive.Parts />
       </div>
@@ -320,18 +322,19 @@ function ResponseActivity({ steps, running, failed }: { steps: Step[]; running: 
 
 function ResponseStep({ step }: { step: Step }) {
   const { strings: t } = useI18n();
+  const isTool = step.kind === "tool_call" || step.kind === "tool_result";
   const running = step.state === "started" || step.state === "updated";
   const status = running ? "running" : step.state === "completed" ? "complete" : "failed";
   const kind = { tool_call: t["Tool call"], tool_result: t["Tool result"], reasoning: t["Reasoning"], status: t["Activity"] }[step.kind];
   return (
     <details className="zaq-response-step" data-kind={step.kind} data-status={status} data-step-id={step.id} open={step.state === "failed" ? true : undefined}>
       <summary>
-        <span className="zaq-tool-icon"><ActivityIcon kind={status === "running" ? "running" : status === "failed" ? "failed" : "tool"} /></span>
+        <span className="zaq-tool-icon"><ActivityIcon kind={status === "running" ? "running" : status === "failed" ? "failed" : isTool ? "tool" : "complete"} /></span>
         <span className="zaq-tool-heading"><span className="zaq-tool-kind">{kind}</span><strong dir="auto">{step.label}</strong></span>
         <span className="zaq-step-state">{running ? t["Running"] : step.state === "completed" ? t["Done"] : t["Failed"]}</span>
         <span className="zaq-chevron"><ActivityIcon kind="chevron" /></span>
       </summary>
-      <div className="zaq-tool-output"><span className="zaq-output-label">{running ? t["Progress"] : step.state === "failed" ? t["Error details"] : t["Result"]}</span><p dir="auto">{step.content || (running ? t["Waiting for the tool to return a result…"] : step.state === "failed" ? t["This step could not be completed."] : t["This step finished without additional output."])}</p></div>
+      <div className="zaq-tool-output"><span className="zaq-output-label">{running ? t["Progress"] : step.state === "failed" ? t["Error details"] : t["Result"]}</span><p dir="auto">{step.content || (running ? isTool ? t["Waiting for the tool to return a result…"] : t["Preparing your answer"] : step.state === "failed" ? t["This step could not be completed."] : t["This step finished without additional output."])}</p></div>
     </details>
   );
 }
