@@ -90,7 +90,6 @@ body.zaq-widget-page { margin: 0; overflow: hidden; }
 .zaq-assistant-mark-small svg { width: 15px; height: 15px; }
 .zaq-answer-content { white-space: pre-wrap; }
 .zaq-answer-content:empty { display: none; }
-.zaq-answer-content[data-streaming="true"]::after { content: ""; display: inline-block; width: 5px; height: 14px; margin-inline-start: 4px; vertical-align: -2px; border-radius: 2px; background: var(--zaq-widget-primary); animation: zaq-widget-pulse .7s ease-in-out infinite alternate; }
 .zaq-working { display: flex; align-items: center; gap: 9px; margin-top: 14px; color: var(--zaq-widget-muted); font-size: 12px; }
 .zaq-working-dots { display: inline-flex; gap: 3px; }
 .zaq-working-dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--zaq-widget-primary); animation: zaq-widget-pulse .7s ease-in-out infinite alternate; }

@@ -17,11 +17,11 @@ defmodule WebWidget.E2ESharedHost do
     Supervisor.start_child(WebWidget.Supervisor, spec)
   end
 
-  def bootstrap(conversation_id \\ nil) do
+  def bootstrap(conversation_id \\ nil, ttl \\ 300) do
     now = System.system_time(:second)
     claims = %{widget_id: 420, user_id: "e2e-visitor", conversation_id: conversation_id,
       prompt_context: "Signed page context", iss: "e2e-parent", aud: "e2e-widget",
-      iat: now, exp: now + 300, jti: Ecto.UUID.generate()}
+      iat: now, exp: now + ttl, jti: Ecto.UUID.generate()}
     {token, 0} = System.cmd("node", ["test/support/integration/jwt_interop.cjs"],
       env: [{"WIDGET_TEST_KEY", key()}, {"WIDGET_TEST_CLAIMS", Jason.encode!(claims)}])
     {:ok, script} = WebWidget.Integration.Installation.script(420, "http://127.0.0.1:4020")

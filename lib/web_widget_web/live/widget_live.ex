@@ -26,10 +26,13 @@ defmodule WebWidgetWeb.WidgetLive do
     strings = Localization.strings(locale)
 
     {:ok,
-     assign(socket,
+     socket
+     |> stream(:ui_messages, [])
+     |> assign(
        widget: true,
        integrated: Runtime.integrated?(widget.widget_id),
        chat: nil,
+       authentication_pending: false,
        verified_sender: nil,
        settings: Settings.defaults(),
        widget_locale: locale,
@@ -54,7 +57,7 @@ defmodule WebWidgetWeb.WidgetLive do
        config: %{
          title: widget.display_name,
          locale: locale,
-         theme: "auto",
+         theme: "light",
          strings: strings,
          multiple_conversations: Map.get(widget, :multiple_conversations, false),
          placeholder: strings["Ask a question…"],
@@ -96,9 +99,10 @@ defmodule WebWidgetWeb.WidgetLive do
           socket={@socket}
           mode={@mode}
           canReopen={@conversation_opened}
-          messages={Localization.messages(@messages, @config.locale)}
+          messages={@streams.ui_messages}
           isRunning={@pending_reply != nil}
           isTyping={@typing}
+          authenticationPending={@authentication_pending}
           responseError={@error}
           config={@config}
           conversations={@conversations}
@@ -183,7 +187,7 @@ defmodule WebWidgetWeb.WidgetLive do
 
       {:reply, %{ok: true},
        socket
-       |> assign(Conversation.new())
+       |> assign_state(Conversation.new())
        |> assign(
          accepted_context: nil,
          subscription: nil,
@@ -264,6 +268,10 @@ defmodule WebWidgetWeb.WidgetLive do
     {:reply, %{ok: false, error: ui(socket, "Widget context with user_id is required.")}, socket}
   end
 
+  def handle_event("widget.submit", _params, %{assigns: %{authentication_pending: true}} = socket) do
+    {:reply, %{ok: false, error: "Authentication renewal is required before sending."}, socket}
+  end
+
   def handle_event("widget.submit", %{"text" => text}, %{assigns: %{integrated: true}} = socket)
       when is_binary(text) do
     text = String.trim(text)
@@ -315,18 +323,23 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   @impl true
+  def handle_info({:web_response, _, _}, %{assigns: %{authentication_pending: true}} = socket),
+    do: {:noreply, socket}
+
   def handle_info({:web_response, event, response}, %{assigns: %{chat: chat}} = socket)
       when not is_nil(chat) do
     if Runtime.authorized?(chat.session) do
       {:noreply, assign_chat(socket, Chat.receive_response(chat, event, response))}
     else
-      {:noreply, revoke_chat(socket)}
+      if chat.session.expires_at <= System.system_time(:second),
+        do: {:noreply, expire_chat(socket)},
+        else: {:noreply, revoke_chat(socket)}
     end
   end
 
   def handle_info({:widget_session_expired, ref}, %{assigns: %{chat: chat}} = socket)
       when not is_nil(chat) do
-    {:noreply, if(chat.session.topic == ref, do: revoke_chat(socket), else: socket)}
+    {:noreply, if(chat.session.topic == ref, do: expire_chat(socket), else: socket)}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{assigns: %{chat: chat}} = socket)
@@ -343,7 +356,7 @@ defmodule WebWidgetWeb.WidgetLive do
            Response.normalize(event),
          true <- widget_id == socket.assigns.widget_id do
       state = Conversation.apply_event(conversation_state(socket), response)
-      {:noreply, socket |> assign(state) |> cache_current()}
+      {:noreply, socket |> assign_state(state) |> cache_current()}
     else
       _ -> {:noreply, socket}
     end
@@ -358,11 +371,25 @@ defmodule WebWidgetWeb.WidgetLive do
 
   defp assign_chat(socket, chat) do
     socket
-    |> assign(chat.state)
+    |> assign_state(chat.state)
     |> assign(
       chat: chat,
+      authentication_pending: false,
       accepted_context: %{user_id: chat.session.sender_id, conversation_id: chat.conversation_id}
     )
+  end
+
+  defp expire_chat(%{assigns: %{authentication_pending: true}} = socket), do: socket
+
+  defp expire_chat(socket) do
+    chat = socket.assigns.chat
+    Adapter.unsubscribe(chat.subscription)
+    Process.cancel_timer(chat.timer)
+
+    # Keep the runtime monitor: connector revocation must still clear the view.
+    socket
+    |> assign(authentication_pending: true, pending_reply: nil, typing: false)
+    |> push_event("widget.authentication.required", %{})
   end
 
   defp revoke_chat(socket) do
@@ -371,6 +398,7 @@ defmodule WebWidgetWeb.WidgetLive do
     socket
     |> assign(
       chat: nil,
+      authentication_pending: false,
       parent_context: nil,
       accepted_context: nil,
       pending_reply: nil,
@@ -378,6 +406,7 @@ defmodule WebWidgetWeb.WidgetLive do
       messages: [],
       error: "Widget session expired. Reconnect to continue."
     )
+    |> stream(:ui_messages, [], reset: true)
     |> push_event("widget.authentication.required", %{})
   end
 
@@ -401,7 +430,7 @@ defmodule WebWidgetWeb.WidgetLive do
 
       candidate =
         socket
-        |> assign(Conversation.new())
+        |> assign_state(Conversation.new())
         |> assign(accepted_context: context, subscription: subscription, new_chat: false)
 
       candidate
@@ -454,7 +483,7 @@ defmodule WebWidgetWeb.WidgetLive do
 
     cond do
       cached ->
-        {:ok, assign(candidate, cached)}
+        {:ok, assign_state(candidate, cached)}
 
       parent.conversation_id ||
           (socket.assigns.config.multiple_conversations && not socket.assigns.new_chat) ->
@@ -494,7 +523,8 @@ defmodule WebWidgetWeb.WidgetLive do
             widget_id: ^widget_id,
             conversation_id: ^conversation_id
           } = response} <- Response.normalize(response) do
-      socket = assign(socket, Conversation.apply_event(conversation_state(socket), response))
+      socket =
+        assign_state(socket, Conversation.apply_event(conversation_state(socket), response))
 
       socket =
         if socket.assigns.config.multiple_conversations do
@@ -538,7 +568,7 @@ defmodule WebWidgetWeb.WidgetLive do
 
       {:reply, %{ok: true},
        socket
-       |> assign(state)
+       |> assign_state(state)
        |> assign(mode: :conversation, conversation_opened: true)
        |> cache_current()}
     else
@@ -603,7 +633,40 @@ defmodule WebWidgetWeb.WidgetLive do
         follow_up_placeholder: strings["Ask a follow-up…"]
       })
 
-    assign(socket, settings: settings, config: config)
+    socket
+    |> assign(settings: settings, config: config)
+    |> sync_messages(socket.assigns.messages, socket.assigns.config.locale)
+  end
+
+  defp assign_state(socket, state) do
+    previous = socket.assigns.messages
+    locale = socket.assigns.config.locale
+
+    socket
+    |> assign(state)
+    |> sync_messages(previous, locale)
+  end
+
+  defp sync_messages(socket, previous, previous_locale) do
+    messages = socket.assigns.messages
+    locale = socket.assigns.config.locale
+    previous_ids = Enum.map(previous, & &1.id)
+    ids = Enum.map(messages, & &1.id)
+
+    if Enum.take(ids, length(previous_ids)) != previous_ids do
+      stream(socket, :ui_messages, Localization.messages(messages, locale), reset: true)
+    else
+      previous_by_id = Map.new(previous, &{&1.id, &1})
+
+      changed =
+        Enum.filter(messages, fn message ->
+          locale != previous_locale or Map.get(previous_by_id, message.id) != message
+        end)
+
+      Enum.reduce(Localization.messages(changed, locale), socket, fn message, socket ->
+        stream_insert(socket, :ui_messages, message)
+      end)
+    end
   end
 
   defp ui(socket, text), do: get_in(socket.assigns, [:config, :strings, text]) || text

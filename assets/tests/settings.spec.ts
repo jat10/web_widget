@@ -34,7 +34,7 @@ test("parent client initializes across origins and updates partial settings with
 test("invalid settings are atomic and ordered updates preserve omitted values", async ({ page }) => {
   await page.goto("/widget/missing");
   const widget = await client(page);
-  expect(await page.evaluate(() => (window as any)["settings-widget"].getSettings())).toEqual({ theme: "auto", language: "en" });
+  expect(await page.evaluate(() => (window as any)["settings-widget"].getSettings())).toEqual({ theme: "light", language: "en" });
   expect(await page.evaluate(async () => {
     try { await (window as any)["settings-widget"].init({ user_id: "settings-user", settings: { theme: "dark", language: "de" } }); return false; } catch { return true; }
   })).toBe(true);
@@ -44,7 +44,7 @@ test("invalid settings are atomic and ordered updates preserve omitted values", 
     expect(await page.evaluate(async patch => {
       try { await (window as any)["settings-widget"].updateSettings(patch); return false; } catch { return true; }
     }, patch)).toBe(true);
-    expect(await page.evaluate(() => (window as any)["settings-widget"].getSettings())).toEqual({ theme: "auto", language: "en" });
+    expect(await page.evaluate(() => (window as any)["settings-widget"].getSettings())).toEqual({ theme: "light", language: "en" });
   }
   expect(await page.evaluate(() => Promise.all([
     (window as any)["settings-widget"].updateSettings({ theme: "dark" }),
@@ -120,7 +120,7 @@ test("sibling and untrusted-origin settings cannot affect another widget", async
     other.postMessage({ type: "zaq.widget.settings.update", settings: { language: "ar" } }, location.origin);
   });
   await frames[1].evaluate(() => window.dispatchEvent(new MessageEvent("message", { source: window.parent, origin: "https://untrusted.example", data: { type: "zaq.widget.settings.update", settings: { language: "ar" } } })));
-  expect(await page.evaluate(() => (window as any).second.getSettings())).toEqual({ theme: "auto", language: "en" });
+  expect(await page.evaluate(() => (window as any).second.getSettings())).toEqual({ theme: "light", language: "en" });
   await page.evaluate(() => (window as any).second.dispose());
   expect(await page.evaluate(async () => { try { await (window as any).second.getSettings(); return false; } catch { return true; } })).toBe(true);
 });

@@ -4,6 +4,7 @@ import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
   MessagePrimitive,
+  MessagePartPrimitive,
   ThreadPrimitive,
   useAuiState,
   useExternalStoreRuntime,
@@ -32,7 +33,7 @@ type Config = {
   max_length: number;
 };
 type ConversationSummary = { id: string; title: string };
-type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; isTyping: boolean; responseError?: string | null; config: Config };
+type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
 
 const I18n = createContext<Pick<Config, "locale" | "strings"> | null>(null);
 function useI18n() {
@@ -67,7 +68,7 @@ function dateLabel(timestamp: string, locale: string, t: Record<string, string>)
   return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function WebWidget({ mode, messages, isRunning, isTyping, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
+export function WebWidget({ mode, messages, isRunning, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
   const { pushEvent } = useLiveReact();
   const t = config.strings;
   const [submitting, setSubmitting] = useState(false);
@@ -80,18 +81,21 @@ export function WebWidget({ mode, messages, isRunning, isTyping, responseError, 
     const timer = window.setInterval(() => setToday(calendarDay(new Date())), 60000);
     return () => window.clearInterval(timer);
   }, []);
-  const datedMessages = messages.map((message, index) => ({
-    ...message,
-    dateSeparator: message.timestamp && (index === 0 || messageDay(message.timestamp) !== messageDay(messages[index - 1]?.timestamp))
-      ? dateLabel(message.timestamp, config.locale, t) : undefined,
-  }));
+  let previousDay: string | undefined;
+  const datedMessages = messages.map(message => {
+    const day = messageDay(message.timestamp);
+    const dateSeparator = message.timestamp && day !== previousDay
+      ? dateLabel(message.timestamp, config.locale, t) : undefined;
+    if (day) previousDay = day;
+    return { ...message, dateSeparator };
+  });
 
   // LiveView is the source of truth. This runtime only adapts its props for assistant-ui.
   const runtime = useExternalStoreRuntime({
     messages: datedMessages,
     convertMessage: message => convertMessage(message, t["Unable to complete response"]),
     isRunning,
-    isSendDisabled: submitting || isRunning,
+    isSendDisabled: submitting || isRunning || authenticationPending,
     onNew: async (message) => {
       const text = message.content
         .filter((part) => part.type === "text")
@@ -171,7 +175,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, responseError, 
         <div className="zaq-chat-main" key="chat-main">
         {mode === "conversation" && <Conversation title={config.title} isTyping={isTyping} onClose={() => pushEvent("widget.close", {})} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
-        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning} error={error || responseError || null} />
+        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} error={error || responseError || null} />
         </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider></I18n.Provider>
@@ -241,6 +245,10 @@ function UserMessage() {
   return <><MessageDate /><MessagePrimitive.Root className="zaq-message zaq-message-user" data-role="user"><span className="zaq-user-content" dir="auto"><MessagePrimitive.Parts /></span><MessageTime /></MessagePrimitive.Root></>;
 }
 
+function ImmediateText() {
+  return <MessagePartPrimitive.Text smooth={false} />;
+}
+
 function AssistantMessage() {
   const { strings: t } = useI18n();
   const steps = useAuiState((s) => s.message.metadata.custom.steps) as Step[] | undefined;
@@ -256,7 +264,7 @@ function AssistantMessage() {
       <div className="zaq-answer-heading"><span className="zaq-assistant-mark zaq-assistant-mark-small" aria-hidden="true"><ActivityIcon kind="assistant" /></span><span>{t["Assistant"]}</span></div>
       {!!toolSteps?.length && <ResponseActivity steps={toolSteps} running={running} failed={!!error} />}
       <div dir="auto" className="zaq-answer-content" data-streaming={running && hasContent}>
-        <MessagePrimitive.Parts />
+        <MessagePrimitive.Parts components={{ Text: ImmediateText }} />
       </div>
       <MessageTime />
       {running && <WorkingIndicator label={hasContent ? t["Writing response"] : activeTools ? t["Working with tools"] : t["Preparing your answer"]} />}

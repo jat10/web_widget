@@ -61,3 +61,38 @@ test("generated installation script authenticates, chats and restores with a fre
     return renewals;
   })).toBe(0);
 });
+
+test("token expiry and renewal preserve the mounted chat and draft", async ({ page, request }) => {
+  const bootstrap = await (await request.get("http://127.0.0.1:4021/identity?short=true")).json();
+  await page.goto("/widget/missing");
+  await page.evaluate(async ({ installation_script, identity_token }) => {
+    const source = new DOMParser().parseFromString(installation_script, "text/html").querySelector("script")!;
+    const script = document.createElement("script");
+    for (const attribute of source.attributes) script.setAttribute(attribute.name, attribute.value);
+    await new Promise<void>((resolve, reject) => {
+      script.onload = () => resolve(); script.onerror = () => reject(new Error("Loader failed"));
+      document.body.append(script);
+    });
+    const frame = document.getElementById("zaq-widget")!;
+    frame.addEventListener("zaq:authentication-required", () => frame.dataset.expired = "true");
+    await window.zaq.widget.init({ identity_token });
+  }, bootstrap);
+  const widget = page.frameLocator("#zaq-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("instant");
+  await input.press("Enter");
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  await input.fill("Keep this unsent draft");
+  await input.evaluate(element => { (window as any).originalComposer = element; });
+  await expect(page.locator("#zaq-widget")).toHaveAttribute("data-expired", "true", { timeout: 6000 });
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  await expect(input).toHaveValue("Keep this unsent draft");
+  await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+  expect(await input.evaluate(element => element === (window as any).originalComposer)).toBe(true);
+  const fresh = await (await request.get("http://127.0.0.1:4021/identity?conversation_id=conversation-1")).json();
+  await page.evaluate(identity_token => window.zaq.widget.init({ identity_token }), fresh.identity_token);
+  await expect(widget.getByText("Saved answer", { exact: true })).toBeVisible();
+  await expect(input).toHaveValue("Keep this unsent draft");
+  await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  expect(await input.evaluate(element => element === (window as any).originalComposer)).toBe(true);
+});

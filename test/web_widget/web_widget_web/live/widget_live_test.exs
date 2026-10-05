@@ -184,7 +184,7 @@ defmodule WebWidgetWeb.WidgetLiveTest do
     })
 
     assert state(view).parent_context == nil
-    assert state(view).settings == %{"theme" => "auto", "language" => "en"}
+    assert state(view).settings == %{"theme" => "light", "language" => "en"}
   end
 
   test "optional bootstrap fields support new conversations and string context", %{conn: conn} do

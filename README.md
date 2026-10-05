@@ -1,10 +1,17 @@
 # ZAQ Web Widget
 
-Add a floating chat widget to your website. Visitors can send messages, follow streamed responses and tool activity, and continue chatting without leaving the page.
+Embed a floating ZAQ chat on a website with one installation script. The script creates and positions an iframe; the chat runs inside it, so the website's styles and JavaScript stay separate from the widget. ZAQ owns agent routing, identity resolution, permissions, and durable conversations. This package owns the iframe, browser state, and chat presentation.
 
-The widget provides light and dark themes, English, French, and Arabic UI, and a responsive layout. It is built with Phoenix LiveView, React, and assistant-ui. ZAQ supplies the assistant, message routing, and conversation storage; the widget handles presentation and embedding.
+## Features
 
-## Preview
+- Chat with a ZAQ agent through the existing LiveView connection, including live response updates, typing status, and conversation resume.
+- A copyable installation script in ZAQ's Web Widget back office. It mounts the iframe automatically and includes no credentials.
+- Backend-signed, five-minute HS256 identity tokens scoped to a widget and user. The website keeps the connector authentication key on its backend.
+- Light (default), dark, and automatic themes; English, French, and Arabic controls, with right-to-left layout for Arabic.
+- A parent-page API for initialization and settings: `zaq.widget.init`, `getSettings`, and `updateSettings`. Conversation and authentication-renewal events help the host website keep a chat open across page loads.
+- Responsive floating launcher and full-height chat.
+
+Response activity is displayed when the host supplies it. ZAQ's current widget response path sends generic activity steps rather than public tool-call details, so a tool call visible in ZAQ's back office may not appear as a named tool in the widget.
 
 | Light theme | Dark theme |
 | --- | --- |
@@ -12,157 +19,40 @@ The widget provides light and dark themes, English, French, and Arabic UI, and a
 
 The screenshots show the local demo with mock responses.
 
-## Add the widget to your website
+## Integrate on your website
 
-ZAQ BO now offers a copyable installation script at
-`/bo/channels/retrieval/web_widget`. With the package endpoint configured and
-assets built, paste the generated tag once:
+Create and enable a Web Widget configuration in ZAQ's back office at `/bo/channels/retrieval/web_widget`. Add your website's exact origin to **Allowed embedding origins** and save the generated **Authentication key** in your website backend's secret store. Then paste the configuration's installation script into your website:
 
 ```html
-<script src="https://YOUR-WIDGET-HOST/web_widget/assets/embed.js" data-widget-id="42" defer></script>
+<script src="https://YOUR-ZAQ-HOST/web_widget/assets/embed.js" data-widget-id="42" defer></script>
 ```
 
-It creates the iframe automatically and attaches the existing client/layout
-behavior. No separate iframe markup is needed. `zaq.widget.dispose()` removes
-an automatically created iframe; it preserves one supplied by your page.
-The script supplies no identity or secrets. For authenticated ZAQ chat, follow
-the [signed bootstrap smoke guide](docs/authenticated-chat.md). The manual
-examples below use the existing mock/demo API.
-See [endpoint configuration](docs/host-integration.md#zaq-configuration-only-endpoint).
-
-### 1. Get your widget URL
-
-Ask your ZAQ administrator for:
-
-- Your widget URL, such as `https://YOUR-ZAQ-HOST/widget/YOUR-WIDGET-ID`.
-- The embed script URL, such as `https://YOUR-ZAQ-HOST/web_widget/assets/embed.js`.
-
-The administrator must add your website's exact origin to the widget's `allowed_domains`, for example `https://yourwebsite.com`. Development and staging origins need separate entries. Include the scheme and any non-default port; do not include a page path.
-
-If you are deploying the widget inside ZAQ or another Phoenix application, start with the [host integration guide](docs/host-integration.md) and [adapter contract](docs/adapter-contract.md).
-
-ZAQ shared protocol v1 has a package runtime/session boundary and a verified local
-host runtime installation. Signed bootstrap, shared-response LiveView delivery
-and short-transcript restoration are implemented and tested with host fixtures.
-The examples below describe the current embed/demo API. Production ZAQ integration
-requires server-verified identity before chat access; `init({user_id})` alone is
-insufficient. See the [wiring milestones](docs/exec-plans/wiring-widget.md).
-
-### 2. Embed and initialize
-
-Add this once to your website's shared layout. Replace the URLs and supply the current visitor's ID:
-
-```html
-<iframe
-  src="https://YOUR-ZAQ-HOST/widget/YOUR-WIDGET-ID"
-  id="zaq-widget"
-  title="ZAQ widget"
-></iframe>
-
-<script src="https://YOUR-ZAQ-HOST/web_widget/assets/embed.js"></script>
-<script>
-  zaq.widget.init({
-    user_id: "YOUR-VISITOR-ID",
-  }).catch(error => console.error("Could not initialize chat", error));
-</script>
-```
-
-The chat stays hidden until a valid `user_id` is accepted. The embed script handles readiness, message validation, default iframe styling, expansion, and page scrolling. You do not need your own `postMessage` or resize listener.
-
-Load the script on the **parent website**, after the iframe and before calling `zaq.widget`. Do not add `async` or `defer` to the script in this example. Code inside the cross-origin iframe cannot expose this API to the parent website.
-
-For a frontend framework, load the script and initialize after the iframe mounts. Keep the widget mounted during client-side navigation. Before removing it, call `zaq.widget.dispose()` to remove listeners and restore the original inline styles and page scrolling. Disposal does not remove the iframe or reset its identity.
-
-### 3. Choose a visitor ID
-
-For signed-in visitors, supply the user ID accepted by your ZAQ integration. For anonymous visitors, generate a random ID and keep it in browser storage:
+The script creates the iframe. Your backend signs a JWT with the authentication key, and your frontend passes only that JWT to the widget:
 
 ```js
-function getVisitorId() {
-  const key = "my-site.zaq.visitor-id";
-  let id;
-  try { id = localStorage.getItem(key); } catch {}
-  if (id?.trim()) return id;
-
-  id = `anonymous-${crypto.randomUUID()}`;
-  try { localStorage.setItem(key, id); } catch {}
-  return id;
-}
-
-// Use this instead of the initialization call above.
-zaq.widget.init({ user_id: getVisitorId() }).catch(console.error);
+const response = await fetch("/api/widget-identity", { method: "POST", credentials: "same-origin" });
+if (!response.ok) throw new Error("Could not authenticate the widget");
+const { identity_token } = await response.json();
+await zaq.widget.init({ identity_token });
 ```
 
-Generate the ID once for initialization, not for each message or opening of chat. Storage lets the same browser reuse it across visits. If storage is unavailable, this example's ID lasts for the current widget instance. Clearing storage or using another browser produces a new ID. Random browser IDs are not authentication; ZAQ remains responsible for validating access.
+Add initialization code after `embed.js` has loaded. The backend must derive the user ID from its authenticated session and sign the token; a browser-supplied `user_id` is not accepted by the integrated widget. The [website integration guideline](docs/integration-guideline.md) gives the complete backend signer, frontend wiring, conversation resume, renewal, and settings examples.
 
-## Language and theme
-
-The website owns these settings. Set them through the separate settings API before or after initialization:
+Set presentation independently of identity:
 
 ```js
-await zaq.widget.updateSettings({ theme: "dark" });
-await zaq.widget.updateSettings({ language: "fr" });
-await zaq.widget.updateSettings({ theme: "light", language: "ar" });
-
-// Optional inspection; not required before an update.
 const settings = await zaq.widget.getSettings();
+await zaq.widget.updateSettings({ theme: "dark", language: "fr" });
 ```
 
-| Setting | Accepted values | Default |
+| Setting | Values | Default |
 | --- | --- | --- |
-| `theme` | `"auto"`, `"light"`, `"dark"` | `"auto"` |
+| `theme` | `"light"`, `"dark"`, `"auto"` | `"light"` |
 | `language` | `"en"`, `"fr"`, `"ar"` | `"en"` |
 
-`auto` follows browser appearance. Arabic uses a right-to-left layout. Language changes translate widget controls, accessibility labels, and widget-generated errors; they do not translate ZAQ's messages or choose the assistant's response language.
+`auto` follows the visitor's browser appearance. Language changes widget controls and errors, not the agent's response language. The settings API merges supplied fields and leaves the conversation intact.
 
-Updates merge the supplied fields and preserve messages, drafts, pending responses, and the selected conversation. Unsupported values or unknown keys reject the whole update. Methods return promises: handle failures with `catch` or `try/catch`. Requests time out after 20 seconds; after an update timeout, inspect settings before retrying because the update may already have reached the iframe.
-
-Settings survive LiveView reconnects. If the iframe document reloads while the parent client remains alive, the client reapplies its accepted context and latest settings. Your website decides whether to save preferences across parent-page reloads. Language and theme do not belong in ZAQ's persisted widget configuration.
-
-## Initialization and conversations
-
-For ZAQ, the backend signs all three fields below into `identity_token`; the
-frontend calls only `zaq.widget.init({identity_token})`. Unsigned fields, settings
-and unknown additions are rejected. See the [signed bootstrap guide](docs/authenticated-chat.md)
-for the signing helper and backend resume flow. The raw example below is only
-for standalone mock/demo fixtures.
-
-```js
-await zaq.widget.init({
-  user_id: "visitor-123",
-  prompt_context: "Current page: /menu",
-  conversation_id: null,
-});
-```
-
-| Field | Purpose |
-| --- | --- |
-| `user_id` | Required, nonblank visitor ID validated by ZAQ. |
-| `prompt_context` | Optional string with context for the host; defaults to `null`. |
-| `conversation_id` | Optional real conversation ID to resume; defaults to `null`. |
-
-A visitor ID and a conversation ID are different. Do not invent a conversation ID or substitute the visitor ID. Conversation history and authorization depend on the ZAQ integration; keeping the visitor ID alone does not guarantee that a specific conversation reopens.
-
-Closing chat collapses the widget without ending the conversation. Changing identity or bootstrap context requires a fresh iframe document. Use `updateSettings()` for later presentation changes; repeated `init()` calls do not overwrite runtime settings.
-
-The global `zaq.widget` API currently targets **one iframe with `id="zaq-widget"`**. For multiple widgets or custom layout ownership, import `createWidgetClient` from `/web_widget/assets/widget-client.js` and create a client for each iframe. That lower-level API leaves placement and resizing to your website; do not give multiple frames the same HTML ID.
-
-## Customize the appearance
-
-Theme is selected through `init()` or `updateSettings()`. To change branding, ask the ZAQ administrator to configure a `stylesheet_url` loaded inside the widget. For example:
-
-```css
-:root {
-  --zaq-widget-primary: #7356c7;
-  --zaq-widget-on-primary: #fff;
-  --zaq-widget-radius: 12px;
-  --zaq-widget-font-family: system-ui, sans-serif;
-}
-```
-
-Use unlayered CSS to override the built-in defaults. More tokens are defined in [widget.css](assets/css/widget.css), including background, text, borders, and composer colors. Color tokens can use `light-dark(lightColor, darkColor)` to follow the selected theme. A failed stylesheet leaves the built-in theme available.
-
-Website CSS cannot cross the iframe boundary. The embed script manages the outer iframe's default placement and height; the widget stylesheet controls its inner appearance. Keep the outer iframe's `color-scheme: light dark` default to preserve transparency.
+For a Phoenix application hosting this package, see [host integration](docs/host-integration.md) and the [adapter contract](docs/adapter-contract.md). The package has no compile-time dependency on ZAQ internals.
 
 ## Run the demo locally
 
@@ -177,7 +67,7 @@ mix setup
 mix phx.server
 ```
 
-Open `http://localhost:4000/widget-demo`. The demo renders the same installation-script markup as ZAQ: `embed.js` creates the iframe from `data-widget-id`; no iframe is written into the demo HTML. The demo then supplies its mock identity through `zaq.widget.init()`. Named demo fixtures remain supported, while ZAQ's callback requires a positive integer connector ID. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
+Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` installation script to create its iframe, then supplies mock identity and responses. The demo's unsigned bootstrap is for fixtures only; ZAQ integration requires a signed JWT. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
 
 | Message | Demo response |
 | --- | --- |

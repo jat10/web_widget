@@ -81,9 +81,17 @@ for (const theme of ["light", "dark"] as const) {
   });
 }
 
-test("default auto follows browser changes in launcher and conversation", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "light" });
+test("default theme remains light when the browser prefers dark", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/widget-demo");
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-theme", "light");
+  await expect(widget.locator(".zaq-composer")).toHaveCSS("background-color", "rgb(255, 255, 255)");
+});
+
+test("explicit auto follows browser changes in launcher and conversation", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.goto("/widget-demo?theme=auto");
   const widget = page.frameLocator("#zaq-widget");
   const composer = widget.locator(".zaq-composer");
   await expect(composer).toHaveCSS("background-color", "rgb(255, 255, 255)");
@@ -115,5 +123,5 @@ test("unavailable custom stylesheet retains the built-in theme", async ({ page }
   await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/custom-widget.css", route => route.fulfill({ status: 404, body: "" }));
   await page.goto("/widget-demo?widget_id=theme-custom");
-  await expect(page.frameLocator("#zaq-widget").locator(".zaq-composer")).toHaveCSS("background-color", "rgb(13, 20, 28)");
+  await expect(page.frameLocator("#zaq-widget").locator(".zaq-composer")).toHaveCSS("background-color", "rgb(255, 255, 255)");
 });

@@ -21,7 +21,13 @@ defmodule WebWidget.E2EHost do
       answer: config["answer"] || "Controlled host reply",
       history:
         Enum.map(config["history"] || [], fn message ->
-          %{id: message["id"], role: message["role"], content: message["content"]}
+          row = %{
+            id: message["id"],
+            role: message["role"],
+            content: message["content"]
+          }
+
+          if message["timestamp"], do: Map.put(row, :timestamp, message["timestamp"]), else: row
         end),
       messages: [],
       events: [],
