@@ -106,14 +106,19 @@ test("explicit auto follows browser changes in launcher and conversation", async
   await expect(widget.locator(".zaq-widget")).toHaveCSS("background-color", "rgb(250, 250, 250)");
 });
 
-test("host stylesheet overrides theme defaults even before the React CSS loads", async ({ page }) => {
+test("embed stylesheet overrides theme defaults", async ({ page }) => {
   await page.route("**/custom-widget.css", route => route.fulfill({
     contentType: "text/css",
     body: ":root { --zaq-widget-primary: #7356c7; --zaq-widget-composer-background: #302640; --zaq-widget-radius: 12px; }"
   }));
-  await page.goto("/widget-demo?widget_id=theme-custom");
+  await page.goto("/widget/missing");
+  await page.addScriptTag({ url: "http://127.0.0.1:4020/web_widget/assets/embed.js" });
+  await page.evaluate(async () => {
+    window.zaq.widget.mount("http://127.0.0.1:4020/widget/theme-custom", undefined, "/custom-widget.css");
+    await window.zaq.widget.init({ user_id: "stylesheet-user" });
+  });
   const widget = page.frameLocator("#zaq-widget");
-  await expect(widget.locator('link[href="/custom-widget.css"]')).toHaveCount(1);
+  await expect(widget.locator('link[href="http://127.0.0.1:4019/custom-widget.css"]')).toHaveCount(1);
   await expect(widget.locator(".zaq-composer")).toHaveCSS("background-color", "rgb(48, 38, 64)");
   await expect(widget.locator(".zaq-composer")).toHaveCSS("border-radius", "12px");
   await expect(widget.locator(".zaq-composer-send")).toHaveCSS("background-color", "rgb(115, 86, 199)");
@@ -122,6 +127,11 @@ test("host stylesheet overrides theme defaults even before the React CSS loads",
 test("unavailable custom stylesheet retains the built-in theme", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "dark" });
   await page.route("**/custom-widget.css", route => route.fulfill({ status: 404, body: "" }));
-  await page.goto("/widget-demo?widget_id=theme-custom");
+  await page.goto("/widget/missing");
+  await page.addScriptTag({ url: "http://127.0.0.1:4020/web_widget/assets/embed.js" });
+  await page.evaluate(async () => {
+    window.zaq.widget.mount("http://127.0.0.1:4020/widget/theme-custom", undefined, "/custom-widget.css");
+    await window.zaq.widget.init({ user_id: "stylesheet-user" });
+  });
   await expect(page.frameLocator("#zaq-widget").locator(".zaq-composer")).toHaveCSS("background-color", "rgb(255, 255, 255)");
 });

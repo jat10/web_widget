@@ -1,4 +1,5 @@
 import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings } from "./widget-client";
+import { stylesheetURL } from "./widget-stylesheet";
 
 function createEmbed() {
   let client: ReturnType<typeof createWidgetClient> | undefined;
@@ -6,6 +7,7 @@ function createEmbed() {
   let ownedFrame: HTMLIFrameElement | undefined;
   let mountedFrame: HTMLIFrameElement | undefined;
   let container: HTMLDivElement | undefined;
+  let stylesheet: string | null = null;
 
   function connect() {
     if (client) return client;
@@ -33,6 +35,10 @@ function createEmbed() {
     const resize = (event: MessageEvent) => {
       if (event.source !== iframe.contentWindow || event.origin !== origin) return;
       const data = event.data;
+      if (data?.type === "zaq.widget.ready") {
+        iframe.contentWindow?.postMessage({ type: "zaq.widget.stylesheet", url: stylesheet }, origin);
+        return;
+      }
       if (data?.type !== "zaq.widget.resize") return;
       if (container) {
         if (data.mode === "conversation" || (data.mode === "launcher" && Number.isFinite(data.height))) {
@@ -72,8 +78,9 @@ function createEmbed() {
   }
 
   return {
-    mount(url: string, selector?: string) {
+    mount(url: string, selector?: string, stylesheetUrl?: string) {
       const target = new URL(url);
+      const nextStylesheet = stylesheetUrl === undefined ? null : stylesheetURL(stylesheetUrl, document.baseURI);
       if (!["https:", "http:"].includes(target.protocol)) throw new Error("Widget URL must use HTTP(S).");
       let destination: HTMLDivElement | undefined;
       if (selector !== undefined) {
@@ -97,6 +104,7 @@ function createEmbed() {
         throw new Error("Widget is already mounted in a different location.");
       }
       container = destination;
+      stylesheet = nextStylesheet;
       if (!existing) {
         ownedFrame = document.createElement("iframe");
         ownedFrame.id = frameId;
@@ -105,6 +113,7 @@ function createEmbed() {
       }
       mountedFrame = (existing as HTMLIFrameElement | null) || ownedFrame;
       connect();
+      mountedFrame?.contentWindow?.postMessage({ type: "zaq.widget.ready.request" }, target.origin);
     },
     async init(context: WidgetInit | DemoWidgetInit) { return connect().init(context); },
     async updateSettings(settings: Partial<WidgetSettings>) { return connect().updateSettings(settings); },
@@ -118,6 +127,7 @@ function createEmbed() {
       cleanup = undefined;
       mountedFrame = undefined;
       container = undefined;
+      stylesheet = null;
     },
   };
 }
@@ -140,7 +150,8 @@ if (script instanceof HTMLScriptElement && script.hasAttribute("data-widget-id")
   }
   const url = new URL(`/widget/${widgetId}`, script.src).href;
   const selector = script.getAttribute("iframe-location-id") ?? undefined;
-  const mount = () => window.zaq.widget.mount(url, selector);
+  const stylesheet = script.getAttribute("stylesheet-url") ?? undefined;
+  const mount = () => window.zaq.widget.mount(url, selector, stylesheet);
   if (document.body && (selector === undefined || document.readyState !== "loading")) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
 }

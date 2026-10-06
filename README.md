@@ -39,6 +39,18 @@ Give the div an explicit height and include it before the script runs. The ifram
 fills the div, including when a conversation opens; the parent page remains scrollable.
 The child iframe uses `id="zaq-widget-frame"` when the div owns `id="zaq-widget"`.
 The same `zaq.widget.init`, `updateSettings`, and `dispose` API applies.
+Add optional `stylesheet-url` to load custom CSS **inside the iframe**:
+
+```html
+<script src="http://localhost:4000/web_widget/assets/embed.js"
+        data-widget-id="13" stylesheet-url="/widget-brand.css" defer></script>
+```
+
+Relative URLs resolve against the parent page. Use a publicly reachable HTTP(S)
+URL serving CSS (HTTPS when embedding an HTTPS widget). This works with or without
+`iframe-location-id`. Omit it for bundled styling; config `stylesheet_url` is no
+longer used. Failed CSS loads leave bundled styling available.
+
 Omit `iframe-location-id` for the default floating widget. Invalid selectors or
 missing divs raise an error. Only one widget is supported by the global API.
 

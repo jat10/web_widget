@@ -1,4 +1,5 @@
 import { ViewHook } from "phoenix_live_view";
+import { stylesheetURL } from "./widget-stylesheet";
 
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
@@ -24,6 +25,22 @@ export class WidgetContext extends ViewHook {
 
   private receiveContext = (event: MessageEvent) => {
     if (window.parent === window || event.source !== window.parent || !this.allowedDomains.includes(event.origin)) return;
+    if (event.data?.type === "zaq.widget.stylesheet") {
+      try {
+        const url = event.data.url === null ? null : stylesheetURL(event.data.url);
+        const existing = document.getElementById("zaq-widget-stylesheet") as HTMLLinkElement | null;
+        if (url === null) { existing?.remove(); return; }
+        if (existing?.href === url) return;
+        const link = existing || document.createElement("link");
+        link.id = "zaq-widget-stylesheet";
+        link.rel = "stylesheet";
+        link.href = url;
+        if (!existing) document.head.append(link);
+      } catch (error) {
+        console.error("[WebWidget] Invalid stylesheet-url.", error);
+      }
+      return;
+    }
     if (event.data?.type === "zaq.widget.ready.request") {
       if (this.ready) window.parent.postMessage({ type: "zaq.widget.ready" }, event.origin);
       return;

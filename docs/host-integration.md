@@ -157,8 +157,18 @@ start a second widget runtime alongside it.
 Use one enabled `web_widget` connector per widget. Its persisted positive integer
 ID is the trusted Context/Delivery configuration ID; its string form is the route
 and registry ID, for example `/widget/42`. Configure `display_name`, exact
-`allowed_domains`. Do not persist `stylesheet_url`. Browser initialization currently
-accepts only the signed three-field bootstrap; stylesheet params are not supported.
+`allowed_domains`. Do not persist `stylesheet_url`. Add optional
+`stylesheet-url="https://your-app.example/widget-brand.css"` to the embed script
+instead. Relative URLs resolve against the parent document. The loader sends the
+HTTP(S) URL through the existing source/origin-validated postMessage handshake;
+the iframe loads one stylesheet link and reapplies it after reload. Omission uses
+bundled CSS; runtime configuration no longer loads custom stylesheets. A CSS load
+failure leaves built-in styles available. Serve CSS without credentials or login
+redirects, and use HTTPS for an HTTPS iframe. This works alongside
+`iframe-location-id`. Manual callers can use
+`zaq.widget.mount(widgetUrl, selector, stylesheetUrl)`.
+Browser initialization still accepts only `identity_token`; stylesheet params
+are not supported in init or updateSettings.
 Do not add a separate widget ID, theme or language setting. Keep multiple
 conversations disabled for this first integration.
 

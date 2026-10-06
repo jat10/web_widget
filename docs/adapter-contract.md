@@ -65,8 +65,14 @@ Context/Delivery and use its string form in the registry and `/widget/:widget_id
 Do not persist a separate `widget_id` setting. Host settings are `display_name`,
 `allowed_domains` (exact HTTP(S) origins). Stylesheets are not connector settings
 or runtime hooks. The host shared command supports validated stylesheet params,
-but this adapter no longer accepts them through browser initialization. A future
-stylesheet bootstrap field must first be added to the signed schema.
+but this adapter does not accept them through browser initialization. The optional
+embed script attribute `stylesheet-url` instead controls browser-only presentation.
+The loader resolves relative URLs against the parent document and sends an absolute
+HTTP(S) URL over the existing postMessage channel on each ready handshake. The
+iframe validates the parent source, allowed origin and URL before adding one link
+to its head. Credentials and non-HTTP(S) URLs are rejected. Omitting the attribute
+uses bundled styles; runtime `stylesheet_url` no longer supplies a stylesheet.
+This presentation message does not change signed identity, settings or host commands.
 Theme and language remain parent-owned. Start with `multiple_conversations: false`;
 ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
@@ -122,8 +128,8 @@ issuer/audience, expiry and nonce. The server derives all initialization context
 from verified claims; unsigned overrides, settings, params and unknown fields
 are rejected. Every future initialization field must be added to the signed
 claim schema and validator. Settings are excluded from init and changed only
-through the separate settings API. Per-instance stylesheet initialization is
-withdrawn until explicitly added to the signed schema. Standalone mock fixtures
+through the separate settings API. Stylesheet URLs are supplied separately by the embed script attribute, never
+through identity initialization. Standalone mock fixtures
 retain their three-field test bootstrap, without settings or params; they cannot
 initialize an integrated ZAQ runtime.
 
@@ -396,7 +402,7 @@ without navigating the iframe again. Source and origin checks apply to the probe
 The current explicit `init({user_id})` API above describes presentation/bootstrap
 behavior, not sufficient identity proof for ZAQ v1. Verified bootstrap preserves
 the settings ownership boundary. Browser initialization no longer accepts stylesheet
-params. Standalone runtime stylesheets and the bundled defaults remain available.
+params. The embed script supplies optional custom CSS; bundled defaults remain available.
 
 ## Implemented delivery boundary
 
