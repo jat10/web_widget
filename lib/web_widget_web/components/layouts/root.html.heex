@@ -7,6 +7,9 @@
     <.live_title default="WebWidget" suffix=" · Phoenix Framework">
       {assigns[:page_title]}
     </.live_title>
+    <%= if assigns[:installation_script] do %>
+      {Phoenix.HTML.raw(@installation_script)}
+    <% end %>
     <LiveReact.Reload.vite_assets assets={["/js/app.js"]}>
       <link phx-track-static rel="stylesheet" href={~p"/assets/app.css"} />
       <script type="module" phx-track-static src={~p"/assets/app.js"}>
@@ -32,7 +35,7 @@
       })();
     </script>
   </head>
-  <body>
+  <body class={if assigns[:widget], do: "zaq-widget-page"}>
     {@inner_content}
   </body>
 </html>

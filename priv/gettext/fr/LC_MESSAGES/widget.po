@@ -1,0 +1,208 @@
+msgid ""
+msgstr ""
+"Language: fr\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+msgid "Ask a question…"
+msgstr "Posez une question…"
+
+msgid "Ask a follow-up…"
+msgstr "Posez une autre question…"
+
+msgid "Today"
+msgstr "Aujourd’hui"
+
+msgid "Yesterday"
+msgstr "Hier"
+
+msgid "Message"
+msgstr "Message"
+
+msgid "Send message"
+msgstr "Envoyer le message"
+
+msgid "Working…"
+msgstr "En cours…"
+
+msgid "Send"
+msgstr "Envoyer"
+
+msgid "Open conversation"
+msgstr "Ouvrir la conversation"
+
+msgid "Conversations"
+msgstr "Conversations"
+
+msgid "New chat"
+msgstr "Nouvelle conversation"
+
+msgid "Your conversations"
+msgstr "Vos conversations"
+
+msgid "Conversation history"
+msgstr "Historique des conversations"
+
+msgid "No conversations yet."
+msgstr "Aucune conversation pour le moment."
+
+msgid "Here to help you find your next step"
+msgstr "Pour vous aider à trouver la prochaine étape"
+
+msgid "Assistant is working…"
+msgstr "L’assistant travaille…"
+
+msgid "Close chat"
+msgstr "Fermer la discussion"
+
+msgid "Conversation"
+msgstr "Conversation"
+
+msgid "How can I help?"
+msgstr "Comment puis-je vous aider ?"
+
+msgid "Start a new conversation or choose one from your history."
+msgstr "Commencez une conversation ou choisissez-en une dans votre historique."
+
+msgid "Latest messages"
+msgstr "Derniers messages"
+
+msgid "Assistant"
+msgstr "Assistant"
+
+msgid "Writing response"
+msgstr "Rédaction de la réponse"
+
+msgid "Working with tools"
+msgstr "Utilisation des outils"
+
+msgid "Preparing your answer"
+msgstr "Préparation de votre réponse"
+
+msgid "Couldn't finish this response"
+msgstr "Impossible de terminer cette réponse"
+
+msgid "You can send another message below."
+msgstr "Vous pouvez envoyer un autre message ci-dessous."
+
+msgid "Activity needs attention"
+msgstr "Une activité nécessite votre attention"
+
+msgid "Working on your request"
+msgstr "Traitement de votre demande"
+
+msgid "View response activity"
+msgstr "Voir les étapes de la réponse"
+
+msgid "Response activity"
+msgstr "Étapes de la réponse"
+
+msgid "Tool call"
+msgstr "Appel d’outil"
+
+msgid "Tool result"
+msgstr "Résultat de l’outil"
+
+msgid "Reasoning"
+msgstr "Raisonnement"
+
+msgid "Activity"
+msgstr "Activité"
+
+msgid "Running"
+msgstr "En cours"
+
+msgid "Done"
+msgstr "Terminé"
+
+msgid "Failed"
+msgstr "Échec"
+
+msgid "Progress"
+msgstr "Progression"
+
+msgid "Error details"
+msgstr "Détails de l’erreur"
+
+msgid "Result"
+msgstr "Résultat"
+
+msgid "Waiting for the tool to return a result…"
+msgstr "En attente du résultat de l’outil…"
+
+msgid "This step could not be completed."
+msgstr "Cette étape n’a pas pu être terminée."
+
+msgid "This step finished without additional output."
+msgstr "Cette étape est terminée sans résultat supplémentaire."
+
+msgid "Unable to complete response"
+msgstr "Impossible de terminer la réponse"
+
+msgid "Connection interrupted. Please try again."
+msgstr "Connexion interrompue. Veuillez réessayer."
+
+msgid "Unable to send. Please try again."
+msgstr "Impossible d’envoyer. Veuillez réessayer."
+
+msgid "Unable to change conversations."
+msgstr "Impossible de changer de conversation."
+
+msgid "Widget unavailable."
+msgstr "Widget indisponible."
+
+msgid "No conversation to reopen."
+msgstr "Aucune conversation à rouvrir."
+
+msgid "Conversation switching is unavailable."
+msgstr "Le changement de conversation est indisponible."
+
+msgid "Wait for the current response before switching chats."
+msgstr "Attendez la réponse en cours avant de changer de conversation."
+
+msgid "Conversation unavailable."
+msgstr "Conversation indisponible."
+
+msgid "Unable to open this conversation."
+msgstr "Impossible d’ouvrir cette conversation."
+
+msgid "Wait for the current response or enable multiple conversations."
+msgstr "Attendez la réponse en cours ou activez les conversations multiples."
+
+msgid "Invalid widget context."
+msgstr "Contexte du widget invalide."
+
+msgid "Reload the widget to change context."
+msgstr "Rechargez le widget pour changer de contexte."
+
+msgid "Widget context with user_id is required."
+msgstr "Un contexte avec user_id est requis."
+
+msgid "Please wait for the current response."
+msgstr "Veuillez attendre la réponse en cours."
+
+msgid "Enter a message of 1–2000 characters."
+msgstr "Saisissez un message de 1 à 2000 caractères."
+
+msgid "Unable to initialize chat. Please try again."
+msgstr "Impossible de démarrer la discussion. Veuillez réessayer."
+
+msgid "Enter a text message."
+msgstr "Saisissez un message texte."
+
+msgid "Unable to load conversations. Please try again."
+msgstr "Impossible de charger les conversations. Veuillez réessayer."
+
+msgid "Unable to send your message. Please try again."
+msgstr "Impossible d’envoyer votre message. Veuillez réessayer."
+
+msgid "%{completed} of %{total} completed"
+msgstr "%{completed} sur %{total} terminées"
+
+msgid "%{failed} failed · %{completed} completed"
+msgstr "%{failed} en échec · %{completed} terminées"
+
+msgid "%{count} step completed"
+msgid_plural "%{count} steps completed"
+msgstr[0] "%{count} étape terminée"
+msgstr[1] "%{count} étapes terminées"

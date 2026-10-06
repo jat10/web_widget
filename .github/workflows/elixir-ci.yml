@@ -1,0 +1,99 @@
+name: Elixir CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Elixir tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      MIX_ENV: test
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: '28.1'
+          elixir-version: '1.19.5'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: assets/package-lock.json
+
+      - name: Restore Mix cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build/test
+          key: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-test-${{ hashFiles('mix.lock', 'mix.exs', 'config/**') }}
+          restore-keys: ${{ runner.os }}-mix-otp-28-1-elixir-1-19-5-test-
+
+      - name: Install dependencies
+        run: |
+          mix deps.get
+          npm --prefix assets ci
+
+      - name: Compile and check formatting
+        run: |
+          mix compile --warnings-as-errors
+          mix format --check-formatted
+
+      - name: Run Credo
+        run: mix credo --strict
+
+      # Host rendering tests request the real built assets.
+      - name: Build assets
+        run: mix assets.build
+
+      - name: Run tests with coverage
+        run: mix coveralls.json
+
+      - name: Save coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: elixir-coverage
+          path: cover/
+          if-no-files-found: ignore
+
+      - name: Send coverage to Coveralls
+        if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -n "$COVERALLS_REPO_TOKEN" ]; then
+            mix coveralls.github
+          else
+            echo "Coveralls upload skipped: configure COVERALLS_REPO_TOKEN to enable it."
+          fi

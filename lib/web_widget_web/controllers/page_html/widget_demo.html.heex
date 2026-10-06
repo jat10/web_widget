@@ -1,0 +1,38 @@
+<div class="zaq-demo">
+  <header class="zaq-demo-header">
+    <a href="/widget-demo">Chat widget demo</a>
+    <span>Development preview · Mock responses</span>
+  </header>
+  <main class="zaq-demo-main">
+    <section class="zaq-demo-hero">
+      <p class="zaq-demo-eyebrow">Streaming · Tools · Response activity</p>
+      <h1>See the assistant<br />at work.</h1>
+      <p>
+        Type research in the chat box at the bottom and press Enter. Watch two tool calls progress, then expand “View response activity” to inspect their results.
+      </p>
+      <a href="#explore">See all test messages ↓</a>
+    </section>
+    <section id="explore" class="zaq-demo-grid" aria-label="Mock response scenarios">
+      <article :for={
+        {title, description} <- [
+          {"hello", "A streamed greeting with a writing indicator and no tool calls."},
+          {"search", "A tool call with progress, an expandable result, and a streamed answer."},
+          {"research",
+           "Two tool calls with independent progress. Completed activity folds into a summary you can expand."},
+          {"fail",
+           "A failed tool call and a response error panel. Send another message to continue."},
+          {"slow",
+           "A slower response so you can inspect loading indicators and tool cards while they run."},
+          {"Any other message",
+           "The default search scenario. Send a follow-up to test a longer conversation."}
+        ]
+      }>
+        <h2>{title}</h2>
+        <p>{description}</p>
+      </article>
+    </section>
+    <footer class="zaq-demo-footer">
+      Local simulation only · No real tools or external services are called. Reload this page to start a new conversation.
+    </footer>
+  </main>
+</div>

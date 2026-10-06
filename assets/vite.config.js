@@ -10,7 +10,7 @@ export default defineConfig(({ command }) => {
   const isDev = command !== "build";
 
   return {
-    base: isDev ? undefined : "/assets",
+    base: isDev ? undefined : "./",
     publicDir: "static",
     server: {
       cors: { origin: /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ },
@@ -30,10 +30,6 @@ export default defineConfig(({ command }) => {
     resolve: {
       alias: {
         "@": path.resolve(__dirname, "./react-components"),
-        "phoenix-colocated/web_widget": path.resolve(
-          __dirname,
-          `../_build/${process.env.MIX_ENV || "dev"}/phoenix-colocated/web_widget/index.js`,
-        ),
       },
       dedupe: ["react", "react-dom"],
     },
@@ -52,7 +48,9 @@ export default defineConfig(({ command }) => {
       sourcemap: isDev, // enable source map in dev build
       manifest: false, // do not generate manifest.json
       rollupOptions: {
+        preserveEntrySignatures: "exports-only",
         input: {
+          "widget-client": path.resolve(__dirname, "./js/widget-client.ts"),
           app: path.resolve(__dirname, "./js/app.js"),
         },
         output: {

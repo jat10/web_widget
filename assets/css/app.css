@@ -104,3 +104,23 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* The iframe document must stay transparent even before React finishes loading. */
+html:has(.zaq-widget-page), body.zaq-widget-page { background: transparent; color-scheme: light dark; }
+body.zaq-widget-page { margin: 0; overflow: hidden; }
+
+.zaq-demo { background: #f6f5f0; color: #23352f; font-family: system-ui, sans-serif; min-height: 100vh; }
+.zaq-demo-header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 24px 5vw; border-bottom: 1px solid #23352f20; }
+.zaq-demo-header a { font-weight: 650; font-size: 18px; }
+.zaq-demo-header span { font-size: 13px; }
+.zaq-demo-main { max-width: 1120px; margin: auto; padding: 0 24px; }
+.zaq-demo-hero { padding: 100px 0; max-width: 760px; }
+.zaq-demo-eyebrow { text-transform: uppercase; letter-spacing: .16em; font-size: 12px; }
+.zaq-demo-hero h1 { font-size: clamp(38px, 6vw, 76px); line-height: 1.08; font-weight: 550; letter-spacing: -.045em; margin: 26px 0; }
+.zaq-demo-hero > p:not(.zaq-demo-eyebrow) { max-width: 580px; line-height: 1.8; font-size: 18px; opacity: .75; }
+.zaq-demo-hero > a { display: inline-block; margin-top: 30px; border-bottom: 1px solid; padding-bottom: 4px; }
+.zaq-demo-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 24px; }
+.zaq-demo-grid article { min-height: 280px; border: 1px solid #23352f20; border-radius: 14px; padding: 30px; background: #ffffff60; }
+.zaq-demo-grid h2 { font-size: 24px; line-height: 1.2; margin-bottom: 20px; letter-spacing: -.03em; }
+.zaq-demo-grid p { line-height: 1.8; opacity: .75; }
+.zaq-demo-footer { padding: 80px 0 180px; font-size: 13px; opacity: .65; }

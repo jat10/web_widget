@@ -22,7 +22,6 @@ config :web_widget, WebWidgetWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
   # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
   http: [ip: {127, 0, 0, 1}],
-  check_origin: false,
   code_reloader: true,
   debug_errors: true,
   secret_key_base: "ZZSq+bGVops/3Ee3eQ6KD+2Vd3b6FLWpTnYqW/4+Juh39KHao3FugNPXKdMCM/Wo",
@@ -68,7 +67,7 @@ config :web_widget, WebWidgetWeb.Endpoint,
     ]
   ]
 
-# Enable dev routes for dashboard and mailbox
+# Enable dev routes for the widget demo and dashboard
 config :web_widget, dev_routes: true
 
 # Do not include metadata nor timestamps in development logs
@@ -89,5 +88,6 @@ config :phoenix_live_view,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
 
-# Disable swoosh api client as it is only required for production adapters.
-config :swoosh, :api_client, false
+config :web_widget, :demo_allowed_domains, ["http://localhost:4000"]
+
+config :web_widget, :mock_host, true

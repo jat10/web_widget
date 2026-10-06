@@ -1,0 +1,349 @@
+## This file is a PO Template file.
+##
+## "msgid"s here are often extracted from source code.
+## Add new messages manually only if they're dynamic
+## messages that can't be statically extracted.
+##
+## Run "mix gettext.extract" to bring this file up to
+## date. Leave "msgstr"s empty as changing them here has no
+## effect: edit them in PO (.po) files instead.
+#
+msgid ""
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:112
+#, elixir-autogen, elixir-format
+msgid "%{completed} of %{total} completed"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:105
+#, elixir-autogen, elixir-format
+msgid "%{count} step completed"
+msgid_plural "%{count} steps completed"
+msgstr[0] ""
+msgstr[1] ""
+
+#: lib/web_widget_web/localization.ex:117
+#, elixir-autogen, elixir-format
+msgid "%{failed} failed · %{completed} completed"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:45
+#, elixir-autogen, elixir-format
+msgid "Activity"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:38
+#, elixir-autogen, elixir-format
+msgid "Activity needs attention"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:9
+#, elixir-autogen, elixir-format
+msgid "Ask a follow-up…"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:8
+#, elixir-autogen, elixir-format
+msgid "Ask a question…"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:31
+#, elixir-autogen, elixir-format
+msgid "Assistant"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:24
+#, elixir-autogen, elixir-format
+msgid "Assistant is working…"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:25
+#, elixir-autogen, elixir-format
+msgid "Close chat"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:60
+#, elixir-autogen, elixir-format
+msgid "Connection interrupted. Please try again."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:26
+#, elixir-autogen, elixir-format
+msgid "Conversation"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:20
+#, elixir-autogen, elixir-format
+msgid "Conversation history"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:68
+#, elixir-autogen, elixir-format
+msgid "Conversation switching is unavailable."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:71
+#, elixir-autogen, elixir-format
+msgid "Conversation unavailable."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:17
+#, elixir-autogen, elixir-format
+msgid "Conversations"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:35
+#, elixir-autogen, elixir-format
+msgid "Couldn't finish this response"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:47
+#, elixir-autogen, elixir-format
+msgid "Done"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:84
+#, elixir-autogen, elixir-format
+msgid "Enter a message of 1–2000 characters."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:87
+#, elixir-autogen, elixir-format
+msgid "Enter a text message."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:50
+#, elixir-autogen, elixir-format
+msgid "Error details"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:48
+#, elixir-autogen, elixir-format
+msgid "Failed"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:23
+#, elixir-autogen, elixir-format
+msgid "Here to help you find your next step"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:27
+#, elixir-autogen, elixir-format
+msgid "How can I help?"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:76
+#, elixir-autogen, elixir-format
+msgid "Invalid widget context."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:30
+#, elixir-autogen, elixir-format
+msgid "Latest messages"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:12
+#, elixir-autogen, elixir-format
+msgid "Message"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:18
+#, elixir-autogen, elixir-format
+msgid "New chat"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:66
+#, elixir-autogen, elixir-format
+msgid "No conversation to reopen."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:21
+#, elixir-autogen, elixir-format
+msgid "No conversations yet."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:16
+#, elixir-autogen, elixir-format
+msgid "Open conversation"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:82
+#, elixir-autogen, elixir-format
+msgid "Please wait for the current response."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:34
+#, elixir-autogen, elixir-format
+msgid "Preparing your answer"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:49
+#, elixir-autogen, elixir-format
+msgid "Progress"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:44
+#, elixir-autogen, elixir-format
+msgid "Reasoning"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:78
+#, elixir-autogen, elixir-format
+msgid "Reload the widget to change context."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:41
+#, elixir-autogen, elixir-format
+msgid "Response activity"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:51
+#, elixir-autogen, elixir-format
+msgid "Result"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:46
+#, elixir-autogen, elixir-format
+msgid "Running"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:15
+#, elixir-autogen, elixir-format
+msgid "Send"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:13
+#, elixir-autogen, elixir-format
+msgid "Send message"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:29
+#, elixir-autogen, elixir-format
+msgid "Start a new conversation or choose one from your history."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:55
+#, elixir-autogen, elixir-format
+msgid "This step could not be completed."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:57
+#, elixir-autogen, elixir-format
+msgid "This step finished without additional output."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:10
+#, elixir-autogen, elixir-format
+msgid "Today"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:42
+#, elixir-autogen, elixir-format
+msgid "Tool call"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:43
+#, elixir-autogen, elixir-format
+msgid "Tool result"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:64
+#, elixir-autogen, elixir-format
+msgid "Unable to change conversations."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:58
+#, elixir-autogen, elixir-format
+msgid "Unable to complete response"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:86
+#, elixir-autogen, elixir-format
+msgid "Unable to initialize chat. Please try again."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:89
+#, elixir-autogen, elixir-format
+msgid "Unable to load conversations. Please try again."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:73
+#, elixir-autogen, elixir-format
+msgid "Unable to open this conversation."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:91
+#, elixir-autogen, elixir-format
+msgid "Unable to send your message. Please try again."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:62
+#, elixir-autogen, elixir-format
+msgid "Unable to send. Please try again."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:40
+#, elixir-autogen, elixir-format
+msgid "View response activity"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:70
+#, elixir-autogen, elixir-format
+msgid "Wait for the current response before switching chats."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:75
+#, elixir-autogen, elixir-format
+msgid "Wait for the current response or enable multiple conversations."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:53
+#, elixir-autogen, elixir-format
+msgid "Waiting for the tool to return a result…"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:80
+#, elixir-autogen, elixir-format
+msgid "Widget context with user_id is required."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:65
+#, elixir-autogen, elixir-format
+msgid "Widget unavailable."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:39
+#, elixir-autogen, elixir-format
+msgid "Working on your request"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:33
+#, elixir-autogen, elixir-format
+msgid "Working with tools"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:14
+#, elixir-autogen, elixir-format
+msgid "Working…"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:32
+#, elixir-autogen, elixir-format
+msgid "Writing response"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:11
+#, elixir-autogen, elixir-format
+msgid "Yesterday"
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:37
+#, elixir-autogen, elixir-format
+msgid "You can send another message below."
+msgstr ""
+
+#: lib/web_widget_web/localization.ex:19
+#, elixir-autogen, elixir-format
+msgid "Your conversations"
+msgstr ""
