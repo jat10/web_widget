@@ -654,7 +654,9 @@ defmodule WebWidgetWeb.WidgetLive do
     ids = Enum.map(messages, & &1.id)
 
     if Enum.take(ids, length(previous_ids)) != previous_ids do
-      stream(socket, :ui_messages, Localization.messages(messages, locale), reset: true)
+      socket
+      |> stream(:ui_messages, Localization.messages(messages, locale), reset: true)
+      |> push_event("widget.message.reset", %{all: true})
     else
       previous_by_id = Map.new(previous, &{&1.id, &1})
 
@@ -663,9 +665,39 @@ defmodule WebWidgetWeb.WidgetLive do
           locale != previous_locale or Map.get(previous_by_id, message.id) != message
         end)
 
-      Enum.reduce(Localization.messages(changed, locale), socket, fn message, socket ->
-        stream_insert(socket, :ui_messages, message)
+      Enum.zip(changed, Localization.messages(changed, locale))
+      |> Enum.reduce(socket, fn pair, socket ->
+        sync_message(socket, pair, previous_by_id, locale == previous_locale)
       end)
+    end
+  end
+
+  defp sync_message(socket, {current, message}, previous_by_id, same_locale?) do
+    previous = Map.get(previous_by_id, message.id)
+    delta = if same_locale?, do: appended_content(previous, current)
+
+    conversation =
+      socket.assigns.accepted_context && socket.assigns.accepted_context.conversation_id
+
+    identity = %{conversation_id: conversation, id: message.id}
+
+    if delta do
+      push_event(socket, "widget.message.delta", Map.put(identity, :delta, delta))
+    else
+      socket
+      |> stream_insert(:ui_messages, message)
+      |> push_event("widget.message.reset", identity)
+    end
+  end
+
+  defp appended_content(nil, _), do: nil
+
+  defp appended_content(previous, current) do
+    if previous.content != "" and
+         Map.delete(previous, :content) == Map.delete(current, :content) and
+         String.starts_with?(current.content, previous.content) and
+         current.content != previous.content do
+      String.replace_prefix(current.content, previous.content, "")
     end
   end
 

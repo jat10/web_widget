@@ -34,6 +34,9 @@ type Config = {
 };
 type ConversationSummary = { id: string; title: string };
 type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
+type MessageDelta = { conversation_id: string; id: string; delta: string };
+type MessageReset = { all?: boolean; conversation_id?: string | null; id?: string };
+const messageKey = (conversationId: string | null, id: string) => JSON.stringify([conversationId, id]);
 
 const I18n = createContext<Pick<Config, "locale" | "strings"> | null>(null);
 function useI18n() {
@@ -73,6 +76,30 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
   const t = config.strings;
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [deltas, setDeltas] = useState<Record<string, string>>({});
+  useEffect(() => {
+    const append = (event: Event) => {
+      const { conversation_id, id, delta } = (event as CustomEvent<MessageDelta>).detail;
+      const key = messageKey(conversation_id, id);
+      setDeltas(current => ({ ...current, [key]: (current[key] || "") + delta }));
+    };
+    const reset = (event: Event) => {
+      const { all, conversation_id, id } = (event as CustomEvent<MessageReset>).detail;
+      if (all) return setDeltas({});
+      if (!id) return;
+      setDeltas(current => {
+        const next = { ...current };
+        delete next[messageKey(conversation_id ?? null, id)];
+        return next;
+      });
+    };
+    window.addEventListener("phx:widget.message.delta", append);
+    window.addEventListener("phx:widget.message.reset", reset);
+    return () => {
+      window.removeEventListener("phx:widget.message.delta", append);
+      window.removeEventListener("phx:widget.message.reset", reset);
+    };
+  }, []);
   const root = useRef<HTMLDivElement>(null);
   const previousMode = useRef(mode);
   const previousConversation = useRef(conversationId);
@@ -87,7 +114,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
     const dateSeparator = message.timestamp && day !== previousDay
       ? dateLabel(message.timestamp, config.locale, t) : undefined;
     if (day) previousDay = day;
-    return { ...message, dateSeparator };
+    return { ...message, content: message.content + (deltas[messageKey(conversationId, message.id)] || ""), dateSeparator };
   });
 
   // LiveView is the source of truth. This runtime only adapts its props for assistant-ui.
