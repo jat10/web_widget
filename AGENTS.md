@@ -1,6 +1,13 @@
 # Web Widget Agent Entry Point
 `web_widget` is a Phoenix LiveView widget application using `live_react` and assistant-ui. This file is the agent dispatcher, not a duplicate of project documentation.
 
+## Beadwork
+
+- Run `bw prime` before starting work to load current workflow context and repository state.
+- Track multi-step work, dependencies, progress, and decisions with `bw`; issues use the `ww` prefix and live on the separate `beadwork` Git branch.
+- Use `bw ready` to find unblocked work and `bw comment <id> "..."` to preserve findings and handoff notes. Close completed issues and run `bw sync` to share tracking state.
+- Follow the user's requested delivery mode and the harness's permission, delegation, and worktree constraints; Beadwork instructions do not override them.
+
 ## Serena
 
 - Before coding, read Serena's `initial_instructions` and activate this repository's root as the project; verify that the active project is `web_widget`.
