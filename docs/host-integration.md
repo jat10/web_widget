@@ -15,7 +15,10 @@ The existing mock host is not a working ZAQ installation.
 
 By explicit user request, the local ZAQ checkout now imports `WebWidget.Router`,
 mounts `web_widget("/widget")` in its browser pipeline outside BO authentication,
-and serves `WebWidget.Static` from its endpoint. Restart ZAQ after recompilation.
+and serves installed widget assets through its existing static plug.
+Run the library-provided `mix web_widget.assets.install` from ZAQ after building the widget
+bundle. ZAQ includes `web_widget` in `static_paths/0` and does not need a
+`WebWidget.Static` plug or a local Mix task. Restart ZAQ after recompilation.
 The same ZAQ endpoint serves `/widget/<id>`, `/web_widget/assets/` and `/live`.
 Point ngrok at ZAQ's HTTP port (normally 4000), and use that public origin as the
 global base URL. Omit `integration.public_url` or use that same origin; no separate
@@ -62,13 +65,41 @@ Copy the installation snippet:
 <script src="http://localhost:4012/web_widget/assets/embed.js" data-widget-id="42" defer></script>
 ```
 
-The script creates `#zaq-widget` and applies the existing frame layout. It does
+The script creates `#zaq-widget` and applies the existing frame layout. An optional
+`iframe-location-id="#my-widget-container"` selects an existing div with a parent-supplied
+height; the iframe fills it without taking over the page or locking parent scrolling.
+When the container itself is `#zaq-widget`, the iframe uses `#zaq-widget-frame`.
+It does
 not fabricate identity or initialize an authenticated chat. The current
 `zaq.widget.init({user_id})` API remains a mock/demo API; verified bootstrap and
 shared-response rendering remain milestone 2. No key belongs in this snippet.
 The package endpoint opt-in does not imply that chat authentication is complete.
 
 ## Generic Phoenix host mounting (not required for ZAQ)
+
+### Install assets into the host
+
+The library includes `Mix.Tasks.WebWidget.Assets.Install`. After compiling the dependency,
+run this command **from the host project**:
+
+```sh
+mix web_widget.assets.install
+```
+
+It copies all built JS/CSS and supporting files from the dependency's
+`priv/static/assets` into the host's `priv/static/web_widget/assets`, including
+`embed.js`. Build the widget bundle first (`npm --prefix assets run build` from
+the library checkout); an incomplete bundle raises an actionable error.
+Add `web_widget` to the host's existing static-path allowlist. Its standard
+`Plug.Static` then serves the existing `/web_widget/assets/...` URLs, so remove
+the optional `WebWidget.Static` plug. Host `assets/app.js` and CSS are untouched.
+Ignore `/priv/static/web_widget/` in the host's Git configuration.
+
+Repeat installation after rebuilding/upgrading the widget, and run it before
+`mix phx.digest` when preparing a release. Hosts may add the command to their
+build/deploy aliases; the task does not edit host source or build aliases.
+
+### Mount the router and optionally serve dependency assets directly
 
 Mount in the host browser pipeline, outside any existing `live_session` (the
 macro creates its own). The default prefix is `/widget`; a custom prefix or

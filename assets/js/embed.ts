@@ -4,10 +4,12 @@ function createEmbed() {
   let client: ReturnType<typeof createWidgetClient> | undefined;
   let cleanup: (() => void) | undefined;
   let ownedFrame: HTMLIFrameElement | undefined;
+  let mountedFrame: HTMLIFrameElement | undefined;
+  let container: HTMLDivElement | undefined;
 
   function connect() {
     if (client) return client;
-    const iframe = document.getElementById("zaq-widget");
+    const iframe = mountedFrame || document.getElementById("zaq-widget");
     if (!(iframe instanceof HTMLIFrameElement) || !iframe.getAttribute("src")) {
       throw new Error('Add an iframe with id="zaq-widget" and a widget src before calling zaq.widget.init().');
     }
@@ -16,7 +18,10 @@ function createEmbed() {
     const originalTitle = iframe.getAttribute("title");
     const originalMode = iframe.getAttribute("data-mode");
     const originalOverflow = document.documentElement.style.overflow;
-    const defaults = {
+    const defaults = container ? {
+      display: "block", position: "static", width: "100%", height: "100%",
+      border: "0", background: "transparent", colorScheme: "light dark",
+    } : {
       position: "fixed", bottom: "0", left: "0", width: "100%", height: "180px",
       border: "0", background: "transparent", colorScheme: "light dark", zIndex: "1000",
     };
@@ -29,6 +34,12 @@ function createEmbed() {
       if (event.source !== iframe.contentWindow || event.origin !== origin) return;
       const data = event.data;
       if (data?.type !== "zaq.widget.resize") return;
+      if (container) {
+        if (data.mode === "conversation" || (data.mode === "launcher" && Number.isFinite(data.height))) {
+          iframe.dataset.mode = data.mode;
+        }
+        return;
+      }
       if (data.mode === "conversation") {
         iframe.dataset.mode = "conversation";
         iframe.style.height = "100dvh";
@@ -42,7 +53,7 @@ function createEmbed() {
     window.addEventListener("message", resize);
     cleanup = () => {
       window.removeEventListener("message", resize);
-      document.documentElement.style.overflow = originalOverflow;
+      if (!container) document.documentElement.style.overflow = originalOverflow;
       if (originalStyle === null) iframe.removeAttribute("style");
       else iframe.setAttribute("style", originalStyle);
       if (originalMode === null) iframe.removeAttribute("data-mode");
@@ -61,19 +72,38 @@ function createEmbed() {
   }
 
   return {
-    mount(url: string) {
+    mount(url: string, selector?: string) {
       const target = new URL(url);
       if (!["https:", "http:"].includes(target.protocol)) throw new Error("Widget URL must use HTTP(S).");
-      const existing = document.getElementById("zaq-widget");
-      if (existing && (!(existing instanceof HTMLIFrameElement) || existing.src !== target.href)) {
-        throw new Error("A different widget already uses #zaq-widget.");
+      let destination: HTMLDivElement | undefined;
+      if (selector !== undefined) {
+        let element: Element | null;
+        try { element = document.querySelector(selector); }
+        catch { throw new Error("Invalid iframe-location-id selector."); }
+        if (!(element instanceof HTMLDivElement)) {
+          throw new Error("iframe-location-id must select an existing div.");
+        }
+        destination = element;
       }
+      if (mountedFrame && container !== destination) {
+        throw new Error("Widget is already mounted in a different location.");
+      }
+      const frameId = destination?.id === "zaq-widget" ? "zaq-widget-frame" : "zaq-widget";
+      const existing = mountedFrame || document.getElementById(frameId);
+      if (existing && (!(existing instanceof HTMLIFrameElement) || existing.src !== target.href)) {
+        throw new Error(`A different widget already uses #${frameId}.`);
+      }
+      if (existing && destination && existing.parentElement !== destination) {
+        throw new Error("Widget is already mounted in a different location.");
+      }
+      container = destination;
       if (!existing) {
         ownedFrame = document.createElement("iframe");
-        ownedFrame.id = "zaq-widget";
+        ownedFrame.id = frameId;
         ownedFrame.src = target.href;
-        document.body.append(ownedFrame);
+        (container || document.body).append(ownedFrame);
       }
+      mountedFrame = (existing as HTMLIFrameElement | null) || ownedFrame;
       connect();
     },
     async init(context: WidgetInit | DemoWidgetInit) { return connect().init(context); },
@@ -86,6 +116,8 @@ function createEmbed() {
       ownedFrame = undefined;
       client = undefined;
       cleanup = undefined;
+      mountedFrame = undefined;
+      container = undefined;
     },
   };
 }
@@ -107,7 +139,8 @@ if (script instanceof HTMLScriptElement && script.hasAttribute("data-widget-id")
     throw new Error("Invalid widget ID.");
   }
   const url = new URL(`/widget/${widgetId}`, script.src).href;
-  const mount = () => window.zaq.widget.mount(url);
-  if (document.body) mount();
+  const selector = script.getAttribute("iframe-location-id") ?? undefined;
+  const mount = () => window.zaq.widget.mount(url, selector);
+  if (document.body && (selector === undefined || document.readyState !== "loading")) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
 }

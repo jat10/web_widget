@@ -1,5 +1,86 @@
 import { expect, test } from "@playwright/test";
 
+for (const containerId of ["chat-container", "zaq-widget"]) {
+  test(`installation fills #${containerId} and keeps conversation layout inside it`, async ({ page }) => {
+    await page.goto("/widget/missing");
+    await page.evaluate(id => {
+      document.documentElement.style.overflow = "auto";
+      const container = document.createElement("div");
+      container.id = id;
+      container.style.cssText = "width: 480px; height: 600px; margin: 30px;";
+      document.body.append(container);
+    }, containerId);
+    const install = () => page.evaluate(id => new Promise<void>((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = "http://127.0.0.1:4020/web_widget/assets/embed.js";
+      script.dataset.widgetId = "42";
+      script.setAttribute("iframe-location-id", `#${id}`);
+      script.onload = () => resolve();
+      script.onerror = () => reject(new Error("Loader failed"));
+      document.body.append(script);
+    }), containerId);
+    await install();
+    await install();
+    const frameSelector = `#${containerId} > iframe`;
+    const frame = page.locator(frameSelector);
+    await expect(frame).toHaveCount(1);
+    await expect(page.locator(`#${containerId}`)).toHaveCount(1);
+    await expect(frame).toHaveCSS("position", "static");
+    await expect(frame).toHaveCSS("width", "480px");
+    await expect(frame).toHaveCSS("height", "600px");
+    await page.evaluate(() => window.zaq.widget.init({ user_id: "contained-user" }));
+    const widget = page.frameLocator(frameSelector);
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("hello");
+    await input.press("Enter");
+    await expect(frame).toHaveAttribute("data-mode", "conversation");
+    await expect(frame).toHaveCSS("height", "600px");
+    await expect(page.locator("html")).toHaveCSS("overflow", "auto");
+    await page.evaluate(() => window.zaq.widget.updateSettings({ theme: "dark" }));
+    await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-theme", "dark");
+    await widget.getByRole("button", { name: "Close chat", exact: true }).click();
+    await expect(frame).toHaveAttribute("data-mode", "launcher");
+    await expect(frame).toHaveCSS("height", "600px");
+    await page.evaluate(() => { document.documentElement.style.overflow = "scroll"; window.zaq.widget.dispose(); });
+    await expect(frame).toHaveCount(0);
+    await expect(page.locator(`#${containerId}`)).toHaveCount(1);
+    await expect(page.locator("html")).toHaveCSS("overflow", "scroll");
+    await install();
+    await expect(frame).toHaveCount(1);
+  });
+}
+
+test("targeted mount rejects bad targets and relocation without creating extra frames", async ({ page }) => {
+  await page.goto("/widget/missing");
+  await page.addScriptTag({ url: "http://127.0.0.1:4020/web_widget/assets/embed.js" });
+  const errors = await page.evaluate(() => {
+    const errors: string[] = [];
+    for (const selector of ["[", "#missing", "", "body"]) {
+      try { window.zaq.widget.mount("http://127.0.0.1:4020/widget/42", selector); }
+      catch (error) { errors.push((error as Error).message); }
+    }
+    return errors;
+  });
+  expect(errors).toEqual([
+    "Invalid iframe-location-id selector.",
+    "iframe-location-id must select an existing div.",
+    "Invalid iframe-location-id selector.",
+    "iframe-location-id must select an existing div.",
+  ]);
+  await expect(page.locator("iframe")).toHaveCount(0);
+  const relocationError = await page.evaluate(() => {
+    for (const id of ["first", "second"]) {
+      const div = document.createElement("div"); div.id = id; document.body.append(div);
+    }
+    window.zaq.widget.mount("http://127.0.0.1:4020/widget/42", "#first");
+    try { window.zaq.widget.mount("http://127.0.0.1:4020/widget/42", "#second"); }
+    catch (error) { return (error as Error).message; }
+  });
+  expect(relocationError).toBe("Widget is already mounted in a different location.");
+  await expect(page.locator("#first > iframe")).toHaveCount(1);
+  await expect(page.locator("#second > iframe")).toHaveCount(0);
+});
+
 test("installation script creates one frame without inventing identity and disposes it", async ({ page }) => {
   await page.goto("/widget/missing");
   const addSnippet = () => page.evaluate(() => new Promise<void>((resolve, reject) => {

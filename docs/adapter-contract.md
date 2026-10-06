@@ -70,8 +70,11 @@ stylesheet bootstrap field must first be added to the signed schema.
 Theme and language remain parent-owned. Start with `multiple_conversations: false`;
 ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
-The local ZAQ install now mounts the package router/static plug on its existing
-endpoint, as explicitly requested by the user after milestone 1a. Its `/live`
+The local ZAQ install mounts the package router on its existing endpoint.
+The library exposes `mix web_widget.assets.install`, run from the host, to copy its built
+bundle into the host's `priv/static/web_widget/assets`. The host's existing
+static plug serves that directory with `web_widget` in its static-path allowlist;
+ZAQ does not need `WebWidget.Static` or a host-owned install task. Its `/live`
 socket serves the iframe; BO authentication does not apply to the widget mount.
 This supersedes the earlier configuration-only choice for this installation.
 
@@ -89,6 +92,15 @@ Only root HTTP(S) origins are supported. The loader creates a single iframe at
 `/widget/<id>` on its own origin and applies the existing layout/client behavior.
 It never invents identity or embeds credentials. Manual iframe initialization
 remains supported. See [host integration](host-integration.md).
+
+The optional script attribute `iframe-location-id` is a CSS selector for an
+existing div. Targeted embeds fill that div (the parent supplies its height),
+keep both launcher and conversation inside it, and do not lock parent scrolling.
+Without the attribute, the existing floating/full-screen layout is preserved.
+The parent API remains single-widget. A missing/invalid target fails explicitly;
+it never falls back to the body. If the div is `#zaq-widget`, the child iframe is
+`#zaq-widget-frame` to avoid duplicate IDs. Otherwise the iframe is `#zaq-widget`.
+Manual callers may use `zaq.widget.mount(url, selector)` with the same behavior.
 
 ## Identity, embedding and parent bootstrap
 
@@ -371,7 +383,8 @@ responses, and selected conversations. Custom CSS may override color tokens but
 there is no theme-selection CSS variable. ZAQ owns its response language.
 
 The parent may load `/web_widget/assets/embed.js` to expose `zaq.widget` for a
-single `#zaq-widget` iframe. This wrapper owns outer iframe defaults, validated
+single iframe (`#zaq-widget`, or `#zaq-widget-frame` when its container owns that ID).
+This wrapper owns outer iframe defaults, validated
 resize handling, and parent scroll locking; it delegates identity and settings
 to the existing client. It requires explicit `init({user_id})` and generates no
 identity. The lower-level module remains available for independent widget instances.
