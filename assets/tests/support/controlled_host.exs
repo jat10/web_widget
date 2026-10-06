@@ -18,6 +18,8 @@ defmodule WebWidget.E2EHost do
       hold: config["hold"] || false,
       step_kind: config["step_kind"] || "tool_call",
       partial: Map.get(config, "partial", "Partial reply"),
+      partials: config["partials"],
+      partial_interval_ms: config["partial_interval_ms"] || 0,
       answer: config["answer"] || "Controlled host reply",
       history:
         Enum.map(config["history"] || [], fn message ->
@@ -59,6 +61,15 @@ defmodule WebWidget.E2EHost do
       end
 
     {:reply, reply, Map.put(state, event.user_id, session)}
+  end
+
+  @impl true
+  def handle_info({:emit_partial, event, id, partial}, state) do
+    if match?(%{pending: ^event}, Map.get(state, event.user_id)) do
+      emit(event, "response.message.edit", %{id: id, content: partial})
+    end
+
+    {:noreply, state}
   end
 
   defp accept(%{type: "widget.init"} = event, session) do
@@ -106,7 +117,24 @@ defmodule WebWidget.E2EHost do
       })
     end
 
-    emit(event, "response.message.edit", %{id: id, content: session.partial})
+    partials = session.partials || [session.partial]
+
+    if session.hold and session.partial_interval_ms > 0 do
+      partials
+      |> Enum.with_index()
+      |> Enum.each(fn {partial, index} ->
+        Process.send_after(
+          self(),
+          {:emit_partial, event, id, partial},
+          index * session.partial_interval_ms
+        )
+      end)
+    else
+      Enum.each(partials, fn partial ->
+        emit(event, "response.message.edit", %{id: id, content: partial})
+      end)
+    end
+
     message = Map.put(event.message, :role, "user")
     session = %{session | messages: session.messages ++ [message], pending: event}
     {:ok, if(session.hold, do: session, else: complete(session, false))}

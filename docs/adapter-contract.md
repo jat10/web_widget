@@ -300,7 +300,9 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:message_failed` | `response.message.failed`; correlated message ID, known public code/error mapped to safe UI code/text |
 | `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
 
-Streaming edits replace the full content snapshot; never append as token deltas.
+ZAQ streaming edits are cumulative snapshots. LiveView keeps the full content,
+but sends only the new suffix to React when an edit extends a running message
+without changing its other fields. Full replacements still use the message stream.
 Status and reasoning steps use only transient progress presentation, not persistent
 activity cards. Only explicit `tool_call` and `tool_result` steps appear in the
 activity panel and its counts; generic activity labels never imply tool execution.

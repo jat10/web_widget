@@ -99,6 +99,36 @@ test("message updates do not resend unrelated history over the LiveView websocke
   expect(frames.join("\n")).not.toContain("A new question");
 });
 
+test("cumulative host snapshots reach the browser as deltas", async ({ page, request }) => {
+  const frames: string[] = [];
+  page.on("websocket", socket => socket.on("framereceived", frame => {
+    frames.push(typeof frame.payload === "string" ? frame.payload : frame.payload.toString());
+  }));
+
+  const partials = [20, 40, 60, 80, 100].map(count =>
+    Array.from({ length: count }, (_, index) => index + 1).join(" ")
+  );
+  const id = await session(request, { hold: true, step_kind: "none", partials, partial_interval_ms: 800 });
+  await page.goto("/widget/missing");
+  const widget = await embed(page, id);
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Count to 100");
+  await input.press("Enter");
+  for (const snapshot of partials) {
+    await expect(widget.locator(".zaq-answer-content")).toHaveText(snapshot);
+  }
+
+  const suffixes = partials.map((snapshot, index) =>
+    index === 0 ? snapshot : snapshot.slice(partials[index - 1].length)
+  );
+  expect(suffixes.every(suffix => frames.some(frame => frame.includes(suffix)))).toBe(true);
+
+  const repeatedSnapshots = partials.slice(1).filter(snapshot =>
+    frames.some(frame => frame.includes(snapshot))
+  );
+  expect(repeatedSnapshots, "LiveView sent accumulated content instead of only new text").toEqual([]);
+});
+
 for (const kind of ["none", "status", "reasoning", "tool_call", "tool_result"]) {
   test(`${kind} progress uses tool presentation only for explicit tool steps`, async ({ page, request }) => {
     const id = await session(request, { hold: true, step_kind: kind, partial: "" });
