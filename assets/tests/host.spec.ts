@@ -28,7 +28,9 @@ for (const prefix of ["/widget", "/support/chat"]) {
     await expect(widget.locator("body")).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
     await input.fill("Host question");
     await input.press("Enter");
-    await expect(widget.locator(".zaq-widget-header")).toContainText("Website assistant");
+    await expect(widget.locator(".zaq-widget")).toHaveAttribute("aria-label", "Website assistant");
+    await expect(widget.locator(".zaq-widget-header h1, .zaq-header-identity")).toHaveCount(0);
+    await expect(widget.getByRole("button", { name: "Close chat", exact: true })).toBeVisible();
     await expect(widget.locator('[data-role="assistant"]')).toContainText("prototype response");
     expect(assets.some(url => url.endsWith("/app.js"))).toBe(true);
     expect(assets.some(url => url.endsWith("/app.css"))).toBe(true);

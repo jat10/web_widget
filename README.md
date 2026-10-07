@@ -27,6 +27,33 @@ Create and enable a Web Widget configuration in ZAQ's back office at `/bo/channe
 <script src="https://YOUR-ZAQ-HOST/web_widget/assets/embed.js" data-widget-id="42" defer></script>
 ```
 
+To place the widget inside a div, add `iframe-location-id` with its CSS selector:
+
+```html
+<div id="zaq-widget" style="width: 100%; height: 600px;"></div>
+<script src="https://YOUR-ZAQ-HOST/web_widget/assets/embed.js"
+        data-widget-id="42" iframe-location-id="#zaq-widget" defer></script>
+```
+
+Give the div an explicit height and include it before the script runs. The iframe
+fills the div, including when a conversation opens; the parent page remains scrollable.
+The child iframe uses `id="zaq-widget-frame"` when the div owns `id="zaq-widget"`.
+The same `zaq.widget.init`, `updateSettings`, and `dispose` API applies.
+Add optional `stylesheet-url` to load custom CSS **inside the iframe**:
+
+```html
+<script src="http://localhost:4000/web_widget/assets/embed.js"
+        data-widget-id="13" stylesheet-url="/widget-brand.css" defer></script>
+```
+
+Relative URLs resolve against the parent page. Use a publicly reachable HTTP(S)
+URL serving CSS (HTTPS when embedding an HTTPS widget). This works with or without
+`iframe-location-id`. Omit it for bundled styling; config `stylesheet_url` is no
+longer used. Failed CSS loads leave bundled styling available.
+
+Omit `iframe-location-id` for the default floating widget. Invalid selectors or
+missing divs raise an error. Only one widget is supported by the global API.
+
 The script creates the iframe. Your backend signs a JWT with the authentication key, and your frontend passes only that JWT to the widget:
 
 ```js
@@ -80,6 +107,12 @@ Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` inst
 The demo uses a mock host, not a live ZAQ agent. Enable its conversation sidebar with `WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server`. To embed the local demo on another origin, set `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` to a comma-separated list of exact allowed origins and restart the server.
 
 Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets.
+
+The library provides `mix web_widget.assets.install`: run it from a host such as ZAQ to copy
+the built bundle into that host's `priv/static/web_widget/assets`. Add `web_widget`
+to the host's static-path allowlist to serve it through the existing static plug,
+without `WebWidget.Static`. Reinstall after each widget rebuild and before the
+host's production asset digest. See [host asset installation](docs/host-integration.md#install-assets-into-the-host).
 
 ## Contributing
 

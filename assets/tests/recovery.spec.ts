@@ -38,6 +38,39 @@ async function embed(page: Page, user: string, id = "test-widget", multiple = fa
   return widget;
 }
 
+test("chat submission times out after five minutes and restores the draft", async ({ page, request }) => {
+  let submissionHeld = false;
+  await page.routeWebSocket(/\/live\/websocket/, socket => {
+    const server = socket.connectToServer();
+    socket.onMessage(message => {
+      const frame = JSON.parse(message.toString());
+      if (frame[3] === "event" && frame[4]?.event === "widget.submit") {
+        submissionHeld = true;
+      } else {
+        server.send(message);
+      }
+    });
+  });
+  const id = await session(request);
+  await page.goto("/widget/missing");
+  const widget = await embed(page, id);
+  await page.clock.install();
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Wait for acceptance");
+  await input.press("Enter");
+  await expect.poll(() => submissionHeld).toBe(true);
+
+  await page.clock.fastForward(299000);
+  await expect(widget.getByRole("alert")).toHaveCount(0);
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+  await page.clock.fastForward(2000);
+  await expect(widget.getByRole("alert")).toHaveText("Connection interrupted. Please try again.");
+  await expect(input).toHaveValue("Wait for acceptance");
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
+  expect((await events(request, id)).filter(event => event.type === "message.create")).toHaveLength(0);
+});
+
 test("date separators group dated messages across untimestamped assistant history", async ({ page, request }) => {
   const today = new Date();
   const yesterday = new Date(today);

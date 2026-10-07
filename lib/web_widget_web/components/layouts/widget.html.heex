@@ -6,7 +6,6 @@
     <meta name="csrf-token" content={get_csrf_token()} />
     <title>{assigns[:page_title] || "Widget unavailable"}</title>
     <link phx-track-static rel="stylesheet" href="/web_widget/assets/app.css" />
-    <link :if={assigns[:widget_stylesheet_url]} rel="stylesheet" href={@widget_stylesheet_url} />
     <script type="module" phx-track-static src="/web_widget/assets/app.js">
     </script>
   </head>

@@ -4,12 +4,13 @@ import {
   AssistantRuntimeProvider,
   ComposerPrimitive,
   MessagePrimitive,
-  MessagePartPrimitive,
   ThreadPrimitive,
   useAuiState,
   useExternalStoreRuntime,
   type ThreadMessageLike,
 } from "@assistant-ui/react";
+import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
+import remarkGfm from "remark-gfm";
 import "../css/widget.css";
 
 type Mode = "launcher" | "conversation";
@@ -134,7 +135,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
       setError(null);
       try {
         await new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => reject(new Error(t["Connection interrupted. Please try again."])), 10000);
+          const timeout = window.setTimeout(() => reject(new Error(t["Connection interrupted. Please try again."])), 300000);
           try {
             pushEvent("widget.submit", { text }, (reply) => {
               window.clearTimeout(timeout);
@@ -200,7 +201,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
       <ThreadPrimitive.Root ref={root} className="zaq-widget" data-mode={mode} data-language={config.locale} data-theme={config.theme} style={{ colorScheme: config.theme === "auto" ? "light dark" : config.theme }} data-multiple-conversations={!!config.multiple_conversations} data-calendar-day={today} aria-label={config.title}>
         {mode === "conversation" && config.multiple_conversations && <ConversationSidebar conversations={conversations} selectedId={conversationId} disabled={submitting || isRunning} onSelect={id => changeConversation("widget.conversation.select", { id })} onNew={() => changeConversation("widget.conversation.new")} />}
         <div className="zaq-chat-main" key="chat-main">
-        {mode === "conversation" && <Conversation title={config.title} isTyping={isTyping} onClose={() => pushEvent("widget.close", {})} empty={messages.length === 0} />}
+        {mode === "conversation" && <Conversation isTyping={isTyping} onClose={() => pushEvent("widget.close", {})} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
         <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} error={error || responseError || null} />
         </div>
@@ -246,12 +247,11 @@ function FloatingComposer({ mode, config, busy, error }: { mode: Mode; config: C
   );
 }
 
-function Conversation({ title, isTyping, onClose, empty }: { title: string; isTyping: boolean; onClose: () => void; empty: boolean }) {
+function Conversation({ isTyping, onClose, empty }: { isTyping: boolean; onClose: () => void; empty: boolean }) {
   const { strings: t } = useI18n();
   return (
     <>
       <header className="zaq-widget-header">
-        <div className="zaq-header-identity"><span className="zaq-assistant-mark" aria-hidden="true"><ActivityIcon kind="assistant" /></span><div><h1>{title}</h1><p>{t["Here to help you find your next step"]}</p></div></div>
         <div className="zaq-header-actions">
           {isTyping && <span className="zaq-header-status" role="status"><span className="zaq-live-dot" />{t["Assistant is working…"]}</span>}
           <button type="button" className="zaq-close" aria-label={t["Close chat"]} title={t["Close chat"]} onClick={onClose}><ActivityIcon kind="close" /></button>
@@ -272,8 +272,8 @@ function UserMessage() {
   return <><MessageDate /><MessagePrimitive.Root className="zaq-message zaq-message-user" data-role="user"><span className="zaq-user-content" dir="auto"><MessagePrimitive.Parts /></span><MessageTime /></MessagePrimitive.Root></>;
 }
 
-function ImmediateText() {
-  return <MessagePartPrimitive.Text smooth={false} />;
+function AssistantMarkdown() {
+  return <MarkdownTextPrimitive className="zaq-markdown" smooth={false} remarkPlugins={[remarkGfm]} />;
 }
 
 function AssistantMessage() {
@@ -291,7 +291,7 @@ function AssistantMessage() {
       <div className="zaq-answer-heading"><span className="zaq-assistant-mark zaq-assistant-mark-small" aria-hidden="true"><ActivityIcon kind="assistant" /></span><span>{t["Assistant"]}</span></div>
       {!!toolSteps?.length && <ResponseActivity steps={toolSteps} running={running} failed={!!error} />}
       <div dir="auto" className="zaq-answer-content" data-streaming={running && hasContent}>
-        <MessagePrimitive.Parts components={{ Text: ImmediateText }} />
+        <MessagePrimitive.Parts components={{ Text: AssistantMarkdown }} />
       </div>
       <MessageTime />
       {running && <WorkingIndicator label={hasContent ? t["Writing response"] : activeTools ? t["Working with tools"] : t["Preparing your answer"]} />}

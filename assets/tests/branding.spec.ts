@@ -20,6 +20,11 @@ for (const theme of ["light", "dark"]) {
       const input = frame.getByRole("textbox", { name: language === "ar" ? "الرسالة" : "Message", exact: true });
       await input.fill("hello"); await input.press("Enter");
       await expect(frame.locator(".zaq-widget")).toHaveAttribute("data-mode", "conversation");
+      const header = frame.locator(".zaq-widget-header");
+      await expect(header.locator("h1, p, .zaq-assistant-mark, .zaq-header-identity")).toHaveCount(0);
+      await expect(header).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+      await expect(header).toHaveCSS("border-bottom-width", "0px");
+      await expect(header.getByRole("button", { name: language === "ar" ? "إغلاق المحادثة" : "Close chat", exact: true })).toBeVisible();
       await expect(signature).toBeVisible();
       await input.fill("Keep my draft");
       await context.route("https://www.zaq.ai/open-source", route => route.fulfill({ contentType: "text/html", body: "<h1>ZAQ open source</h1>" }));
