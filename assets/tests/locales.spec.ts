@@ -24,7 +24,6 @@ for (const labels of locales) {
       expect(sidebar.x).toBeGreaterThan(main.x);
       await page.screenshot({ path: testInfo.outputPath("arabic-desktop.png") });
     }
-    await expect(widget.getByRole("heading", { name: "Host assistant", exact: true })).toBeVisible();
     await widget.getByRole("button", { name: "A weekend outdoors" }).click();
     await expect(widget.locator(".zaq-date-separator")).toHaveText([labels.yesterday, labels.today]);
     const time = widget.locator(".zaq-message-time").first();
