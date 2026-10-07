@@ -85,6 +85,42 @@ defmodule WebWidget.Integration.ResponseTest do
              )
   end
 
+  test "failed responses display the public body without private error details" do
+    response = %{
+      type: :message_failed,
+      conversation_id: "chat",
+      message_id: "transport",
+      payload: %{
+        body: "Your AI credits have run out.",
+        error: "PRIVATE_TRACE",
+        private_trace: "PRIVATE_TRACE"
+      }
+    }
+
+    assert {:ok, %{payload: payload}} =
+             Response.encode("response.message.failed", response, "12")
+
+    assert payload == %{
+             message_id: "transport",
+             code: "response_failed",
+             message: "Your AI credits have run out."
+           }
+  end
+
+  test "failed responses without public text use the generic fallback" do
+    response = %{
+      type: :message_failed,
+      conversation_id: "chat",
+      message_id: "transport",
+      payload: %{code: :dispatch_error, error: "PRIVATE_TRACE"}
+    }
+
+    for payload <- [response.payload, %{body: nil}, %{body: " \n "}, %{body: 42}] do
+      assert {:ok, %{payload: %{message: "Unable to complete this response."}}} =
+               Response.encode("response.message.failed", %{response | payload: payload}, "12")
+    end
+  end
+
   test "protocol version and request correlation are mandatory" do
     refute Response.correlated?(%{protocol_version: 2, request_id: "r"}, "r")
     refute Response.correlated?(%{protocol_version: 1, request_id: "other"}, "r")

@@ -71,10 +71,8 @@ defmodule WebWidget.Integration.Response do
        ),
        do: {:ok, %{id: step, message_id: id, kind: "status", state: "updated", label: label}}
 
-  defp payload(:message_failed, _, id),
-    do:
-      {:ok,
-       %{message_id: id, code: "response_failed", message: "Unable to complete this response."}}
+  defp payload(:message_failed, payload, id),
+    do: {:ok, %{message_id: id, code: "response_failed", message: failure_message(payload)}}
 
   defp payload(:error, payload, _),
     do:
@@ -86,6 +84,14 @@ defmodule WebWidget.Integration.Response do
        }}
 
   defp payload(_, _, _), do: :error
+
+  defp failure_message(%{body: body}) when is_binary(body) do
+    if String.valid?(body) and String.trim(body) != "",
+      do: body,
+      else: "Unable to complete this response."
+  end
+
+  defp failure_message(_), do: "Unable to complete this response."
 
   defp history_message(message) when is_map(message) do
     message

@@ -315,7 +315,7 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:typing` | `response.typing`, boolean `active` |
 | `:message_create`, `:message_edit`, `:message_complete` | Corresponding `response.message.*`; top-level transport `message_id` becomes UI payload `id`, public `body` becomes `content` |
 | `:message_step` | `response.message.step`; public `step_id` and message ID, safe label; `:activity/:running` maps to `status/started` or `updated` for an existing step |
-| `:message_failed` | `response.message.failed`; correlated message ID, known public code/error mapped to safe UI code/text |
+| `:message_failed` | `response.message.failed`; correlated message ID and public `body` as UI error text, with a generic fallback when `body` is absent or blank; do not expose raw error details |
 | `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
 
 ZAQ streaming edits are cumulative snapshots. LiveView keeps the full content,
