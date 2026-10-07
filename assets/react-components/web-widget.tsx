@@ -135,10 +135,17 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
       setError(null);
       try {
         await new Promise<void>((resolve, reject) => {
-          pushEvent("widget.submit", { text }, (reply) => {
-            if (reply.ok) resolve();
-            else reject(new Error(reply.error));
-          });
+          const timeout = window.setTimeout(() => reject(new Error(t["Connection interrupted. Please try again."])), 300000);
+          try {
+            pushEvent("widget.submit", { text }, (reply) => {
+              window.clearTimeout(timeout);
+              if (reply.ok) resolve();
+              else reject(new Error(reply.error));
+            });
+          } catch (cause) {
+            window.clearTimeout(timeout);
+            reject(cause);
+          }
         });
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : t["Unable to send. Please try again."]);
