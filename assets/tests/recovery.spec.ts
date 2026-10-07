@@ -38,6 +38,40 @@ async function embed(page: Page, user: string, id = "test-widget", multiple = fa
   return widget;
 }
 
+test("chat submission keeps waiting beyond ten seconds and accepts a late acknowledgement", async ({ page, request }) => {
+  let releaseSubmission: (() => void) | undefined;
+  await page.routeWebSocket(/\/live\/websocket/, socket => {
+    const server = socket.connectToServer();
+    socket.onMessage(message => {
+      const frame = JSON.parse(message.toString());
+      if (frame[3] === "event" && frame[4]?.event === "widget.submit") {
+        releaseSubmission = () => server.send(message);
+      } else {
+        server.send(message);
+      }
+    });
+  });
+  const id = await session(request);
+  await page.goto("/widget/missing");
+  const widget = await embed(page, id);
+  await page.clock.install();
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("Wait for acceptance");
+  await input.press("Enter");
+  await expect.poll(() => Boolean(releaseSubmission)).toBe(true);
+
+  await page.clock.fastForward(11000);
+  await expect(widget.getByRole("alert")).toHaveCount(0);
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeDisabled();
+
+  releaseSubmission!();
+  await expect(widget.locator(".zaq-answer-content")).toHaveText("Controlled host reply");
+  await expect(input).toHaveValue("");
+  await input.fill("Next question");
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
+  expect((await events(request, id)).filter(event => event.type === "message.create")).toHaveLength(1);
+});
+
 test("date separators group dated messages across untimestamped assistant history", async ({ page, request }) => {
   const today = new Date();
   const yesterday = new Date(today);
