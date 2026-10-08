@@ -44,18 +44,15 @@ defmodule WebWidget.Integration.Chat do
            true <- Runtime.authorized?(session),
            {:ok, state, positions} <- history(session, requested),
            true <- Runtime.authorized?(session) do
-        timer =
-          Process.send_after(
-            self(),
-            {:widget_session_expired, session.topic},
-            max(0, session.expires_at * 1000 - System.system_time(:millisecond))
-          )
+        generation = make_ref()
+        timer = expiration_timer(session, generation)
 
         {:ok,
          %{
            session: session,
            subscription: subscription,
            timer: timer,
+           auth_generation: generation,
            conversation_id: requested,
            active: nil,
            state: state,
@@ -71,6 +68,39 @@ defmodule WebWidget.Integration.Chat do
           {:error, "Unable to initialize or restore this conversation."}
       end
     end
+  end
+
+  def renew(chat, proof) do
+    with {:ok, session} <- Runtime.renew(chat.session, proof) do
+      generation = make_ref()
+      timer = expiration_timer(session, generation)
+      Process.cancel_timer(chat.timer)
+      {:ok, %{chat | session: session, timer: timer, auth_generation: generation}}
+    end
+  end
+
+  def authorization_metadata(chat) do
+    expiry = chat.session.expires_at
+
+    lead =
+      :web_widget
+      |> Application.get_env(:authentication, [])
+      |> Keyword.get(:refresh_lead_seconds, 300)
+
+    %{
+      expires_at: expiry,
+      refresh_at: expiry - lead,
+      server_time: System.system_time(:second),
+      credential_id: chat.session.binding_claims && chat.session.binding_claims.jti
+    }
+  end
+
+  defp expiration_timer(session, generation) do
+    Process.send_after(
+      self(),
+      {:widget_session_expired, session.topic, generation},
+      max(0, session.expires_at * 1000 - System.system_time(:millisecond))
+    )
   end
 
   def submit(%{active: nil, blocked: false} = chat, text) do

@@ -76,6 +76,29 @@ defmodule WebWidget.Runtime do
     end
   end
 
+  @doc "Replaces authorization for the same process, verified page, widget and sender."
+  def renew(%Session{} = current, proof) do
+    with true <- is_binary(current.page_id) and is_map(current.binding_claims),
+         {:ok, _} <- session_config(current),
+         {:ok, replacement} <- authenticate(current.widget_id, proof, current.page_id),
+         true <-
+           replacement.sender_id == current.sender_id and
+             replacement.channel_config_id == current.channel_config_id and
+             replacement.runtime_ref == current.runtime_ref and
+             replacement.page_id == current.page_id do
+      {:ok,
+       %{
+         current
+         | expires_at: replacement.expires_at,
+           binding_claims: replacement.binding_claims
+       }}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  def renew(_, _), do: {:error, :unauthorized}
+
   @doc "Dispatches an internal request using a verified, process-bound session."
   def dispatch(event, session) do
     with {:ok, config} <- session_config(session) do

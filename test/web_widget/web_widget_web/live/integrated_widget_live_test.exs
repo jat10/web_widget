@@ -146,6 +146,56 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     refute render(ctx.view) =~ "LATE"
   end
 
+  test "renewal during streaming preserves delivery and rejects a different sender", ctx do
+    init(ctx)
+    assert_receive {:shared_request, %{type: :conversation_init}, _, _}
+    render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "stream"} = request, context, _}
+
+    ChatHost.publish(
+      context,
+      ChatHost.response(request, :message_edit, "conversation-1", %{body: "Before renewal"})
+    )
+
+    assert render(ctx.view) =~ "Before renewal"
+
+    render_hook(ctx.view, "widget.auth.renew", %{identity_token: token(ctx)})
+    assert_reply(ctx.view, %{ok: true, expires_at: expiry, refresh_at: refresh})
+    assert expiry > refresh
+    refute_receive {:shared_request, %{type: :conversation_init}, _, _}
+
+    wrong = token(ctx, %{user_id: "another-visitor"})
+    render_hook(ctx.view, "widget.auth.renew", %{identity_token: wrong})
+    assert_reply(ctx.view, %{ok: false, reason: "invalid_credential"})
+
+    ChatHost.publish(
+      context,
+      ChatHost.response(request, :message_complete, "conversation-1", %{body: "After renewal"})
+    )
+
+    assert render(ctx.view) =~ "After renewal"
+    render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+
+    assert_receive {:shared_request, %{content: "instant", conversation_id: "conversation-1"}, _,
+                    _}
+  end
+
+  test "an old expiry timer cannot expire an accepted renewal", ctx do
+    {:ok, short} =
+      SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
+        issuer: "parent",
+        audience: "widget",
+        ttl: 2
+      )
+
+    render_event(ctx.view, "widget.context", %{identity_token: short}, %{ok: true})
+    render_hook(ctx.view, "widget.auth.renew", %{identity_token: token(ctx)})
+    assert_reply(ctx.view, %{ok: true})
+    Process.sleep(2_100)
+    render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "instant"}, _, _}
+  end
+
   test "runtime termination clears the session and rejects queued delivery", ctx do
     init(ctx)
     render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})

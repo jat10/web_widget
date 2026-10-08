@@ -82,6 +82,7 @@ defmodule WebWidgetWeb.WidgetLive do
               parent_context: %{user_id: chat.session.sender_id}
             )
             |> restore_mode(chat.conversation_id)
+            |> push_event("widget.authentication.accepted", Chat.authorization_metadata(chat))
 
           {:ok, socket}
 
@@ -233,6 +234,26 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
+  def handle_event(
+        "widget.auth.renew",
+        %{"identity_token" => proof} = params,
+        %{assigns: %{integrated: true, chat: chat}} = socket
+      )
+      when map_size(params) == 1 and not is_nil(chat) do
+    case Chat.renew(chat, proof) do
+      {:ok, renewed} ->
+        {:reply, Map.put(Chat.authorization_metadata(renewed), :ok, true),
+         assign(socket, :chat, renewed)}
+
+      _ ->
+        {:reply, %{ok: false, reason: "invalid_credential"}, socket}
+    end
+  end
+
+  def handle_event("widget.auth.renew", _params, socket) do
+    {:reply, %{ok: false, reason: "authentication_required"}, socket}
+  end
+
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
     with true <- is_nil(socket.assigns.pending_reply),
          {:ok, chat} <- Chat.open(socket.assigns.widget_id, params, socket.id) do
@@ -250,8 +271,12 @@ defmodule WebWidgetWeb.WidgetLive do
         socket = restore_mode(socket, chat.conversation_id)
 
         {:reply,
-         %{ok: true, settings: socket.assigns.settings, conversation_id: chat.conversation_id},
-         socket}
+         Chat.authorization_metadata(chat)
+         |> Map.merge(%{
+           ok: true,
+           settings: socket.assigns.settings,
+           conversation_id: chat.conversation_id
+         }), socket}
       else
         Chat.close(chat)
         {:reply, %{ok: false, error: "Reload the widget to change identity."}, socket}
@@ -366,9 +391,16 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
-  def handle_info({:widget_session_expired, ref}, %{assigns: %{chat: chat}} = socket)
+  def handle_info(
+        {:widget_session_expired, ref, generation},
+        %{assigns: %{chat: chat}} = socket
+      )
       when not is_nil(chat) do
-    {:noreply, if(chat.session.topic == ref, do: expire_chat(socket), else: socket)}
+    {:noreply,
+     if(chat.session.topic == ref and chat.auth_generation == generation,
+       do: expire_chat(socket),
+       else: socket
+     )}
   end
 
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{assigns: %{chat: chat}} = socket)
