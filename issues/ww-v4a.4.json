@@ -11,9 +11,15 @@
   "id": "ww-v4a.4",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Added Runtime.renew and Chat.renew for same process/page/widget/user, preserving topic, subscription, active request, state and monitor while updating session binding/expiry. Credential-tagged expiry timers prevent stale messages after renewal. LiveView widget.auth.renew returns authoritative expires_at, refresh_at, server_time and credential_id; failed renewal leaves old session unchanged. Tests cover active streaming, wrong user, no reinitialization, and old timer. Full ExUnit: 162 tests, 0 failures.",
+      "timestamp": "2026-10-08T09:02:17Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Implement in-place server authentication renewal",
   "type": "task",
-  "updated_at": "2026-10-08T08:59:29Z"
+  "updated_at": "2026-10-08T09:02:17Z"
 }
