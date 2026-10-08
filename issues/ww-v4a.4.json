@@ -1,0 +1,15 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-08T08:27:26Z",
+  "description": "Add renewal path independent of Chat.open/widget.context initialization. Require same user/widget/page and fresh replacement JWT, atomically bind replacement, update authorization expiry/timers and ack server deadlines. Preserve subscription, active response correlation, selected conversation, streaming deltas, messages, React identity, draft, and settings. Keep prior credential valid to its original expiry; ignore stale timers and acknowledgements. Test renewal amid streaming and failure.",
+  "id": "ww-v4a.4",
+  "labels": [],
+  "parent": "ww-v4a",
+  "priority": 2,
+  "status": "open",
+  "title": "Implement in-place server authentication renewal",
+  "type": "task",
+  "updated_at": "2026-10-08T08:27:26Z"
+}
