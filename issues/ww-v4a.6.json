@@ -11,9 +11,15 @@
   "id": "ww-v4a.6",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Removed conversation/prompt claims from identity JWT and verifier. Added authenticated parent context.update with host-authorized resume/history and first-question prompt context; preserved drafts on expired-session recovery and rejected foreign resume. Verified mix assets.build, mix test (163 pass), focused Chromium shared-widget/auth-bootstrap (3 pass).",
+      "timestamp": "2026-10-08T09:43:23Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Separate conversation metadata from JWT identity",
   "type": "task",
-  "updated_at": "2026-10-08T09:35:28Z"
+  "updated_at": "2026-10-08T09:43:23Z"
 }
