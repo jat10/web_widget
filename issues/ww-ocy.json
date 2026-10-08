@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-08T10:39:50Z",
+  "description": "Audit issue 14 scenarios against PR 15; extend existing Playwright and ExUnit coverage with real security mechanisms; add CI execution of real three-node Mnesia checks; report defects separately.",
+  "id": "ww-ocy",
+  "labels": [],
+  "priority": 1,
+  "status": "open",
+  "title": "Complete PR 15 authentication integration tests",
+  "type": "task",
+  "updated_at": "2026-10-08T10:39:50Z"
+}
