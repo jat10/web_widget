@@ -1,7 +1,7 @@
 defmodule WebWidget.Static do
   @moduledoc """
-  Serves built widget assets at /web_widget/assets. Add before the host router.
-  Build the dependency's assets before assembling a release.
+  Serves the dependency's built widget assets at /web_widget/assets.
+  `WebWidget.Router.web_widget/1` registers the route in the host router.
   """
   @behaviour Plug
 
@@ -18,5 +18,10 @@ defmodule WebWidget.Static do
   end
 
   @impl true
-  def call(conn, opts), do: Plug.Static.call(conn, opts)
+  def call(conn, opts) do
+    case Plug.Static.call(conn, opts) do
+      %{halted: true} = conn -> conn
+      conn -> conn |> Plug.Conn.send_resp(404, "Not found") |> Plug.Conn.halt()
+    end
+  end
 end

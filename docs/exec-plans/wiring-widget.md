@@ -51,8 +51,9 @@ Logs: `/tmp/jwt-checks.log`, `/tmp/jwt-browser.log`.
 
 The subsequent user instruction, "in zaq add the router configuration", authorizes
 an exception to the earlier configuration-only constraint: add `import WebWidget.Router`
-and a browser-pipeline `/widget` mount in ZAQ's router, plus `plug WebWidget.Static`
-in its endpoint. This is now the selected local smoke topology. The old separate
+and a browser-pipeline `/widget` mount in ZAQ's router. The former endpoint
+`WebWidget.Static` plug is superseded by asset routes in the macro. This is now
+the selected local smoke topology. The old separate
 endpoint/proxy recommendations below describe the previous configuration-only option.
 ZAQ's existing `/live` socket is reused; no second endpoint or port is needed.
 The ngrok tunnel should forward to ZAQ's actual HTTP port (normally 4000), the

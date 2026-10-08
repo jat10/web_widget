@@ -38,5 +38,17 @@ defmodule WebWidget.RouterTest do
         assert route.plug == WebWidget.Embedding.Unavailable
       end
     end
+
+    asset =
+      Phoenix.Router.route_info(
+        WebWidget.RouterTest.Host,
+        "GET",
+        "/web_widget/assets/embed.js",
+        "localhost"
+      )
+
+    assert asset.plug == WebWidget.Static
+    assert asset.path_params == %{"path" => ["embed.js"]}
+    assert asset.pipe_through == []
   end
 end

@@ -5,7 +5,7 @@ defmodule WebWidget.Router do
       import WebWidget.Router
       web_widget("/widget")
 
-  Serve the built assets with `WebWidget.Static` before the host router.
+  The macro serves the dependency's built assets at `/web_widget/assets/`.
   The iframe uses the host's LiveView socket at `/live`.
   """
 
@@ -15,6 +15,16 @@ defmodule WebWidget.Router do
     quote do
       alias Phoenix.LiveView.Router, as: LiveViewRouter
       require LiveViewRouter
+
+      unless Module.get_attribute(__MODULE__, :web_widget_assets_registered) do
+        Module.put_attribute(__MODULE__, :web_widget_assets_registered, true)
+
+        scope "/", alias: false do
+          get "/web_widget/assets/*path", WebWidget.Static, [],
+            as: nil,
+            private: %{plug_skip_csrf_protection: true}
+        end
+      end
 
       pipeline unquote(session) do
         plug WebWidget.Embedding.FramePolicy

@@ -13,12 +13,11 @@ The existing mock host is not a working ZAQ installation.
 
 ## Current local ZAQ mount
 
-By explicit user request, the local ZAQ checkout now imports `WebWidget.Router`,
-mounts `web_widget("/widget")` in its browser pipeline outside BO authentication,
-and serves installed widget assets through its existing static plug.
-Run the library-provided `mix web_widget.assets.install` from ZAQ after building the widget
-bundle. ZAQ includes `web_widget` in `static_paths/0` and does not need a
-`WebWidget.Static` plug or a local Mix task. Restart ZAQ after recompilation.
+ZAQ imports `WebWidget.Router` and mounts `web_widget("/widget")` in its browser
+pipeline outside BO authentication. The macro serves the dependency's compiled
+assets directly. A fresh Git dependency installed from a release tag includes the
+tracked bundle. ZAQ needs no asset install task, build command, static-path
+allowlist entry, or endpoint `WebWidget.Static` plug.
 The same ZAQ endpoint serves `/widget/<id>`, `/web_widget/assets/` and `/live`.
 Point ngrok at ZAQ's HTTP port (normally 4000), and use that public origin as the
 global base URL. Omit `integration.public_url` or use that same origin; no separate
@@ -77,33 +76,21 @@ The package endpoint opt-in does not imply that chat authentication is complete.
 
 ## Generic Phoenix host mounting (not required for ZAQ)
 
-### Install assets into the host
+### Install the Git dependency and mount the router
 
-The library includes `Mix.Tasks.WebWidget.Assets.Install`. After compiling the dependency,
-run this command **from the host project**:
+Add a released Git tag to the host's Mix dependencies and run `mix deps.get`:
 
-```sh
-mix web_widget.assets.install
+```elixir
+{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}
 ```
 
-It copies all built JS/CSS and supporting files from the dependency's
-`priv/static/assets` into the host's `priv/static/web_widget/assets`, including
-`embed.js`. Build the widget bundle first (`npm --prefix assets run build` from
-the library checkout); an incomplete bundle raises an actionable error.
-Add `web_widget` to the host's existing static-path allowlist. Its standard
-`Plug.Static` then serves the existing `/web_widget/assets/...` URLs, so remove
-the optional `WebWidget.Static` plug. Host `assets/app.js` and CSS are untouched.
-Ignore `/priv/static/web_widget/` in the host's Git configuration.
+The tagged source contains `priv/static/assets`; no Node installation or asset
+build is needed in the host. Git dependencies do not fetch GitHub Release
+attachments.
 
-Repeat installation after rebuilding/upgrading the widget, and run it before
-`mix phx.digest` when preparing a release. Hosts may add the command to their
-build/deploy aliases; the task does not edit host source or build aliases.
-
-### Mount the router and optionally serve dependency assets directly
-
-Mount in the host browser pipeline, outside any existing `live_session` (the
-macro creates its own). The default prefix is `/widget`; a custom prefix or
-aliased scope is also supported.
+Mount in the host's root browser scope, outside any existing `live_session`
+(the macro creates its own). The default prefix is `/widget`; additional mounts
+can use a custom prefix or aliased scope.
 
 ```elixir
 import WebWidget.Router
@@ -117,16 +104,14 @@ end
 The browser pipeline must fetch session and LiveView flash, protect against CSRF,
 and set secure browser headers. Keep the host's `Plug.Session` and LiveView socket
 at `/live`, using the same session options in
-`websocket: [connect_info: [session: @session_options]]`. Add this before the host
-router and any catch-all static plug:
+`websocket: [connect_info: [session: @session_options]]`. The endpoint uses its
+existing router without an additional static plug.
 
-```elixir
-plug WebWidget.Static
-plug MyAppWeb.Router
-```
-
-The macro supplies an iframe root layout loading JS/CSS and lazy React chunks
-from `/web_widget/assets/`. The bundle registers `WidgetContext` and LiveReact's
+The macro registers `/web_widget/assets/*path` before its LiveView routes. Its
+`WebWidget.Static` route serves files from the dependency's `priv/static/assets`
+with content types, ETags and path validation supplied by Plug.Static. The macro
+supplies an iframe root layout loading JS/CSS and lazy React chunks from that path.
+The bundle registers `WidgetContext` and LiveReact's
 `ReactHook` and connects to the host's `/live` socket. Widget hooks run inside the iframe. The embedding website separately loads
 `/web_widget/assets/embed.js` to expose the parent-side `zaq.widget` API. The iframe does not load the host app
 bundle. Currently the endpoint must be root-mounted with the standard `/live` path.
@@ -269,23 +254,14 @@ Repo or demo runtime. Do not enable `config :web_widget, start_web_server: true`
 in the host. Widget rendering explicitly disables React SSR; no Node SSR service
 or global LiveReact setting is needed.
 
-Build assets before assembling the host release. With the normal Mix `deps/`
-layout, run from the host root (Node 22.12+ or 24 and npm required):
-
-```sh
-mix deps.get
-# Only if deps/web_widget/deps does not exist: expose host-resolved JS packages.
-ln -s .. deps/web_widget/deps
-npm --prefix deps/web_widget/assets ci
-npm --prefix deps/web_widget/assets run build
-mix compile
-```
-
-For path/umbrella dependencies, point the widget's `deps` symlink at the host's
-actual dependency directory. Existing widget-local Phoenix/LiveView/LiveReact
-dependencies must match the host's resolved versions. Keep the generated
-`web_widget/priv/static/assets` directory in the release. Rebuild after dependency
-or UI changes. Static responses revalidate with ETags.
+Release Please opens a version and changelog PR from conventional commits. Merging
+it creates the `vX.Y.Z` tag and GitHub Release and updates the Mix project version.
+GitHub Actions installs JavaScript dependencies with `npm ci`, runs the existing
+Vite build, checks that all compiled files match the tracked bundle, and attaches
+the bundle archive to the release. The assets must be committed with frontend
+changes, since Git dependencies receive the tag contents rather than attachments.
+When assembling a host release, retain the dependency's `priv/static/assets`
+directory. Static responses revalidate with ETags.
 
 Embed `/widget/<connector-id>` on a configured allowed origin. The existing
 [website examples](../README.md#add-the-widget-to-your-website) demonstrate the

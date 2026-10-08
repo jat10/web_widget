@@ -177,6 +177,48 @@ defmodule WebWidget.HostRouterTest do
     end
   end
 
+  test "the macro serves the complete bundle and revalidates cached assets" do
+    for {file, content_type} <- [
+          {"embed.js", "text/javascript"},
+          {"app.js", "text/javascript"},
+          {"app.css", "text/css"},
+          {"web-widget.js", "text/javascript"},
+          {"web-widget.css", "text/css"},
+          {"widget-client.js", "text/javascript"}
+        ] do
+      conn = get(build_conn(), "/web_widget/assets/#{file}")
+      assert byte_size(response(conn, 200)) > 100
+      assert [^content_type] = Plug.Conn.get_resp_header(conn, "content-type")
+
+      assert ["public, max-age=0, must-revalidate"] =
+               Plug.Conn.get_resp_header(conn, "cache-control")
+
+      [etag] = Plug.Conn.get_resp_header(conn, "etag")
+
+      cached =
+        build_conn()
+        |> Plug.Conn.put_req_header("if-none-match", etag)
+        |> get("/web_widget/assets/#{file}")
+
+      assert response(cached, 304) == ""
+    end
+  end
+
+  test "missing asset paths return 404" do
+    assert response(get(build_conn(), "/web_widget/assets/missing.js"), 404) == "Not found"
+
+    assert response(get(build_conn(), "/web_widget/assets/nested/missing.css"), 404) ==
+             "Not found"
+  end
+
+  test "asset paths cannot escape the dependency's static directory" do
+    conn = Plug.Test.conn(:get, "/web_widget/assets/%2e%2e/robots.txt")
+
+    assert_raise Plug.Static.InvalidPathError, fn ->
+      WebWidget.Static.call(conn, WebWidget.Static.init([]))
+    end
+  end
+
   test "connected mount uses replacement runtime configuration, not stale HTTP configuration" do
     conn = get(build_conn(), "/widget/support")
     stop_supervised!({WebWidget.Runtime, :host_test})

@@ -75,6 +75,11 @@ jobs:
       - name: Build assets
         run: mix assets.build
 
+      - name: Verify tracked assets and fresh Git dependency
+        run: |
+          test -z "$(git status --porcelain -- priv/static/assets)"
+          bash test/support/host/git_dependency_smoke.sh
+
       - name: Run tests with coverage
         run: mix coveralls.json
 
