@@ -12,9 +12,15 @@
   "id": "ww-v4a.7",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Added web_widget_api backend route, strict operation-specific HS256 control proof, connector-bound verification, replicated idempotent user cutoff, scoped PubSub revocation, terminal browser overlay and transport disconnect. Covered malformed/foreign/browser proofs, idempotent retry, targeted sessions, and cutoff-before-broadcast race. Verified mix assets.build, mix test (167 pass), and focused Chromium (4 pass).",
+      "timestamp": "2026-10-08T09:57:07Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Add backend disconnect API and router macro",
   "type": "task",
-  "updated_at": "2026-10-08T09:44:14Z"
+  "updated_at": "2026-10-08T09:57:07Z"
 }
