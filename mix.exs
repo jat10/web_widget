@@ -22,7 +22,7 @@ defmodule WebWidget.MixProject do
   def application do
     [
       mod: {WebWidget.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :mnesia]
     ]
   end
 

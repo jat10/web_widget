@@ -10,6 +10,7 @@ defmodule WebWidget.Application do
     children =
       [
         {Registry, keys: :unique, name: WebWidget.RuntimeRegistry},
+        WebWidget.Integration.BindingStore,
         WebWidget.Integration.ReplayGuard
       ] ++ web_children()
 
