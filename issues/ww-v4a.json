@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-08T10:19:40Z",
   "created": "2026-10-08T08:27:26Z",
   "description": "Implement GitHub issue #14: https://github.com/www-zaq-ai/web_widget/issues/14. Deliver clustered JWT binding, early authorization, seamless renewal, parent SDK changes, context separation, backend revocation, verification, and migration docs. Current baseline ea0aade.",
   "id": "ww-v4a",
@@ -17,8 +18,8 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Harden widget authentication and connection lifecycle",
   "type": "epic",
-  "updated_at": "2026-10-08T10:19:37Z"
+  "updated_at": "2026-10-08T10:19:40Z"
 }
