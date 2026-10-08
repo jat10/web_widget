@@ -1,6 +1,8 @@
 {
   "assignee": "",
-  "blocked_by": [],
+  "blocked_by": [
+    "ww-v4a.9"
+  ],
   "blocks": [],
   "created": "2026-10-08T08:27:26Z",
   "description": "Exercise first-use boundary, malformed/wrong-scope/expired JWTs, same-page reconnect, other-page cross-node replay, concurrent claims, revocation races, minority fail-closed, rolling restart, full RAM reset, and post-cutoff recovery. Exercise renewal during deltas, markdown, timeout, lost ack, stylesheet/container readiness, backend disconnect, and bootstrap recovery. Run focused ExUnit/peer tests, mix precommit, mix assets.build, Playwright coverage, and host-mounted installed-assets smoke test.",
@@ -11,5 +13,5 @@
   "status": "open",
   "title": "Run integration and distributed verification",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:26Z"
+  "updated_at": "2026-10-08T08:27:45Z"
 }
