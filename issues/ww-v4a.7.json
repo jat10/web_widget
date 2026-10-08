@@ -1,6 +1,8 @@
 {
   "assignee": "",
-  "blocked_by": [],
+  "blocked_by": [
+    "ww-v4a.2"
+  ],
   "blocks": [],
   "created": "2026-10-08T08:27:26Z",
   "description": "Introduce web_widget_api route macro and stateless package-owned signed-request pipeline. Operation-specific backend proof must cover connector authority, widget/user, timestamp, and nonce; ordinary browser JWT cannot authorize it. Make retries idempotent, commit user cutoff, broadcast scoped revocation, invalidate targeted active sessions/subscriptions, notify browsers and close transports. Show terminal refresh-page message and suppress automatic provider renewal. Add endpoint, race, and browser tests.",
@@ -11,5 +13,5 @@
   "status": "open",
   "title": "Add backend disconnect API and router macro",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:26Z"
+  "updated_at": "2026-10-08T08:27:44Z"
 }
