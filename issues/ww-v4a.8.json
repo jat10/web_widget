@@ -9,9 +9,15 @@
   "id": "ww-v4a.8",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Verified mix precommit (strict Credo clean; 167 ExUnit pass), mix assets.build, full Chromium Playwright (81 pass before two added focused cases), focused authenticated Chromium (6 pass including streamed Markdown/style/container renewal and lost acknowledgement), three-node Mnesia peer checks, sibling ZAQ shared constructor smoke (2 pass), and real asset install/static serving in isolated host tree. Refactored store/submit paths to satisfy strict Credo and required JSON on backend control.",
+      "timestamp": "2026-10-08T10:19:05Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Run integration and distributed verification",
   "type": "task",
-  "updated_at": "2026-10-08T10:06:02Z"
+  "updated_at": "2026-10-08T10:19:05Z"
 }
