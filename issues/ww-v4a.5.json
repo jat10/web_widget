@@ -1,5 +1,5 @@
 {
-  "assignee": "",
+  "assignee": "Jad",
   "blocked_by": [
     "ww-v4a.4"
   ],
@@ -12,8 +12,8 @@
   "labels": [],
   "parent": "ww-v4a",
   "priority": 2,
-  "status": "open",
+  "status": "in_progress",
   "title": "Implement parent SDK token delivery, bootstrap, and lifecycle",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:45Z"
+  "updated_at": "2026-10-08T09:03:13Z"
 }
