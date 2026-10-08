@@ -22,12 +22,41 @@ defmodule WebWidget.E2ESharedHost do
     Supervisor.start_child(WebWidget.Supervisor, spec)
   end
 
+  def requests(user), do: Agent.get(@requests, &Map.get(&1, {:requests, user}, []))
+
   def receive_request(test, request, context: context) do
+    Agent.update(@requests, &Map.update(&1, {:requests, context.sender_id}, [request], fn requests -> requests ++ [request] end))
     if Map.has_key?(request, :content) do
       key = {context.sender_id, Map.get(request, :content)}
       Agent.update(@requests, &Map.update(&1, key, 1, fn count -> count + 1 end))
     end
     case request do
+      %{content: "reconnect " <> _} ->
+        conversation = request.conversation_id || "e2e-" <> Ecto.UUID.generate()
+        saved = Agent.get(@requests, &Map.get(&1, {:conversation, context.sender_id}, %{id: conversation, messages: []}))
+        answer = "Answer to " <> request.content
+        messages = saved.messages ++ [
+          %{message_id: Ecto.UUID.generate(), position: length(saved.messages) + 1, role: "user", content: request.content, provider_sent_at: nil},
+          %{message_id: Ecto.UUID.generate(), position: length(saved.messages) + 2, role: "assistant", content: answer, provider_sent_at: nil}]
+        Agent.update(@requests, &Map.put(&1, {:conversation, context.sender_id}, %{id: conversation, messages: messages}))
+        host = WebWidget.TestIntegration.ChatHost
+        receipt = host.response(request, if(request.conversation_id, do: :status, else: :conversation_created), conversation,
+          %{accepted: true, created: is_nil(request.conversation_id)})
+        host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
+        host.publish(context, %{receipt | type: :message_complete, payload: %{body: answer}})
+        {:ok, receipt}
+
+      %{type: type, conversation_id: "e2e-" <> _ = conversation} when type in [:conversation_init, :conversation_history] ->
+        saved = Agent.get(@requests, &Map.get(&1, {:conversation, context.sender_id}))
+        host = WebWidget.TestIntegration.ChatHost
+        case saved do
+          %{id: ^conversation, messages: messages} ->
+            if type == :conversation_init,
+              do: host.response(request, :widget_initialized, conversation, %{created: false}),
+              else: host.response(request, :conversation_history, conversation, %{messages: messages})
+          _ -> host.response(request, :error, conversation, %{code: :conversation_not_found})
+        end
+
       %{type: :conversation_history} ->
         case Agent.get(@requests, &Map.get(&1, {:held_stream, context.sender_id})) do
           nil -> receive_default(test, request, context)
@@ -102,13 +131,22 @@ defmodule WebWidget.E2ESharedHost do
     held != nil
   end
 
-  def stream_status(user_id) do
+  def stream_details(user_id) do
     Agent.get(@requests, fn state ->
       case Map.get(state, {:held_stream, user_id}) do
-        nil -> :missing
-        held -> held.status
+        nil -> %{status: :missing}
+        held -> %{status: held.status, topic: held.context.delivery.topic,
+          request_id: held.receipt.request_id, conversation_id: held.receipt.conversation_id,
+          message_id: held.receipt.message_id}
       end
     end)
+  end
+
+  # A nonterminal host event leaves canonical history and the held final untouched.
+  def probe_stream(user_id) do
+    held = Agent.get(@requests, &Map.fetch!(&1, {:held_stream, user_id}))
+    WebWidget.TestIntegration.ChatHost.publish(held.context,
+      %{held.receipt | type: :message_edit, payload: %{body: "UNAUTHORIZED EXPIRY PROBE"}})
   end
 
   def request_count(user_id, content) do

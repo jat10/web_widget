@@ -1,5 +1,5 @@
 defmodule WebWidget.Integration.SignedIdentityTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
@@ -59,6 +59,84 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     expired = jwt(ctx.key, Map.put(claims(ctx), "exp", System.system_time(:second) - 1))
 
     assert {:error, :unauthorized} = authenticate(ctx, expired)
+  end
+
+  test "trusted expired credentials retain revocation classification without binding", ctx do
+    now = System.system_time(:second)
+    expired = %{claims(ctx) | "iat" => now - 20, "exp" => now - 1}
+    assert {:error, :unauthorized} = authenticate(ctx, jwt(ctx.key, expired))
+
+    assert {:ok, _, true} =
+             BindingStore.revoke_user(
+               "parent",
+               ctx.config.id,
+               "visitor",
+               Ecto.UUID.generate(),
+               now,
+               now
+             )
+
+    assert {:error, :backend_revoked} = authenticate(ctx, jwt(ctx.key, expired))
+
+    assert [] ==
+             :mnesia.dirty_read(
+               :web_widget_token_bindings,
+               {"parent", "widget", ctx.config.id, expired["jti"]}
+             )
+
+    for invalid <- [
+          Map.put(expired, "iss", "wrong"),
+          Map.put(expired, "aud", "wrong"),
+          Map.put(expired, "widget_id", ctx.config.id + 1),
+          Map.put(expired, "exp", expired["iat"]),
+          Map.put(expired, "nbf", now + 1),
+          Map.put(expired, "jti", "short"),
+          Map.put(expired, "user_id", " "),
+          Map.put(expired, "extra", true)
+        ] do
+      assert {:error, :unauthorized} = authenticate(ctx, jwt(ctx.key, invalid))
+    end
+
+    assert {:error, :unauthorized} = authenticate(ctx, jwt(ctx.key <> "wrong", expired))
+  end
+
+  test "valid and expired covered credentials report unavailable authority distinctly", ctx do
+    now = System.system_time(:second)
+
+    assert {:ok, _, true} =
+             BindingStore.revoke_user(
+               "parent",
+               ctx.config.id,
+               "visitor",
+               Ecto.UUID.generate(),
+               now,
+               now
+             )
+
+    config = Application.get_env(:web_widget, :authentication, [])
+    :sys.suspend(BindingStore)
+
+    try do
+      Application.put_env(
+        :web_widget,
+        :authentication,
+        Keyword.put(config, :replica_nodes, [
+          node(),
+          :unavailable_a@localhost,
+          :unavailable_b@localhost
+        ])
+      )
+
+      for times <- [%{"iat" => now, "exp" => now + 300}, %{"iat" => now - 20, "exp" => now - 1}] do
+        proof = jwt(ctx.key, Map.merge(claims(ctx), times))
+        assert {:error, :store_unavailable} = authenticate(ctx, proof)
+      end
+
+      assert {:error, :unauthorized} = authenticate(ctx, "untrusted")
+    after
+      Application.put_env(:web_widget, :authentication, config)
+      :sys.resume(BindingStore)
+    end
   end
 
   test "same-page reconnect survives process replacement but not runtime ownership", ctx do

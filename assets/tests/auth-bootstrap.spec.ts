@@ -392,6 +392,123 @@ for (const responsePhase of ["completed", "running"] as const) {
   });
 }
 
+test("actual JWT expiry during a held response restores the final answer after authentication recovery", async ({ page, request }, testInfo) => {
+  test.setTimeout(45_000);
+  const user = `expiry-stream-${crypto.randomUUID()}`;
+  const control = "http://127.0.0.1:4021";
+  let allowReplacement = false;
+  const credentials: Array<{ jti: string; exp: number }> = [];
+  await page.route("**/api/widget-token", async route => {
+    if (credentials.length && !allowReplacement) {
+      await route.fulfill({ status: 503, body: "Temporarily unavailable" });
+      return;
+    }
+    const issued = await request.get(`${control}/identity`, {
+      params: { user_id: user, ...(credentials.length ? {} : { ttl: "8" }) },
+    });
+    const { identity_token } = await issued.json();
+    credentials.push(JSON.parse(Buffer.from(identity_token.split(".")[1], "base64url").toString()));
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  const session = async () => {
+    const response = await request.get(`${control}/liveview-sessions/${user}`);
+    const { sessions } = await response.json();
+    expect(sessions).toHaveLength(1);
+    return sessions[0];
+  };
+  const stream = async () => (await request.get(`${control}/held-stream/${user}`)).json();
+  const submissions = async () => (await (await request.get(`${control}/request-count`, {
+    params: { user_id: user, content: "held stream" },
+  })).json()).count;
+  const evidence: Record<string, unknown> = {};
+  try {
+    await installTokenWidget(page);
+    const iframe = page.locator("#zaq-widget");
+    const widget = page.frameLocator("#zaq-widget");
+    const auth = widget.locator("#widget-context");
+    await expect(auth).toHaveAttribute("data-authorized", "true");
+    await iframe.evaluate(element => { (window as any).expiryTestFrame = element; });
+    await widget.locator("body").evaluate(() => { (window as any).expiryTestDocument = document; });
+    const initial = await session();
+    evidence.initial = initial;
+    expect(initial.credential_id).toBe(credentials[0].jti);
+    expect(initial.binding_authorized).toBe(true);
+    expect(initial.binding_page_id).toBe(initial.page_id);
+    expect(initial.response_subscribed).toBe(true);
+    expect(initial.revocation_subscribed).toBe(true);
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("held stream");
+    await input.press("Enter");
+    await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
+    const original = await stream();
+    evidence.original = original;
+    expect(original.status).toBe("running");
+    expect(original.topic).toBe(initial.topic);
+    expect((await session()).active.request_id).toBe(original.request_id);
+    expect(await submissions()).toBe(1);
+
+    // Only the real WidgetLive expiry path sets authentication_pending here.
+    // No socket disconnect, renewal invocation, or synthetic expiry event is used.
+    await expect.poll(async () => (await session()).authentication_pending, { timeout: 15_000 }).toBe(true);
+    const expired = await session();
+    evidence.expired = expired;
+    expect(expired.server_time).toBeGreaterThanOrEqual(credentials[0].exp);
+    expect(expired.credential_id).toBe(credentials[0].jti);
+    expect(expired.binding_authorized).toBe(false);
+    expect(credentials).toHaveLength(1);
+    await expect(auth).toHaveAttribute("data-authorized", "false");
+    // A real host event while unauthorized must not mutate state or render.
+    expect((await request.post(`${control}/held-stream/${user}/probe`)).status()).toBe(204);
+    expect((await session()).state).toBe(expired.state);
+    await expect(widget.getByText("UNAUTHORIZED EXPIRY PROBE", { exact: true })).toHaveCount(0);
+    expect((await stream()).status).toBe("running");
+
+    allowReplacement = true;
+    await expect.poll(async () => (await session()).credential_id, { timeout: 10_000 }).not.toBe(initial.credential_id);
+    await expect(auth).toHaveAttribute("data-authorized", "true");
+    const recovered = await session();
+    evidence.recovered = recovered;
+    expect(credentials).toHaveLength(2);
+    expect(recovered.credential_id).toBe(credentials[1].jti);
+    expect(recovered.server_time).toBeGreaterThanOrEqual(credentials[0].exp);
+    expect(recovered.binding_authorized).toBe(true);
+    expect(recovered.authentication_pending).toBe(false);
+    expect(recovered.page_id).toBe(initial.page_id);
+    expect(recovered.binding_page_id).toBe(initial.page_id);
+    expect(recovered.pid).toBe(initial.pid);
+    expect(recovered.topic).toBe(original.topic);
+    expect(recovered.response_subscribed).toBe(true);
+    expect(recovered.revocation_subscribed).toBe(true);
+    expect(recovered.conversation_id).toBe(original.conversation_id);
+    expect(await iframe.evaluate(element => element === (window as any).expiryTestFrame)).toBe(true);
+    expect(await widget.locator("body").evaluate(() => document === (window as any).expiryTestDocument)).toBe(true);
+    expect(await submissions()).toBe(1);
+    await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
+
+    // The final is published to the ORIGINAL request's delivery context only
+    // after JWT B has been verified and bound. No action follows this release.
+    expect((await stream()).status).toBe("running");
+    expect((await request.post(`${control}/held-stream/${user}/complete`)).status()).toBe(204);
+    expect(await stream()).toEqual({ ...original, status: "finished" });
+    await expect.soft(widget.locator(".zaq-answer-content strong")).toHaveText("Finished", { timeout: 10_000 });
+    evidence.afterFinal = await session();
+    expect(await submissions()).toBe(1);
+    expect(credentials).toHaveLength(2);
+    await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
+    await expect(widget.locator('[data-role="user"]')).toHaveCount(1);
+    await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
+    expect((await session()).conversation_id).toBe(original.conversation_id);
+  } finally {
+    await testInfo.attach("expiry-response-lifecycle", {
+      body: JSON.stringify(evidence, null, 2), contentType: "application/json",
+    });
+  }
+});
+
 test("WebSocket reconnect replaces the LiveView process but keeps its page topic", async ({ page, request }) => {
   const user = `socket-${crypto.randomUUID()}`;
   await page.route("**/api/widget-token", async route => {
@@ -699,6 +816,14 @@ test("renewal endpoint outage retries after expiry and recovers automatically in
   await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   await expect(input).toHaveValue("Draft through expiry");
   expect(await frame.evaluate(element => element === (window as any).outageFrame)).toBe(true);
+  await expect(widget.getByText("Immediate answer", { exact: true })).toHaveCount(0);
+  await input.fill("instant");
+  await input.press("Enter");
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  const submissions = await (await request.get("http://127.0.0.1:4021/request-count", {
+    params: { user_id: user, content: "instant" },
+  })).json();
+  expect(submissions.count).toBe(2);
 });
 
 test("invalid JWT and token endpoint failures block bootstrap, then a valid endpoint recovers", async ({ page, request }) => {
@@ -752,4 +877,103 @@ test("invalid JWT and token endpoint failures block bootstrap, then a valid endp
   response = "valid";
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
   await expect(widget.locator(".zaq-widget")).toBeVisible();
+});
+
+for (const failure of ["expiry", "store", "reset"] as const) {
+  test(`selected conversation survives failed ${failure} reconnect authentication`, async ({ page, request }) => {
+    const control = "http://127.0.0.1:4021";
+    const user = `resume-${failure}-${crypto.randomUUID()}`;
+    let tokens = 0;
+    let offline = false;
+    let expiry = 0;
+    await page.route("**/api/widget-token", async route => {
+      if (offline) return route.fulfill({ status: 503, body: "offline" });
+      const response = await request.get(`${control}/identity`, { params: {
+        user_id: user, ...(tokens === 0 && failure === "expiry" ? { ttl: "8" } : {}),
+      } });
+      const { identity_token } = await response.json();
+      expiry = JSON.parse(Buffer.from(identity_token.split(".")[1], "base64url").toString()).exp;
+      tokens++;
+      await route.fulfill({ headers: { "cache-control": "no-store" }, json: { identity_token } });
+    });
+    const requests = async (): Promise<any[]> => (await request.get(`${control}/requests/${user}`)).json();
+    await installTokenWidget(page);
+    const widget = page.frameLocator("#zaq-widget");
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    await input.fill("reconnect first");
+    await input.press("Enter");
+    await expect(widget.getByText("Answer to reconnect first", { exact: true })).toBeVisible();
+    const initial = await requests();
+    const { sessions } = await (await request.get(`${control}/liveview-sessions/${user}`)).json();
+    const conversation = sessions[0].conversation_id;
+    expect(conversation).toMatch(/^e2e-/);
+    offline = true;
+    await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+    try {
+      if (failure === "expiry") {
+        await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).now, { timeout: 12_000 }).toBeGreaterThanOrEqual(expiry);
+      } else {
+        expect((await request.post(`${control}/auth-store/${failure === "store" ? "unavailable" : "reset"}`)).status()).toBe(204);
+        if (failure === "reset") await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).available).toBe(true);
+      }
+      await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+      await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "false");
+      expect(await requests()).toEqual(initial);
+      if (failure === "store") expect((await request.post(`${control}/auth-store/restore`)).status()).toBe(204);
+      if (failure === "reset") {
+        const { cutoff } = await (await request.get(`${control}/auth-state`)).json();
+        await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).now).toBeGreaterThan(cutoff);
+      }
+      offline = false;
+      await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
+      await expect(widget.getByText("Answer to reconnect first", { exact: true })).toBeVisible();
+      await input.fill("reconnect second");
+      await input.press("Enter");
+      await expect(widget.getByText("Answer to reconnect second", { exact: true })).toBeVisible();
+      const final = await requests();
+      expect(final.filter(r => r.content)).toHaveLength(2);
+      expect(final.find(r => r.content === "reconnect second").conversation_id).toBe(conversation);
+      expect(final.filter(r => r.type === "conversation_init" && r.conversation_id === null)).toHaveLength(1);
+      expect(final.some(r => r.type === "conversation_history" && r.conversation_id === conversation)).toBe(true);
+      expect(tokens).toBe(2);
+    } finally {
+      if (failure === "store" && !(await (await request.get(`${control}/auth-state`)).json()).available) await request.post(`${control}/auth-store/restore`);
+    }
+  });
+}
+
+test("offline revocation remains terminal after JWT expiry and explicit reload can authenticate", async ({ page, request }) => {
+  const control = "http://127.0.0.1:4021";
+  const user = `expired-revoked-${crypto.randomUUID()}`;
+  let attempts = 0;
+  let offline = false;
+  let expiry = 0;
+  await page.route("**/api/widget-token", async route => {
+    attempts++;
+    if (offline) return route.fulfill({ status: 503, body: "offline" });
+    const { identity_token } = await (await request.get(`${control}/identity`, { params: { user_id: user, ...(attempts === 1 ? { ttl: "8" } : {}) } })).json();
+    expiry = JSON.parse(Buffer.from(identity_token.split(".")[1], "base64url").toString()).exp;
+    await route.fulfill({ headers: { "cache-control": "no-store" }, json: { identity_token } });
+  });
+  await installTokenWidget(page);
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  offline = true;
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+  const { proof } = await (await request.get(`${control}/control-proof`, { params: { user_id: user } })).json();
+  expect((await request.post("http://127.0.0.1:4020/widget-api/420/disconnect", { headers: { Authorization: `Bearer ${proof}` }, data: { user_id: user } })).status()).toBe(200);
+  await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).now, { timeout: 12_000 }).toBeGreaterThanOrEqual(expiry);
+  const before = attempts;
+  const work = await (await request.get(`${control}/requests/${user}`)).json();
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+  await expect(widget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
+  await page.clock.install();
+  await page.clock.runFor(2500);
+  expect(attempts).toBe(before);
+  expect(await (await request.get(`${control}/requests/${user}`)).json()).toEqual(work);
+  offline = false;
+  await installTokenWidget(page);
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect(widget.locator("#widget-backend-revoked")).toHaveCount(0);
+  expect(attempts).toBe(before + 1);
 });

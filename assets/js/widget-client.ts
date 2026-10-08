@@ -60,7 +60,7 @@ export function createWidgetClient(
   };
   const schedule = () => {
     clearTimer();
-    if (disposed || terminal || !provider || !expiryDeadline) return;
+    if (disposed || terminal || !provider || !expiryDeadline || !bootstrapReady) return;
     const remaining = expiryDeadline - Date.now();
     if (remaining <= 0) return;
     const delay = Math.max(1_000, Math.min(refreshDeadline - Date.now(), remaining, 2_147_483_647));
@@ -93,7 +93,7 @@ export function createWidgetClient(
     return token;
   };
   const retry = () => {
-    if (disposed || terminal || !provider || waitingForStore) return;
+    if (disposed || terminal || !provider || waitingForStore || !bootstrapReady) return;
     clearTimer();
     if (expiryDeadline && Date.now() >= expiryDeadline && !expiryNotified) {
       expiryNotified = true;
@@ -176,11 +176,13 @@ export function createWidgetClient(
       if (firstReady && parentContext) void request("zaq.widget.context.update", parentContext).catch(() => {});
     } else if (data?.type === "zaq.widget.disconnected") {
       bootstrapReady = false; publicReady = false;
+      clearTimer();
       iframe.dispatchEvent(new CustomEvent("zaq:disconnected", { detail: { reason: data.reason || "network" } }));
     } else if (data?.type === "zaq.widget.authenticated") {
       accept(data);
     } else if (data?.type === "zaq.widget.conversation" && typeof data.conversation_id === "string") {
       if (demoBootstrap) demoBootstrap.conversation_id = data.conversation_id;
+      if (parentContext) parentContext = { conversation_id: data.conversation_id };
       iframe.dispatchEvent(new CustomEvent("zaq:conversation", { detail: { conversation_id: data.conversation_id } }));
     } else if (data?.type === "zaq.widget.authentication.required") {
       const reason = typeof data.reason === "string" ? data.reason : "expired";

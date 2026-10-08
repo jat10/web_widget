@@ -20,6 +20,7 @@ let publicReady = false;
 let parentOrigin: string | undefined;
 let queued: MessageEvent[] = [];
 let stylesheetPending: Promise<void> | undefined;
+let settleStylesheet: (() => void) | undefined;
 let stylesheetReceived = false;
 let stylesheetDelivered: (() => void) | undefined;
 const stylesheetSignal = new Promise<void>(resolve => { stylesheetDelivered = resolve; });
@@ -77,7 +78,12 @@ export async function waitForStylesheet(): Promise<void> {
       new Promise<void>(resolve => window.setTimeout(resolve, 1_000)),
     ]);
   }
-  await stylesheetPending;
+  // Replacement settles obsolete waiters; follow the active decision before ready.
+  let pending: Promise<void> | undefined;
+  do {
+    pending = stylesheetPending;
+    await pending;
+  } while (pending !== stylesheetPending);
 }
 
 function applyStylesheet(value: unknown) {
@@ -92,25 +98,31 @@ function applyStylesheet(value: unknown) {
   }
   const existing = document.getElementById("zaq-widget-stylesheet") as HTMLLinkElement | null;
   if (url === null) {
+    settleStylesheet?.();
     existing?.remove();
     stylesheetPending = Promise.resolve();
     return;
   }
-  if (existing?.href === url) {
-    stylesheetPending = Promise.resolve();
-    return;
-  }
-  const link = existing || document.createElement("link");
+  if (existing?.href === url) return;
+  settleStylesheet?.();
+  existing?.remove();
+  const link = document.createElement("link");
   link.id = "zaq-widget-stylesheet";
   link.rel = "stylesheet";
   stylesheetPending = new Promise(resolve => {
-    const finish = () => { window.clearTimeout(timer); resolve(); };
+    const finish = () => {
+      window.clearTimeout(timer);
+      link.removeEventListener("load", finish);
+      link.removeEventListener("error", finish);
+      resolve();
+    };
+    settleStylesheet = finish;
     const timer = window.setTimeout(finish, 3_000);
     link.addEventListener("load", finish, { once: true });
     link.addEventListener("error", finish, { once: true });
   });
   link.href = url;
-  if (!existing) document.head.append(link);
+  document.head.append(link);
 }
 
 window.addEventListener("message", event => {

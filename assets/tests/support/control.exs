@@ -27,6 +27,36 @@ defmodule WebWidget.E2EControl do
     conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{proof: proof}))
   end
 
+  get "/auth-state" do
+    conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{
+      now: System.system_time(:second), available: WebWidget.Integration.BindingStore.available?() == :ok,
+      cutoff: WebWidget.Integration.BindingStore.reset_cutoff_value()}))
+  end
+
+  post "/auth-store/:action" do
+    case action do
+      "unavailable" ->
+        :sys.suspend(WebWidget.Integration.BindingStore)
+        options = Application.get_env(:web_widget, :authentication, [])
+        Application.put_env(:web_widget, :e2e_auth_options, options)
+        Application.put_env(:web_widget, :authentication, Keyword.put(options, :replica_nodes,
+          [node(), :"missing_a@localhost", :"missing_b@localhost"]))
+      "restore" ->
+        Application.put_env(:web_widget, :authentication, Application.fetch_env!(:web_widget, :e2e_auth_options))
+        :sys.resume(WebWidget.Integration.BindingStore)
+      "reset" ->
+        :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+        :stopped = :mnesia.stop()
+        {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+    end
+    send_resp(conn, 204, "")
+  end
+
+  get "/requests/:user_id" do
+    conn |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.requests(user_id)))
+  end
+
   get "/request-count" do
     conn = fetch_query_params(conn)
     count = WebWidget.E2ESharedHost.request_count(
@@ -43,10 +73,22 @@ defmodule WebWidget.E2EControl do
             {:ok,
              %{
                assigns: %{
-                 chat: %{session: %{sender_id: ^user_id, widget_id: "420", topic: topic}}
-               }
-             }} ->
-              [%{pid: inspect(pid), topic: topic}]
+                 chat: %{session: %{sender_id: ^user_id, widget_id: "420", topic: topic}} = chat
+               } = assigns
+             } = socket} ->
+              {server, revocation_topic} = chat.revocation_subscription
+              [%{pid: inspect(pid), topic: topic, page_id: socket.id,
+                binding_page_id: chat.session.page_id,
+                credential_id: chat.session.binding_claims.jti,
+                expires_at: chat.session.expires_at, server_time: System.system_time(:second),
+                binding_authorized: WebWidget.Integration.BindingStore.authorized?(
+                  chat.session.binding_claims, chat.session.page_id) == :ok,
+                authentication_pending: assigns.authentication_pending,
+                conversation_id: chat.conversation_id, active: chat.active,
+                restore_on_terminal: chat.restore_on_terminal,
+                response_subscribed: Enum.any?(Registry.lookup(server, topic), fn {p, _} -> p == pid end),
+                revocation_subscribed: Enum.any?(Registry.lookup(server, revocation_topic), fn {p, _} -> p == pid end),
+                state: inspect(chat.state)}]
 
             _ ->
               []
@@ -62,8 +104,13 @@ defmodule WebWidget.E2EControl do
   end
 
   get "/held-stream/:user_id" do
-    status = WebWidget.E2ESharedHost.stream_status(user_id)
-    conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{status: status}))
+    conn |> put_resp_content_type("application/json")
+    |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.stream_details(user_id)))
+  end
+
+  post "/held-stream/:user_id/probe" do
+    :ok = WebWidget.E2ESharedHost.probe_stream(user_id)
+    send_resp(conn, 204, "")
   end
 
   post "/held-stream/:user_id/complete" do

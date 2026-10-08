@@ -108,6 +108,149 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     refute_receive {:shared_request, %{type: :conversation_history}, _, _}
   end
 
+  test "failed mount retains untrusted selection until authenticated restoration", ctx do
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => "expired",
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
+    refute_receive {:shared_request, _, _, _}
+    render_event(view, "widget.context", %{identity_token: token(ctx)}, %{ok: true})
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_init, conversation_id: "conversation-1"}, _, _}
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+
+    assert render(view) =~ "Saved answer"
+    render_event(view, "widget.submit", %{text: "instant"}, %{ok: true})
+
+    assert_receive {:shared_request, %{content: "instant", conversation_id: "conversation-1"}, _,
+                    _}
+
+    assert render(view) =~ "Immediate answer"
+  end
+
+  test "repeated recovery keeps response delivery and signed revocation", ctx do
+    for _ <- 1..2 do
+      {:ok, proof} =
+        SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
+          issuer: "parent",
+          audience: "widget",
+          ttl: 1
+        )
+
+      render_event(ctx.view, "widget.context", %{identity_token: proof}, %{ok: true})
+      assert_push_event(ctx.view, "widget.authentication.required", %{}, 1500)
+      init(ctx)
+      render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+      assert_receive {:shared_request, %{content: "instant"}, _, _}
+      assert render(ctx.view) =~ "Immediate answer"
+      chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+      assert chat.active == nil
+
+      for {server, topic} <- [chat.subscription, chat.revocation_subscription] do
+        assert Enum.count(Registry.lookup(server, topic), fn {pid, _} -> pid == ctx.view.pid end) ==
+                 1
+
+        pid = ctx.view.pid
+        probe = {:subscription_probe, make_ref()}
+        :erlang.trace(pid, true, [:receive])
+        Phoenix.PubSub.broadcast(server, topic, probe)
+        assert_receive {:trace, ^pid, :receive, ^probe}
+        refute_receive {:trace, ^pid, :receive, ^probe}
+        :erlang.trace(pid, false, [:receive])
+      end
+    end
+
+    {:ok, proof} =
+      ControlProof.sign(ctx.key, ctx.id, "visitor", issuer: "parent", audience: "widget:control")
+
+    assert %{status: 200} =
+             Phoenix.ConnTest.build_conn()
+             |> Plug.Conn.put_req_header("authorization", "Bearer " <> proof)
+             |> Plug.Conn.put_req_header("content-type", "application/json")
+             |> post("/widget-api/#{ctx.id}/disconnect", Jason.encode!(%{user_id: "visitor"}))
+
+    assert_push_event(ctx.view, "widget.authentication.required", %{reason: "backend_revoked"})
+    render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+    refute_receive {:shared_request, %{content: "blocked"}, _, _}
+  end
+
+  test "replacement initialization and history failures retire the previous owner", ctx do
+    initial_monitors = Process.info(ctx.view.pid, :monitors)
+
+    for failure <- [:conversation_init, :conversation_history] do
+      init(ctx, %{conversation_id: "conversation-1"})
+      old = :sys.get_state(ctx.view.pid).socket.assigns.chat
+      send(ctx.view.pid, {:widget_session_expired, old.session.topic, old.auth_generation})
+      assert_push_event(ctx.view, "widget.authentication.required", %{reason: "expired"})
+
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.put(:chat_host_failure, failure)
+        state
+      end)
+
+      render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{ok: false})
+      state = :sys.get_state(ctx.view.pid).socket.assigns
+      assert state.authentication_pending
+      assert state.chat == nil
+      assert state.requested_conversation_id == "conversation-1"
+      assert Process.read_timer(old.timer) == false
+      assert Process.info(ctx.view.pid, :monitors) == initial_monitors
+      assert Registry.keys(WebWidget.PubSub, ctx.view.pid) == []
+      render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+      refute_receive {:shared_request, %{content: "blocked"}, _, _}
+
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.delete(:chat_host_failure)
+        state
+      end)
+    end
+  end
+
+  test "failed restoration never substitutes a conversation and releases resources", ctx do
+    for requested <- ["foreign", "deleted", "unauthorized", "history-failure"] do
+      conn =
+        put_connect_params(ctx.conn, %{
+          "identity_token" => "expired",
+          "conversation_id" => requested
+        })
+
+      {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
+      {:monitors, before} = Process.info(view.pid, :monitors)
+      render_event(view, "widget.context", %{identity_token: token(ctx)}, %{ok: false})
+
+      assert_receive {:shared_request, %{type: :conversation_init, conversation_id: ^requested},
+                      context, _}
+
+      if requested == "history-failure" do
+        assert_receive {:shared_request,
+                        %{type: :conversation_history, conversation_id: ^requested}, _, _}
+      else
+        refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+      end
+
+      refute has_element?(view, "#web-widget")
+      render_event(view, "widget.submit", %{text: "blocked"}, %{ok: false})
+      refute_receive {:shared_request, %{content: _}, _, _}
+      assert :sys.get_state(view.pid).socket.assigns.chat == nil
+      assert {:monitors, ^before} = Process.info(view.pid, :monitors)
+
+      refute Enum.any?(Registry.lookup(WebWidget.PubSub, context.delivery.topic), fn {pid, _} ->
+               pid == view.pid
+             end)
+
+      refute Enum.any?(
+               Registry.keys(WebWidget.PubSub, view.pid),
+               &String.starts_with?(&1, "web_widget:")
+             )
+    end
+  end
+
   test "verified init is lazy; queued response precedes receipt without losing the answer", ctx do
     refute_receive {:shared_request, _, _, _}
     init(ctx)

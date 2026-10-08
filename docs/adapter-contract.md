@@ -190,6 +190,15 @@ recovery follows reconnection. The five-minute message-submission timeout
 is independent from authentication renewal. A message with unknown outcome
 is never automatically resent.
 
+Recovery retires the old Chat's process/topic registrations, runtime monitor,
+and expiry timer before opening its replacement on the same page-stable topics.
+Phoenix PubSub registrations are not reference-counted Chat handles: closing an
+old Chat after subscribing its replacement would remove the replacement too.
+Successful recovery reauthorizes the selected conversation and loads history
+before enabling sends. Initialization/history failure cleans up the replacement
+and leaves protected operations blocked. Proactive renewal continues to update
+the existing Chat in place.
+
 The bootstrap listener remains available outside the mounted LiveView hook,
 including authentication failure, disconnect and forced revocation. It checks
 the parent window and exact allowed origin. Internal bootstrap readiness means
@@ -198,7 +207,8 @@ the listener can receive presentation settings and authentication; public
 A failed custom stylesheet may fall back to bundled styling. Normal network
 reconnect uses the existing bound JWT without asking the provider for another.
 The SDK deduplicates renewal triggers, retries transient provider failures with
-bounded backoff, discards stale acknowledgements, and reschedules after
+bounded backoff, discards stale acknowledgements, suspends automatic issuer retries
+while disconnected, and reschedules after
 visibility or network restoration. It replaces its retained credential only
 after server acceptance. A store reset requires a token issued after the
 reset cutoff; temporary store unavailability retries availability without
@@ -206,7 +216,19 @@ repeatedly minting tokens. Revocation is terminal for that session: show
 “Refresh the page to reconnect.” and suppress automatic token requests. SDK
 lifecycle events include a reason, using the existing validated
 `postMessage` result/event convention and exact source/origin checks.
+A correctly signed and scoped credential covered by a user cutoff remains
+`backend_revoked` after expiry. Signature, header, scope, claim shape and timestamp
+consistency are validated before consulting that cutoff. Expired credentials are
+never bound or authorized; an unavailable store reports `store_unavailable`, and
+an expired credential without revocation remains recoverable. Terminal revocation
+requires a parent-page refresh to create a new client, subject to backend approval.
 The browser continues to use the existing LiveView WebSocket.
+
+The iframe retains its latest selected conversation ID across connected mounts.
+LiveView retains the requested ID even when mount authentication fails, separately
+from a successfully authenticated Chat. It is untrusted context until the host
+accepts it; recovery must not substitute a new conversation when restoration is
+denied. Parent context replay follows newer server-confirmed selections.
 
 The selected conversation ID accompanies message and history requests; ZAQ
 authorizes resume and selection for the verified sender. Validated parent
@@ -449,7 +471,11 @@ client remains available for independent widget instances. The internal
 bootstrap-ready handshake supports clients attaching after iframe load without
 navigating it again; public readiness follows authentication and presentation.
 Source and origin checks apply to both stages. The embed script supplies optional
-custom CSS; bundled defaults remain available.
+custom CSS; bundled defaults remain available. Duplicate stylesheet decisions
+retain the active loading promise and link. Replacement or removal settles obsolete
+waiters; readiness follows the current load, error, or three-second fallback.
+Events from a removed link cannot settle its replacement. Authentication proceeds
+independently, and background renewal does not create another public-ready transition.
 
 ## Implemented delivery boundary
 

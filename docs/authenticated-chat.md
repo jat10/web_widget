@@ -44,6 +44,14 @@ The host receives the selected conversation ID on message and history requests a
 
 The server returns `expires_at`, `refresh_at`, and `server_time`. The parent client schedules a new token five minutes before expiry by default, deduplicates requests, retries transient failures, and refreshes the bound session in place. Its subscription, selected conversation, active response, draft, and settings remain. A normal LiveView reconnect reuses the same bound JWT. A full iframe page load needs a new token because first binding is limited to five seconds and one page. At expiry, sending and response application pause until fresh authorization succeeds. A five-minute message submission timeout is a separate limit.
 
+The selected conversation survives an authentication failure during reconnect,
+including expiry, store unavailability, and RAM reset. Once authenticated, the
+host must authorize that same ID and restore its history before sending resumes.
+Denied restoration stays blocked and never creates a replacement conversation.
+Recovery replaces subscriptions on the same page topic only after retiring the
+previous Chat; it never resends the original question. A late terminal response
+can trigger authorized history recovery for the restored conversation.
+
 The backend control endpoint is `POST /widget-api/:widget_id/disconnect`. The parent backend signs a distinct HS256 JWT in the `Authorization: Bearer` header. Its strict claims are `iss`, `aud: identity_audience <> ":control"`, `op: "disconnect"`, numeric `widget_id`, `user_id`, integer `iat` and `exp`, and random `jti`; maximum lifetime is 30 seconds. The JSON body contains exactly `{"user_id":"..."}`. The path and body must match the proof. A browser identity JWT cannot authorize this endpoint.
 
 ```elixir
@@ -55,7 +63,11 @@ The backend control endpoint is `POST /widget-api/:widget_id/disconnect`. The pa
 # and JSON {"user_id":"<authenticated_external_user_id>"}
 ```
 
-The cutoff is committed transactionally before a scoped PubSub broadcast. Retrying with the **same proof** returns the same cutoff; use a new proof for a new operation. Matching sessions and subscriptions are invalidated. The iframe displays “Refresh the page to reconnect.”, emits `zaq:authentication-required` with `reason: "backend_revoked"`, and closes its LiveView transport. The parent stops token renewal for that iframe. A new token issued in the cutoff second may need to be issued again in the next second.
+The cutoff is committed transactionally before a scoped PubSub broadcast. Retrying with the **same proof** returns the same cutoff; use a new proof for a new operation. Matching sessions and subscriptions are invalidated. The iframe displays “Refresh the page to reconnect.”, emits `zaq:authentication-required` with `reason: "backend_revoked"`, and closes its LiveView transport. The parent stops token renewal for that iframe. A signed, scoped credential remains terminally revoked even if it expired while
+offline. Expiry never permits authorization or a new binding. Store unavailability
+is reported separately and retried once authority returns. Refresh the parent
+page to create a new client; its backend must still authorize fresh issuance.
+A new token issued in the cutoff second may need to be issued again in the next second.
 
 ## Smoke checks
 

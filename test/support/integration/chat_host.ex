@@ -6,9 +6,23 @@ defmodule WebWidget.TestIntegration.ChatHost do
   def receive_request(test, request, context: context) do
     send(test, {:shared_request, request, context, self()})
 
+    failure = Process.get(:chat_host_failure)
+
+    if failure && Map.get(request, :type) == failure do
+      response(request, :error, request.conversation_id, %{code: :unavailable})
+    else
+      dispatch(request, context)
+    end
+  end
+
+  defp dispatch(request, context) do
     case request do
-      %{type: :conversation_init, conversation_id: "foreign"} ->
-        response(request, :error, "foreign", %{code: :conversation_not_found})
+      %{type: :conversation_init, conversation_id: denied}
+      when denied in ["foreign", "deleted", "unauthorized"] ->
+        response(request, :error, denied, %{code: :conversation_not_found})
+
+      %{type: :conversation_history, conversation_id: "history-failure"} ->
+        response(request, :error, "history-failure", %{code: :unavailable})
 
       %{type: :conversation_init, conversation_id: conversation} ->
         response(request, :widget_initialized, conversation, %{created: false})

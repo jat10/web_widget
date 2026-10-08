@@ -83,7 +83,9 @@ defmodule WebWidget.Integration.SignedIdentity do
         exp: expiry
       }
 
-      claim_binding(binding, scope.page_id, now, sender, expiry, init)
+      if expiry > now,
+        do: claim_binding(binding, scope.page_id, now, sender, expiry, init),
+        else: revoked_error(binding)
     else
       _ -> {:error, :unauthorized}
     end
@@ -126,7 +128,7 @@ defmodule WebWidget.Integration.SignedIdentity do
 
   defp valid_times?(issued, expiry, not_before, now) do
     is_integer(issued) and is_integer(expiry) and is_integer(not_before) and
-      issued <= now and not_before <= now and expiry > now and
+      issued <= now and not_before <= now and not_before < expiry and
       expiry > issued and expiry - issued <= configured_max_age()
   end
 

@@ -37,6 +37,7 @@ defmodule WebWidgetWeb.WidgetLive do
        authentication_pending: false,
        terminal: false,
        verified_sender: nil,
+       requested_conversation_id: nil,
        settings: Settings.defaults(),
        widget_locale: locale,
        widget_direction: if(locale == "ar", do: "rtl", else: "ltr"),
@@ -74,6 +75,7 @@ defmodule WebWidgetWeb.WidgetLive do
       params = get_connect_params(socket)
       proof = params["identity_token"]
       requested_id = params["conversation_id"]
+      socket = assign(socket, :requested_conversation_id, requested_id)
 
       case Chat.open(
              socket.assigns.widget_id,
@@ -333,46 +335,15 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
-    with true <- not socket.assigns.terminal and is_nil(socket.assigns.pending_reply),
-         {:ok, chat} <-
-           Chat.open(
-             socket.assigns.widget_id,
-             params,
-             socket.id,
-             socket.assigns.chat && socket.assigns.chat.conversation_id,
-             socket.assigns.verified_sender
-           ) do
-      if socket.assigns.verified_sender in [nil, chat.session.sender_id] do
-        if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
-
-        socket =
-          socket
-          |> assign_chat(chat)
-          |> assign(
-            verified_sender: chat.session.sender_id,
-            parent_context: %{user_id: chat.session.sender_id}
-          )
-
-        socket = restore_mode(socket, chat.conversation_id)
-
-        {:reply,
-         Chat.authorization_metadata(chat)
-         |> Map.merge(%{
-           ok: true,
-           settings: socket.assigns.settings,
-           conversation_id: chat.conversation_id
-         }), socket}
-      else
-        Chat.close(chat)
-        {:reply, %{ok: false, error: "Reload the widget to change identity."}, socket}
-      end
+    if socket.assigns.terminal or not is_nil(socket.assigns.pending_reply) do
+      {:reply, %{ok: false, error: "Unable to authenticate or restore this widget session."},
+       socket}
     else
-      {:error, :store_unavailable} ->
-        {:reply, %{ok: false, reason: "store_unavailable"}, socket}
-
-      _ ->
-        {:reply, %{ok: false, error: "Unable to authenticate or restore this widget session."},
-         socket}
+      # PubSub owns registrations per process/topic, not per Chat handle. Retire
+      # the previous owner before opening another on this page's stable topics.
+      if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
+      socket = assign(socket, chat: nil, authentication_pending: true)
+      recover_chat(socket, params)
     end
   end
 
@@ -454,6 +425,44 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.submit", _params, socket) do
     {:reply, %{ok: false, error: ui(socket, "Enter a text message.")}, socket}
+  end
+
+  defp recover_chat(socket, params) do
+    case Chat.open(
+           socket.assigns.widget_id,
+           params,
+           socket.id,
+           socket.assigns.requested_conversation_id,
+           socket.assigns.verified_sender
+         ) do
+      {:ok, chat} ->
+        socket =
+          socket
+          |> assign_chat(chat)
+          |> assign(
+            verified_sender: chat.session.sender_id,
+            parent_context: %{user_id: chat.session.sender_id}
+          )
+          |> restore_mode(chat.conversation_id)
+
+        {:reply,
+         Chat.authorization_metadata(chat)
+         |> Map.merge(%{
+           ok: true,
+           settings: socket.assigns.settings,
+           conversation_id: chat.conversation_id
+         }), socket}
+
+      {:error, :backend_revoked} ->
+        {:reply, %{ok: false, reason: "backend_revoked"}, backend_revoke_chat(socket)}
+
+      {:error, :store_unavailable} ->
+        {:reply, %{ok: false, reason: "store_unavailable"}, socket}
+
+      _ ->
+        {:reply, %{ok: false, error: "Unable to authenticate or restore this widget session."},
+         socket}
+    end
   end
 
   defp submit_integrated(socket, text) do
@@ -559,6 +568,7 @@ defmodule WebWidgetWeb.WidgetLive do
     |> assign_state(chat.state)
     |> assign(
       chat: chat,
+      requested_conversation_id: chat.conversation_id,
       authentication_pending: false,
       accepted_context: %{user_id: chat.session.sender_id, conversation_id: chat.conversation_id}
     )
