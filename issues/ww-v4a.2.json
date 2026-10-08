@@ -7,6 +7,7 @@
     "ww-v4a.3",
     "ww-v4a.7"
   ],
+  "closed_at": "2026-10-08T08:49:37Z",
   "created": "2026-10-08T08:27:26Z",
   "description": "Package-owned ram_copies for issuer/audience/widget/jti to verified page/user/iat/exp bindings, user revocation cutoffs, cluster reset cutoff, and idempotent control nonce results. Transactional claim/revocation race handling, majority protection, explicit cluster membership, fail-closed unavailable/minority behavior, bounded expiry cleanup, rolling restart preservation, full RAM reset rejection. Add focused real peer-node tests.",
   "id": "ww-v4a.2",
@@ -19,8 +20,8 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Implement replicated Mnesia token bindings and revocation cutoffs",
   "type": "task",
-  "updated_at": "2026-10-08T08:49:13Z"
+  "updated_at": "2026-10-08T08:49:37Z"
 }
