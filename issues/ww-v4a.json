@@ -6,9 +6,15 @@
   "description": "Implement GitHub issue #14: https://github.com/www-zaq-ai/web_widget/issues/14. Deliver clustered JWT binding, early authorization, seamless renewal, parent SDK changes, context separation, backend revocation, verification, and migration docs. Current baseline ea0aade.",
   "id": "ww-v4a",
   "labels": [],
+  "comments": [
+    {
+      "text": "Planning only: issue #14 reviewed against ea0aade. No implementation started. Beadwork initialized on this checkout with ww prefix. First ready task is contract and configuration; update adapter contract before code.",
+      "timestamp": "2026-10-08T08:27:45Z"
+    }
+  ],
   "priority": 2,
   "status": "open",
   "title": "Harden widget authentication and connection lifecycle",
   "type": "epic",
-  "updated_at": "2026-10-08T08:27:26Z"
+  "updated_at": "2026-10-08T08:27:45Z"
 }
