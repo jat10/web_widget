@@ -13,9 +13,15 @@
   "id": "ww-v4a.9",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Updated README, website integration, authenticated chat, host mounting, styling, and adapter contract for minimal JWT, token_url/provider, context update, seven-day/five-second timing, Mnesia quorum/recovery, lifecycle reasons, two router macros, and signed disconnect. Verified asset-install tests (5 pass), local links, and git diff --check.",
+      "timestamp": "2026-10-08T10:05:29Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Update host integration, SDK, and operations documentation",
   "type": "task",
-  "updated_at": "2026-10-08T09:57:43Z"
+  "updated_at": "2026-10-08T10:05:29Z"
 }
