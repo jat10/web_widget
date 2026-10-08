@@ -914,6 +914,11 @@ for (const failure of ["expiry", "store", "reset"] as const) {
         await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).now, { timeout: 12_000 }).toBeGreaterThanOrEqual(expiry);
       } else {
         expect((await request.post(`${control}/auth-store/${failure === "store" ? "unavailable" : "reset"}`)).status()).toBe(204);
+        if (failure === "store") {
+          const state = await request.get(`${control}/auth-state`);
+          expect(state.status()).toBe(200);
+          expect(await state.json()).toMatchObject({ available: false, cutoff: null });
+        }
         if (failure === "reset") await expect.poll(async () => (await (await request.get(`${control}/auth-state`)).json()).available).toBe(true);
       }
       await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());

@@ -28,9 +28,13 @@ defmodule WebWidget.E2EControl do
   end
 
   get "/auth-state" do
+    cutoff = case WebWidget.Integration.BindingStore.reset_cutoff_value() do
+      value when is_integer(value) -> value
+      {:error, _} -> nil
+    end
+
     conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{
-      now: System.system_time(:second), available: WebWidget.Integration.BindingStore.available?() == :ok,
-      cutoff: WebWidget.Integration.BindingStore.reset_cutoff_value()}))
+      now: System.system_time(:second), available: is_integer(cutoff), cutoff: cutoff}))
   end
 
   post "/auth-store/:action" do
