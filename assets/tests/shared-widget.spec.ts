@@ -32,6 +32,13 @@ test("generated installation script authenticates, chats and restores with a fre
     }
     return true;
   }, bootstrap.identity_token)).toBe(true);
+  await widget.locator("#widget-context").evaluate(() => {
+    const data = { type: "zaq.widget.settings.update", request_id: crypto.randomUUID(), settings: { theme: "dark" } };
+    window.dispatchEvent(new MessageEvent("message", {
+      source: null, origin: "http://127.0.0.1:4019", data,
+    }));
+  });
+  expect(await page.evaluate(() => window.zaq.widget.getSettings())).toEqual({ theme: "light", language: "en" });
   await widget.getByPlaceholder("Ask a question…").fill("instant");
   await widget.getByPlaceholder("Ask a question…").press("Enter");
   await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();

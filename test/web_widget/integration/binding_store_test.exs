@@ -51,6 +51,11 @@ defmodule WebWidget.Integration.BindingStoreTest do
 
     assert Enum.count(results, &(&1 == :ok)) == 1
     assert Enum.count(results, &(&1 == {:error, :replayed})) == 11
+
+    independent = %{ctx.claims | jti: unique()}
+    assert :ok = BindingStore.claim(independent, "another-page", ctx.now)
+    assert :ok = BindingStore.authorized?(independent, "another-page", ctx.now)
+    assert {:error, :replayed} = BindingStore.claim(ctx.claims, "another-page", ctx.now)
   end
 
   test "revocation is scoped, rejects old credentials and is idempotent", ctx do
@@ -79,6 +84,16 @@ defmodule WebWidget.Integration.BindingStoreTest do
                ctx.now + 5
              )
 
+    assert {:error, :request_conflict} =
+             BindingStore.revoke_user(
+               ctx.claims.issuer,
+               ctx.claims.widget_id,
+               "different-user",
+               request_id,
+               ctx.now + 1,
+               ctx.now + 5
+             )
+
     assert {:error, :stale_or_revoked} =
              BindingStore.claim(ctx.claims, "page-a", ctx.now + 1)
 
@@ -87,6 +102,34 @@ defmodule WebWidget.Integration.BindingStoreTest do
 
     other_user = %{ctx.claims | user_id: "other-#{unique()}", jti: unique()}
     assert :ok = BindingStore.claim(other_user, "page-c", ctx.now + 1)
+  end
+
+  test "a cutoff thirty minutes ahead rejects tokens until a later issuance second", ctx do
+    cutoff = ctx.now + 30 * 60
+    assert :ok = BindingStore.claim(ctx.claims, "existing-page", ctx.now)
+
+    assert {:ok, ^cutoff, true} =
+             BindingStore.revoke_user(
+               ctx.claims.issuer,
+               ctx.claims.widget_id,
+               ctx.claims.user_id,
+               unique(),
+               cutoff,
+               cutoff
+             )
+
+    assert {:error, :unauthorized} =
+             BindingStore.authorized?(ctx.claims, "existing-page", ctx.now + 1)
+
+    for issued_at <- [cutoff - 1, cutoff] do
+      claims = %{ctx.claims | jti: unique(), iat: issued_at, exp: issued_at + 60}
+
+      assert {:error, :stale_or_revoked} =
+               BindingStore.claim(claims, "new-page", issued_at)
+    end
+
+    later = %{ctx.claims | jti: unique(), iat: cutoff + 1, exp: cutoff + 61}
+    assert :ok = BindingStore.claim(later, "new-page", cutoff + 1)
   end
 
   defp await_store(remaining \\ 30)

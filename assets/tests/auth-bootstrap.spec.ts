@@ -1,7 +1,7 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 
-async function installTokenWidget(page: Page) {
-  await page.goto("/widget/missing");
+async function installTokenWidget(page: Page, navigate = true) {
+  if (navigate) await page.goto("/widget/missing");
   await page.evaluate(async () => {
     const script = document.createElement("script");
     script.src = "http://127.0.0.1:4020/web_widget/assets/embed.js";
@@ -79,11 +79,14 @@ test("token URL bootstraps in the fragment and renews without remounting", async
 
 test("backend disconnect closes every targeted tab and a fresh credential restores access", async ({ page, context, request }) => {
   const user = `revoked-${crypto.randomUUID()}`;
+  const unrelatedUser = `unrelated-${crypto.randomUUID()}`;
   let tokens = 0;
+  let browserToken = "";
   await page.route("**/api/widget-token", async route => {
     tokens++;
     const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
     const { identity_token } = await issued.json();
+    browserToken = identity_token;
     await route.fulfill({
       status: 200,
       headers: { "content-type": "application/json", "cache-control": "no-store" },
@@ -123,7 +126,34 @@ test("backend disconnect closes every targeted tab and a fresh credential restor
   await expect(otherWidget.locator(".zaq-widget")).toBeVisible();
   expect(tokens).toBe(2);
 
+  const unrelated = await context.newPage();
+  await unrelated.route("**/api/widget-token", async route => {
+    tokens++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: unrelatedUser } });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(unrelated);
+  const unrelatedWidget = unrelated.frameLocator("#zaq-widget");
+  await expect(unrelatedWidget.locator(".zaq-widget")).toBeVisible();
+  expect(tokens).toBe(3);
+
   const { proof } = await (await request.get("http://127.0.0.1:4021/control-proof", { params: { user_id: user } })).json();
+  const denied = await request.post("http://127.0.0.1:4020/widget-api/420/disconnect", {
+    headers: { Authorization: `Bearer ${browserToken}` }, data: { user_id: user },
+  });
+  expect(denied.status()).toBe(401);
+  const wrongTarget = await request.post("http://127.0.0.1:4020/widget-api/420/disconnect", {
+    headers: { Authorization: `Bearer ${proof}` }, data: { user_id: unrelatedUser },
+  });
+  expect(wrongTarget.status()).toBe(401);
+  await expect(widget.locator("#widget-backend-revoked")).toHaveCount(0);
+  await expect(otherWidget.locator("#widget-backend-revoked")).toHaveCount(0);
+  await expect(unrelatedWidget.locator("#widget-backend-revoked")).toHaveCount(0);
   const disconnect = () => request.post("http://127.0.0.1:4020/widget-api/420/disconnect", {
     headers: { Authorization: `Bearer ${proof}` }, data: { user_id: user },
   });
@@ -131,11 +161,15 @@ test("backend disconnect closes every targeted tab and a fresh credential restor
   expect(first.status()).toBe(200);
   await expect(widget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
   await expect(otherWidget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
+  await expect(unrelatedWidget.locator("#widget-backend-revoked")).toHaveCount(0);
+  await unrelatedWidget.getByRole("textbox", { name: "Message", exact: true }).fill("instant");
+  await unrelatedWidget.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
+  await expect(unrelatedWidget.getByText("Immediate answer", { exact: true })).toBeVisible();
   const retry = await disconnect();
   expect(retry.status()).toBe(200);
   expect((await retry.json()).cutoff).toBe((await first.json()).cutoff);
   await page.waitForTimeout(300);
-  expect(tokens).toBe(2);
+  expect(tokens).toBe(3);
   const cutoff = (await first.json()).cutoff;
   await expect.poll(() => Math.floor(Date.now() / 1000)).toBeGreaterThan(cutoff);
   await other.evaluate(() => window.zaq.widget.dispose());
@@ -146,6 +180,7 @@ test("backend disconnect closes every targeted tab and a fresh credential restor
   await expect(otherWidget.getByText("Immediate answer", { exact: true })).toBeVisible();
   await expect(widget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
   await other.close();
+  await unrelated.close();
 });
 
 test("renewal preserves streamed Markdown, draft, and styled container", async ({ page, request }) => {
@@ -196,13 +231,24 @@ test("renewal preserves streamed Markdown, draft, and styled container", async (
   await expect(widget.getByText("markdown renewal", { exact: true })).toBeVisible();
   const answer = widget.locator(".zaq-answer-content");
   await expect(answer.locator("strong")).toHaveText("Partial");
+  await widget.locator(".zaq-widget").evaluate(element => { (window as any).reactBeforeRenewal = element; });
+  const messageCount = async () => {
+    const response = await request.get("http://127.0.0.1:4021/request-count", {
+      params: { user_id: user, content: "markdown renewal" },
+    });
+    return (await response.json()).count as number;
+  };
+  expect(await messageCount()).toBe(1);
   await input.fill("Keep this draft");
   await input.evaluate(element => { (window as any).composerBeforeRenewal = element; });
   await page.evaluate(() => window.zaq.widget.connect());
   await expect(answer.locator("strong")).toHaveText("Finished");
   await expect(answer.locator("h2")).toHaveText("Update");
+  await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
+  await expect(answer).not.toContainText("Partial");
   await expect(input).toHaveValue("Keep this draft");
   expect(await input.evaluate(element => element === (window as any).composerBeforeRenewal)).toBe(true);
+  expect(await widget.locator(".zaq-widget").evaluate(element => element === (window as any).reactBeforeRenewal)).toBe(true);
   expect(await frame.evaluate(element => element === (window as any).authenticatedFrame)).toBe(true);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   expect(tokens).toBe(2);
@@ -215,13 +261,121 @@ test("renewal preserves streamed Markdown, draft, and styled container", async (
   });
   await expect.poll(() => page.evaluate(() => (window as any).reconnectedReady === true)).toBe(true);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  expect(await messageCount()).toBe(1);
   expect(tokens).toBe(2);
   await input.fill("instant");
   await input.press("Enter");
   await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  expect(await messageCount()).toBe(1);
 });
 
-test("a lost renewal acknowledgement leaves the active chat usable", async ({ page, request }) => {
+for (const responsePhase of ["completed", "running"] as const) {
+  test(`network reconnect restores ${responsePhase} stream history without resubmitting`, async ({ page, request }) => {
+    const user = `network-${crypto.randomUUID()}`;
+    let tokens = 0;
+    await page.route("**/api/widget-token", async route => {
+      tokens++;
+      const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+      const { identity_token } = await issued.json();
+      await route.fulfill({
+        status: 200,
+        headers: { "content-type": "application/json", "cache-control": "no-store" },
+        body: JSON.stringify({ identity_token }),
+      });
+    });
+    await installTokenWidget(page);
+    const frame = page.locator("#zaq-widget");
+    const widget = page.frameLocator("#zaq-widget");
+    const input = widget.getByRole("textbox", { name: "Message", exact: true });
+    await expect(input).toBeVisible();
+    await frame.evaluate(element => {
+      (window as any).reconnectReadyCount = 0;
+      element.addEventListener("zaq:conversation", (event: any) => {
+        (window as any).activeConversation = event.detail.conversation_id;
+      });
+      element.addEventListener("zaq:ready", () => { (window as any).reconnectReadyCount++; });
+    });
+    await input.fill("held stream");
+    await input.press("Enter");
+    await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
+    await expect.poll(() => page.evaluate(() => (window as any).activeConversation)).toBe("conversation-1");
+    const submitted = async () => {
+      const response = await request.get("http://127.0.0.1:4021/request-count", {
+        params: { user_id: user, content: "held stream" },
+      });
+      return (await response.json()).count as number;
+    };
+    const status = async () => {
+      const response = await request.get(`http://127.0.0.1:4021/held-stream/${user}`);
+      return (await response.json()).status as string;
+    };
+    const complete = () => request.post(`http://127.0.0.1:4021/held-stream/${user}/complete`);
+    expect(await submitted()).toBe(1);
+    await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+    if (responsePhase === "completed") {
+      expect((await complete()).status()).toBe(204);
+      await expect.poll(status).toBe("finished");
+    } else {
+      expect(await status()).toBe("running");
+    }
+    await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+    await expect.poll(() => page.evaluate(() => (window as any).reconnectReadyCount)).toBe(1);
+    await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+    await expect(widget.locator(".zaq-answer-content strong")).toHaveText(responsePhase === "completed" ? "Finished" : "Partial");
+    await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
+    await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
+    expect(tokens).toBe(1);
+    expect(await submitted()).toBe(1);
+    if (responsePhase === "running") {
+      expect((await complete()).status()).toBe(204);
+      await widget.locator("body").evaluate(() => {
+        (window as any).liveSocket.disconnect();
+        (window as any).liveSocket.connect();
+      });
+      await expect.poll(() => page.evaluate(() => (window as any).reconnectReadyCount)).toBe(2);
+      await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
+      await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
+      await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
+      expect(tokens).toBe(1);
+      expect(await submitted()).toBe(1);
+    }
+  });
+}
+
+test("WebSocket disconnect replaces the LiveView process and session topic", async ({ page, request }) => {
+  const user = `socket-${crypto.randomUUID()}`;
+  await page.route("**/api/widget-token", async route => {
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  const sessions = async () => {
+    const response = await request.get(`http://127.0.0.1:4021/liveview-sessions/${user}`);
+    return (await response.json()).sessions as Array<{ pid: string; topic: string }>;
+  };
+  await expect.poll(sessions).toHaveLength(1);
+  const [before] = await sessions();
+
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+  await expect.poll(sessions).toEqual([]);
+
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect.poll(sessions).toHaveLength(1);
+  const [after] = await sessions();
+  expect(after.pid).not.toBe(before.pid);
+  expect(after.topic).not.toBe(before.topic);
+});
+
+test("delayed and lost renewal acknowledgements leave the active chat usable", async ({ page, request }) => {
   const user = `lost-ack-${crypto.randomUUID()}`;
   let tokens = 0;
   await page.route("**/api/widget-token", async route => {
@@ -237,13 +391,27 @@ test("a lost renewal acknowledgement leaves the active chat usable", async ({ pa
   await page.goto("/widget/missing");
   await page.evaluate(async () => {
     (window as any).ackDropped = false;
-    (window as any).ackDropEnabled = false;
+    (window as any).ackDelayed = false;
+    (window as any).ackMode = "normal";
     window.addEventListener("message", event => {
-      if (!(window as any).ackDropEnabled || event.data?.type !== "zaq.widget.result" ||
+      const mode = (window as any).ackMode;
+      if (mode === "normal" || event.data?.type !== "zaq.widget.result" ||
           typeof event.data.credential_id !== "string") return;
-      (window as any).ackDropped = true;
-      (window as any).ackDropEnabled = false;
       event.stopImmediatePropagation();
+      (window as any).ackMode = "normal";
+      if (mode === "delay") {
+        (window as any).ackDelayed = true;
+        const { data, origin, source } = event;
+        window.setTimeout(() => {
+          try {
+            window.dispatchEvent(new MessageEvent("message", { data, origin, source }));
+          } catch {
+            window.dispatchEvent(event);
+          }
+        }, 500);
+      } else {
+        (window as any).ackDropped = true;
+      }
     }, true);
     const script = document.createElement("script");
     script.src = "http://127.0.0.1:4020/web_widget/assets/embed.js";
@@ -258,8 +426,17 @@ test("a lost renewal acknowledgement leaves the active chat usable", async ({ pa
   const widget = page.frameLocator("#zaq-widget");
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await expect(input).toBeVisible();
+  await input.fill("Draft during delayed ack");
   await page.evaluate(() => {
-    (window as any).ackDropEnabled = true;
+    (window as any).ackMode = "delay";
+    (window as any).delayedResult = window.zaq.widget.connect()
+      .then(() => "accepted", (error: Error) => error.message);
+  });
+  await expect.poll(() => page.evaluate(() => (window as any).ackDelayed)).toBe(true);
+  await expect.poll(() => page.evaluate(() => (window as any).delayedResult)).toBe("accepted");
+  await expect(input).toHaveValue("Draft during delayed ack");
+  await page.evaluate(() => {
+    (window as any).ackMode = "drop";
     (window as any).renewalResult = window.zaq.widget.connect()
       .then(() => "accepted", (error: Error) => error.message);
   });
@@ -298,6 +475,73 @@ test("a JWT bound to one browser page cannot bootstrap another page", async ({ p
   await other.close();
 });
 
+test("a stale first JWT is rejected and a freshly issued JWT restores the same iframe", async ({ page, request }) => {
+  const user = `stale-${crypto.randomUUID()}`;
+  let stale = true;
+  let tokens = 0;
+  await page.route("**/api/widget-token", async route => {
+    tokens++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", {
+      params: { user_id: user, ...(stale ? { stale: "true" } : {}) },
+    });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+  const frame = page.locator("#zaq-widget");
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "false");
+  await expect(widget.locator(".zaq-widget")).toHaveCount(0);
+  await frame.evaluate(element => { (window as any).staleFrame = element; });
+  stale = false;
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
+  expect(tokens).toBeGreaterThanOrEqual(2);
+  expect(await frame.evaluate(element => element === (window as any).staleFrame)).toBe(true);
+  await widget.getByRole("textbox", { name: "Message", exact: true }).fill("instant");
+  await widget.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+});
+
+test("delayed iframe bootstrap replaces a stale first token without reloading the iframe", async ({ page, request }) => {
+  const user = `delayed-${crypto.randomUUID()}`;
+  await page.goto("/widget/missing");
+  let tokens = 0;
+  let releaseBootstrap!: () => void;
+  const bootstrapGate = new Promise<void>(resolve => { releaseBootstrap = resolve; });
+  let appRequested = false;
+  await page.route("**/web_widget/assets/app.js", async route => {
+    appRequested = true;
+    await bootstrapGate;
+    await route.continue();
+  });
+  await page.route("**/api/widget-token", async route => {
+    tokens++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page, false);
+  await expect.poll(() => appRequested).toBe(true);
+  const frame = page.locator("#zaq-widget");
+  await frame.evaluate(element => { (window as any).delayedFrame = element; });
+  expect(tokens).toBe(1);
+  await page.waitForTimeout(5_200);
+  releaseBootstrap();
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
+  await expect(widget.locator(".zaq-widget")).toBeVisible();
+  expect(tokens).toBeGreaterThanOrEqual(2);
+  expect(await frame.evaluate(element => element === (window as any).delayedFrame)).toBe(true);
+});
+
 test("a short credential renews automatically before expiry", async ({ page, request }) => {
   const user = `automatic-${crypto.randomUUID()}`;
   let tokens = 0;
@@ -333,6 +577,78 @@ test("a short credential renews automatically before expiry", async ({ page, req
   await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
 });
 
+test("a full iframe reload fetches a new JWT for its new LiveView page", async ({ page, request }) => {
+  const user = `reload-${crypto.randomUUID()}`;
+  let tokens = 0;
+  await page.route("**/api/widget-token", async route => {
+    tokens++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+  const frame = page.locator("#zaq-widget");
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  const firstCredential = await widget.locator("#widget-context").getAttribute("data-auth-credential-id");
+  expect(tokens).toBe(1);
+  await frame.evaluate(element => {
+    (window as any).reloadFrame = element;
+    const target = new URL((element as HTMLIFrameElement).src);
+    target.searchParams.set("reload", crypto.randomUUID());
+    (element as HTMLIFrameElement).src = target.href;
+  });
+  await expect.poll(() => tokens).toBe(2);
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect(widget.locator("#widget-context")).not.toHaveAttribute("data-auth-credential-id", firstCredential!);
+  expect(await frame.evaluate(element => element === (window as any).reloadFrame)).toBe(true);
+  await expect(widget.locator(".zaq-widget")).toBeVisible();
+});
+
+test("renewal endpoint outage retries, expires closed, and recovers in the same iframe", async ({ page, request }) => {
+  const user = `outage-${crypto.randomUUID()}`;
+  let attempts = 0;
+  let available = false;
+  await page.route("**/api/widget-token", async route => {
+    attempts++;
+    if (attempts > 1 && !available) return route.fulfill({ status: 503, body: "temporarily unavailable" });
+    const issued = await request.get("http://127.0.0.1:4021/identity", {
+      params: { user_id: user, ...(attempts === 1 ? { ttl: "8" } : {}) },
+    });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+  const frame = page.locator("#zaq-widget");
+  const widget = page.frameLocator("#zaq-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await expect(input).toBeVisible();
+  await frame.evaluate(element => { (window as any).outageFrame = element; });
+  await expect.poll(() => attempts).toBeGreaterThanOrEqual(2);
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await input.fill("instant");
+  await input.press("Enter");
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  await input.fill("Draft through expiry");
+  await expect.poll(() => attempts).toBeGreaterThanOrEqual(3);
+  await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeDisabled({ timeout: 10_000 });
+  await expect(input).toHaveValue("Draft through expiry");
+  available = true;
+  await page.evaluate(() => window.zaq.widget.connect());
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+  await expect(input).toHaveValue("Draft through expiry");
+  expect(await frame.evaluate(element => element === (window as any).outageFrame)).toBe(true);
+});
+
 test("invalid JWT and token endpoint failures block bootstrap, then a valid endpoint recovers", async ({ page, request }) => {
   const { identity_token } = await (await request.get("http://127.0.0.1:4021/identity", {
     params: { user_id: `recovery-${crypto.randomUUID()}` },
@@ -340,13 +656,20 @@ test("invalid JWT and token endpoint failures block bootstrap, then a valid endp
   const parts = identity_token.split(".");
   parts[2] = (parts[2][0] === "A" ? "B" : "A") + parts[2].slice(1);
   const invalidToken = parts.join(".");
-  let response: "http" | "cache" | "invalid" | "valid" = "http";
+  let response: "http" | "json" | "missing" | "cache" | "invalid" | "valid" = "http";
   await page.route("**/api/widget-token", route => {
     if (response === "http") return route.fulfill({ status: 503, body: "unavailable" });
+    if (response === "json") return route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: "{not-json",
+    });
     return route.fulfill({
       status: 200,
-      headers: { "content-type": "application/json", ...(response === "cache" ? {} : { "cache-control": "no-store" }) },
-      body: JSON.stringify({ identity_token: response === "invalid" ? invalidToken : identity_token }),
+      headers: { "content-type": "application/json", "cache-control": response === "cache" ? "public, max-age=60" : "no-store" },
+      body: JSON.stringify(response === "missing" ? {} : {
+        identity_token: response === "invalid" ? invalidToken : identity_token,
+      }),
     });
   });
   await installTokenWidget(page);
@@ -359,6 +682,13 @@ test("invalid JWT and token endpoint failures block bootstrap, then a valid endp
       return (error as Error).message;
     }
   });
+  expect(await mount()).toBe("Widget token endpoint failed.");
+  response = "json";
+  expect(await mount()).not.toBe("mounted");
+  await expect(page.locator("#zaq-widget")).toHaveCount(0);
+  response = "missing";
+  expect(await mount()).toBe("Widget token endpoint did not return identity_token.");
+  await expect(page.locator("#zaq-widget")).toHaveCount(0);
   response = "cache";
   expect(await mount()).toBe("Widget token endpoint must return Cache-Control: no-store.");
   await expect(page.locator("#zaq-widget")).toHaveCount(0);

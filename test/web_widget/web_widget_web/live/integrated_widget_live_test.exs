@@ -39,6 +39,32 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
   test "connected mount authenticates before shared host initialization", ctx do
     proof = token(ctx)
+
+    {:ok, wrong_issuer} =
+      SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
+        issuer: "wrong",
+        audience: "widget"
+      )
+
+    {:ok, wrong_audience} =
+      SignedIdentity.sign(ctx.key, ctx.id, %{user_id: "visitor"},
+        issuer: "parent",
+        audience: "wrong"
+      )
+
+    {:ok, wrong_widget} =
+      SignedIdentity.sign(ctx.key, ctx.id + 1, %{user_id: "visitor"},
+        issuer: "parent",
+        audience: "widget"
+      )
+
+    for rejected_proof <- [wrong_issuer, wrong_audience, wrong_widget, proof <> "x"] do
+      rejected_conn = put_connect_params(ctx.conn, %{"identity_token" => rejected_proof})
+      {:ok, rejected, _} = live(rejected_conn, "/widget/#{ctx.id}")
+      refute has_element?(rejected, "#web-widget")
+      refute_receive {:shared_request, %{type: :conversation_init}, _, _}
+    end
+
     conn = put_connect_params(ctx.conn, %{"identity_token" => proof})
     {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
 
@@ -48,6 +74,38 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     {:ok, replayed, _} = live(conn, "/widget/#{ctx.id}")
     refute has_element?(replayed, "#web-widget")
     refute_receive {:shared_request, %{type: :conversation_init}, _, _}
+  end
+
+  test "connected mount authorizes a selected conversation before restoring history", ctx do
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_init, conversation_id: "conversation-1"}, _, _}
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+
+    assert render(view) =~ "Saved answer"
+
+    rejected =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "foreign"
+      })
+
+    {:ok, denied, _} = live(rejected, "/widget/#{ctx.id}")
+    refute has_element?(denied, "#web-widget")
+
+    assert_receive {:shared_request, %{type: :conversation_init, conversation_id: "foreign"}, _,
+                    _}
+
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
   end
 
   test "verified init is lazy; queued response precedes receipt without losing the answer", ctx do
@@ -123,6 +181,20 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     assert render(ctx.view) =~ "Saved answer"
     assert render(ctx.view) =~ "persisted-assistant"
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+  end
+
+  test "an authorized context selection announces the conversation for reconnect", ctx do
+    init(ctx)
+
+    render_event(ctx.view, "widget.context.update", %{conversation_id: "conversation-1"}, %{
+      ok: true
+    })
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+
+    assert_push_event(ctx.view, "widget.conversation", %{conversation_id: "conversation-1"})
+    assert render(ctx.view) =~ "Saved answer"
   end
 
   test "correlates streaming and refuses duplicate, foreign and late terminals", ctx do
@@ -344,6 +416,8 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     assert %{status: 401} = request.(token(ctx), "visitor")
     assert %{status: 401} = request.(control, "another-visitor")
+    assert %{status: 401} = request.(control <> "x", "visitor")
+    assert has_element?(ctx.view, "#web-widget")
 
     assert %{status: 401} =
              Phoenix.ConnTest.build_conn()
@@ -364,6 +438,22 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     refute_receive {:shared_request, %{content: "blocked"}, _, _}
     assert %{status: 200, resp_body: retry_body} = request.(control, "visitor")
     assert Jason.decode!(retry_body)["cutoff"] == cutoff
+
+    [_, payload, _] = String.split(control, ".")
+
+    conflicting_claims =
+      payload
+      |> Base.url_decode64!(padding: false)
+      |> Jason.decode!()
+      |> Map.put("user_id", "other")
+
+    {_metadata, conflicting_proof} =
+      ctx.key
+      |> JOSE.JWK.from_oct()
+      |> JOSE.JWT.sign(%{"alg" => "HS256", "typ" => "JWT"}, conflicting_claims)
+      |> JOSE.JWS.compact()
+
+    assert %{status: 401} = request.(conflicting_proof, "other")
     render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{ok: false})
     render_event(other, "widget.submit", %{text: "instant"}, %{ok: true})
     assert_receive {:shared_request, %{content: "instant"}, %{sender_id: "other"}, _}

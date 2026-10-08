@@ -2,9 +2,14 @@ Code.require_file("test/support/integration/chat_host.ex")
 
 defmodule WebWidget.E2ESharedHost do
   @moduledoc false
+  @requests WebWidget.E2ESharedHost.Requests
   def key, do: "e2e-only-connector-key-never-installed-in-production-420"
 
   def start do
+    {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, %{
+      id: @requests,
+      start: {Agent, :start_link, [fn -> %{} end, [name: @requests]]}
+    })
     host = WebWidget.TestIntegration.ChatHost
     hooks = %{widget_id: 420, display_name: "Shared protocol assistant",
       allowed_domains: ["http://127.0.0.1:4019"], message: host, command: host,
@@ -18,6 +23,26 @@ defmodule WebWidget.E2ESharedHost do
   end
 
   def receive_request(test, request, context: context) do
+    if Map.has_key?(request, :content) do
+      key = {context.sender_id, Map.get(request, :content)}
+      Agent.update(@requests, &Map.update(&1, key, 1, fn count -> count + 1 end))
+    end
+    case request do
+      %{type: :conversation_history} ->
+        case Agent.get(@requests, &Map.get(&1, {:held_stream, context.sender_id})) do
+          nil -> receive_default(test, request, context)
+          status -> held_history(request, status)
+        end
+
+      %{content: "held stream"} ->
+        start_held_stream(request, context)
+
+      _ ->
+        receive_default(test, request, context)
+    end
+  end
+
+  defp receive_default(test, request, context) do
     result = WebWidget.TestIntegration.ChatHost.receive_request(test, request, context: context)
 
     case {request, result} do
@@ -38,10 +63,62 @@ defmodule WebWidget.E2ESharedHost do
     ])
   end
 
-  def bootstrap(ttl \\ 604_800, user_id \\ "e2e-visitor") do
+  defp start_held_stream(request, context) do
+    host = WebWidget.TestIntegration.ChatHost
+    conversation = request.conversation_id || "conversation-1"
+    created = is_nil(request.conversation_id)
+    receipt = host.response(request, if(created, do: :conversation_created, else: :status),
+      conversation, %{accepted: true, created: created})
+    Agent.update(@requests, &Map.put(&1, {:held_stream, context.sender_id},
+      %{status: :running, receipt: receipt, context: context}))
+    host.publish(context, %{receipt | type: :typing, payload: %{active: true}})
+    host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
+    host.publish(context, %{receipt | type: :message_edit, payload: %{body: "**Partial**"}})
+    {:ok, receipt}
+  end
+
+  defp held_history(request, held) do
+    WebWidget.TestIntegration.ChatHost.response(request, :conversation_history,
+      request.conversation_id, %{messages: [
+        %{message_id: "held-user", position: 1, role: "user", content: "held stream", provider_sent_at: nil},
+        %{message_id: "held-assistant", position: 2, role: "assistant",
+          content: if(held.status == :running, do: "**Partial**", else: "**Finished**"),
+          provider_sent_at: nil}
+      ]})
+  end
+
+  def release_stream(user_id) do
+    held = Agent.get_and_update(@requests, fn state ->
+      case Map.get(state, {:held_stream, user_id}) do
+        %{status: :running} = current ->
+          {current, Map.put(state, {:held_stream, user_id}, %{current | status: :finished})}
+        _ -> {nil, state}
+      end
+    end)
+    if held do
+      WebWidget.TestIntegration.ChatHost.publish(held.context,
+        %{held.receipt | type: :message_complete, payload: %{body: "**Finished**"}})
+    end
+    held != nil
+  end
+
+  def stream_status(user_id) do
+    Agent.get(@requests, fn state ->
+      case Map.get(state, {:held_stream, user_id}) do
+        nil -> :missing
+        held -> held.status
+      end
+    end)
+  end
+
+  def request_count(user_id, content) do
+    Agent.get(@requests, &Map.get(&1, {user_id, content}, 0))
+  end
+
+  def bootstrap(ttl \\ 604_800, user_id \\ "e2e-visitor", issued_offset \\ 0) do
     now = System.system_time(:second)
     claims = %{widget_id: 420, user_id: user_id, iss: "e2e-parent", aud: "e2e-widget",
-      iat: now, exp: now + ttl, jti: Ecto.UUID.generate()}
+      iat: now + issued_offset, exp: now + ttl, jti: Ecto.UUID.generate()}
     {token, 0} = System.cmd("node", ["test/support/integration/jwt_interop.cjs"],
       env: [{"WIDGET_TEST_KEY", key()}, {"WIDGET_TEST_CLAIMS", Jason.encode!(claims)}])
     {:ok, script} = WebWidget.Integration.Installation.script(420, "http://127.0.0.1:4020")

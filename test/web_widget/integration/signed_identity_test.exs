@@ -78,6 +78,27 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     assert {:ok, _} = authenticate(ctx, proof)
   end
 
+  test "stale first use cannot claim a page and a fresh JWT restores access", ctx do
+    reset = BindingStore.reset_cutoff_value()
+    delay = max(0, (reset + 6) * 1_000 - System.system_time(:millisecond))
+    if delay > 0, do: Process.sleep(delay)
+    stale_claims = %{claims(ctx) | "iat" => System.system_time(:second) - 5}
+    stale = jwt(ctx.key, stale_claims)
+
+    assert {:error, :unauthorized} = authenticate(ctx, stale)
+    assert {:error, :unauthorized} = authenticate(ctx, stale, "other-page")
+
+    fresh =
+      jwt(ctx.key, %{
+        stale_claims
+        | "iat" => System.system_time(:second),
+          "jti" => Ecto.UUID.generate()
+      })
+
+    assert {:ok, %{sender_id: "visitor"}} = authenticate(ctx, fresh)
+    assert {:error, :unauthorized} = authenticate(ctx, fresh, "other-page")
+  end
+
   test "rotation rejects old proofs; keys never appear in public configuration", ctx do
     {:ok, proof} = sign(ctx)
     stop_supervised!(ctx.spec.id)
@@ -119,7 +140,11 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           Map.put(claims, "settings", %{theme: "dark"}),
           Map.put(claims, "prompt_context", %{}),
           Map.put(claims, "conversation_id", false),
-          Map.delete(claims, "user_id")
+          Map.delete(claims, "user_id"),
+          Map.delete(claims, "jti"),
+          Map.put(claims, "aud", ["widget"]),
+          Map.put(claims, "iss", " "),
+          Map.put(claims, "user_id", " ")
         ] do
       forged_schema = jwt(ctx.key, invalid)
       assert {:error, :unauthorized} = authenticate(ctx, forged_schema)
@@ -219,6 +244,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           Map.put(claims, "nbf", claims["iat"] + 60),
           Map.put(claims, "iat", "now"),
           Map.put(claims, "exp", 1.5),
+          Map.put(claims, "exp", claims["iat"] - 1),
           Map.put(claims, "jti", "short"),
           Map.delete(claims, "iat"),
           Map.put(claims, "widget_id", to_string(ctx.config.id))
@@ -228,6 +254,8 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     assert {:ok, _} =
              authenticate(ctx, jwt(ctx.key, Map.put(claims, "nbf", claims["iat"])))
+
+    assert {:ok, %{sender_id: "visitor"}} = authenticate(ctx, jwt(ctx.key, claims))
   end
 
   defp jwt(key, claims, header \\ %{"alg" => "HS256", "typ" => "JWT"}) do

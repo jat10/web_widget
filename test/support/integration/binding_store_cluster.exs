@@ -37,6 +37,11 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
     1 = Enum.count(winners, &(&1 == :ok))
     11 = Enum.count(winners, &(&1 == {:error, :replayed}))
 
+    independent = %{racing | jti: unique()}
+    :ok = call(n1, BindingStore, :claim, [independent, "independent-page", now])
+    :ok = call(n2, BindingStore, :authorized?, [independent, "independent-page", now])
+    {:error, :replayed} = call(n1, BindingStore, :claim, [racing, "independent-page", now])
+
     :peer.stop(p2)
     await(fn -> BindingStore.available?() == :ok end)
     {p2, ^n2} = start_peer(Enum.at(names, 1))
@@ -102,6 +107,16 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
     await(fn -> BindingStore.available?() == {:error, :unavailable} end)
     {:error, :unavailable_or_invalid} = BindingStore.claim(claims(now + 10), "page-x", now + 10)
 
+    {:error, :unavailable_or_invalid} =
+      BindingStore.revoke_user(
+        claims.issuer,
+        claims.widget_id,
+        claims.user_id,
+        unique(),
+        now + 10,
+        now + 10
+      )
+
     :ok = Application.stop(:web_widget)
     :ok = Application.stop(:mnesia)
     {:ok, _} = Application.ensure_all_started(:web_widget)
@@ -127,8 +142,11 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
         pre_reset.iat + 1
       )
 
-    fresh = claims(new_reset + 1)
+    await(fn -> System.system_time(:second) > new_reset end)
+    fresh = claims(System.system_time(:second))
     :ok = BindingStore.claim(fresh, "page-fresh", fresh.iat)
+    :ok = call(n1, BindingStore, :claim, [fresh, "page-fresh", fresh.iat])
+    {:error, :replayed} = call(n2, BindingStore, :claim, [fresh, "other-page", fresh.iat])
 
     :peer.stop(p1)
     :peer.stop(p2)
