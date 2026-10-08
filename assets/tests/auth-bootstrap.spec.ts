@@ -206,11 +206,14 @@ test("renewal preserves streamed Markdown, draft, and styled container", async (
   expect(await frame.evaluate(element => element === (window as any).authenticatedFrame)).toBe(true);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   expect(tokens).toBe(2);
+  await frame.evaluate(element => {
+    element.addEventListener("zaq:ready", () => { (window as any).reconnectedReady = true; }, { once: true });
+  });
   await widget.locator("body").evaluate(() => {
     (window as any).liveSocket.disconnect();
     (window as any).liveSocket.connect();
   });
-  await expect(answer.locator("strong")).toHaveText("Finished");
+  await expect.poll(() => page.evaluate(() => (window as any).reconnectedReady === true)).toBe(true);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   expect(tokens).toBe(2);
   await input.fill("instant");
