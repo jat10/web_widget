@@ -11,9 +11,15 @@
   "id": "ww-v4a.5",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Implemented same-origin token endpoint/provider bootstrap, fragment delivery and scrubbing, document-level parent listener, in-place renewal, credential metadata/retry/store recovery, and demo readiness separation. Verified mix assets.build, mix test (163 pass), and full Chromium Playwright (80 pass).",
+      "timestamp": "2026-10-08T09:34:49Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Implement parent SDK token delivery, bootstrap, and lifecycle",
   "type": "task",
-  "updated_at": "2026-10-08T09:03:13Z"
+  "updated_at": "2026-10-08T09:34:49Z"
 }
