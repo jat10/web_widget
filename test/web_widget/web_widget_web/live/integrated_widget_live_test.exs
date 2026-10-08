@@ -338,7 +338,8 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     request = fn proof, user ->
       Phoenix.ConnTest.build_conn()
       |> Plug.Conn.put_req_header("authorization", "Bearer " <> proof)
-      |> post(endpoint, %{user_id: user})
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> post(endpoint, Jason.encode!(%{user_id: user}))
     end
 
     assert %{status: 401} = request.(token(ctx), "visitor")
@@ -347,7 +348,13 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     assert %{status: 401} =
              Phoenix.ConnTest.build_conn()
              |> Plug.Conn.put_req_header("authorization", "Bearer " <> control)
-             |> post("/widget-api/#{ctx.id + 1}/disconnect", %{user_id: "visitor"})
+             |> post(endpoint, %{user_id: "visitor"})
+
+    assert %{status: 401} =
+             Phoenix.ConnTest.build_conn()
+             |> Plug.Conn.put_req_header("authorization", "Bearer " <> control)
+             |> Plug.Conn.put_req_header("content-type", "application/json")
+             |> post("/widget-api/#{ctx.id + 1}/disconnect", Jason.encode!(%{user_id: "visitor"}))
 
     assert %{status: 200, resp_body: body} = request.(control, "visitor")
     cutoff = Jason.decode!(body)["cutoff"]

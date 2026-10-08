@@ -25,12 +25,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
       {:ok,
        %{
          sender_id: "verified-parent-user",
-         expires_at: System.system_time(:second) + 60,
-         init: %{
-           user_id: "verified-parent-user",
-           conversation_id: nil,
-           prompt_context: "Parent context"
-         }
+         expires_at: System.system_time(:second) + 60
        }}
 
   def verify(_, _), do: {:error, :unauthorized}
@@ -123,6 +118,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
              })
 
     assert chat.conversation_id == nil
+    assert {:ok, chat} = Chat.update_context(chat, %{prompt_context: "Parent context"})
     assert {:ok, chat} = Chat.submit(chat, "Question")
     assert chat.conversation_id == "fixture-chat"
     assert_receive {:web_response, event, create}

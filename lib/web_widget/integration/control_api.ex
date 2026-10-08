@@ -9,7 +9,8 @@ defmodule WebWidget.Integration.ControlAPI do
   def init(:disconnect), do: :disconnect
 
   def call(conn, :disconnect) do
-    with {:ok, conn, body} <- body(conn),
+    with true <- json_request?(conn),
+         {:ok, conn, body} <- body(conn),
          %{"widget_id" => widget_id} <- conn.path_params,
          %{"user_id" => user_id} <- body,
          true <- map_size(body) == 1 and is_binary(user_id),
@@ -32,6 +33,13 @@ defmodule WebWidget.Integration.ControlAPI do
   end
 
   defp body(conn), do: {:ok, conn, conn.body_params}
+
+  defp json_request?(conn) do
+    case get_req_header(conn, "content-type") do
+      [value] -> String.starts_with?(String.downcase(value), "application/json")
+      _ -> false
+    end
+  end
 
   defp reply(conn, status, body) do
     conn

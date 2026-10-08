@@ -18,6 +18,8 @@ defmodule WebWidget.Integration.Session do
   ]
   defstruct @enforce_keys ++ [init: nil, binding_claims: nil, page_id: nil]
 
+  alias WebWidget.Integration.BindingStore
+
   @doc false
   def valid?(%__MODULE__{} = session, runtime_ref, config_id) do
     session.owner == self() and session.runtime_ref == runtime_ref and
@@ -32,5 +34,5 @@ defmodule WebWidget.Integration.Session do
   defp binding_valid?(%__MODULE__{binding_claims: nil}), do: true
 
   defp binding_valid?(%__MODULE__{binding_claims: claims, page_id: page_id}),
-    do: WebWidget.Integration.BindingStore.authorized?(claims, page_id) == :ok
+    do: BindingStore.authorized?(claims, page_id) == :ok
 end

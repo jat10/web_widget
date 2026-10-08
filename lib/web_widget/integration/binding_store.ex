@@ -21,56 +21,68 @@ defmodule WebWidget.Integration.BindingStore do
   def claim(claims, page_id, now \\ System.system_time(:second)) do
     with true <- valid_claim?(claims) and valid_page?(page_id) and is_integer(now),
          :ok <- available?() do
-      transaction(fn ->
-        reset = reset_cutoff()
-        revoked = revocation_cutoff(claims.issuer, claims.widget_id, claims.user_id)
-        key = {claims.issuer, claims.audience, claims.widget_id, claims.jti}
-
-        case :mnesia.read(@bindings, key, :write) do
-          [] ->
-            if now >= claims.iat and now - claims.iat < binding_window() and
-                 claims.iat > reset and claims.iat > revoked and now < claims.exp do
-              :mnesia.write({@bindings, key, page_id, claims.user_id, claims.iat, claims.exp})
-              :ok
-            else
-              :mnesia.abort(:stale_or_revoked)
-            end
-
-          [{@bindings, ^key, ^page_id, user_id, iat, exp}]
-          when user_id == claims.user_id and iat == claims.iat and exp == claims.exp ->
-            if iat > reset and iat > revoked and now < exp,
-              do: :ok,
-              else: :mnesia.abort(:stale_or_revoked)
-
-          _ ->
-            :mnesia.abort(:replayed)
-        end
-      end)
+      transaction(fn -> claim_transaction(claims, page_id, now) end)
     else
       _ -> {:error, :unavailable_or_invalid}
     end
   end
 
+  defp claim_transaction(claims, page_id, now) do
+    reset = reset_cutoff()
+    revoked = revocation_cutoff(claims.issuer, claims.widget_id, claims.user_id)
+    key = {claims.issuer, claims.audience, claims.widget_id, claims.jti}
+
+    case :mnesia.read(@bindings, key, :write) do
+      [] ->
+        claim_new(claims, page_id, key, now, reset, revoked)
+
+      [{@bindings, ^key, ^page_id, user_id, iat, exp}]
+      when user_id == claims.user_id and iat == claims.iat and exp == claims.exp ->
+        if valid_binding_time?(iat, exp, now, reset, revoked),
+          do: :ok,
+          else: :mnesia.abort(:stale_or_revoked)
+
+      _ ->
+        :mnesia.abort(:replayed)
+    end
+  end
+
+  defp claim_new(claims, page_id, key, now, reset, revoked) do
+    if now >= claims.iat and now - claims.iat < binding_window() and
+         valid_binding_time?(claims.iat, claims.exp, now, reset, revoked) do
+      :mnesia.write({@bindings, key, page_id, claims.user_id, claims.iat, claims.exp})
+      :ok
+    else
+      :mnesia.abort(:stale_or_revoked)
+    end
+  end
+
+  defp valid_binding_time?(iat, exp, now, reset, revoked),
+    do: iat > reset and iat > revoked and now < exp
+
   def authorized?(claims, page_id, now \\ System.system_time(:second)) do
     with true <- valid_claim?(claims) and valid_page?(page_id) and is_integer(now),
          :ok <- available?() do
-      transaction(fn ->
-        reset = reset_cutoff()
-        revoked = revocation_cutoff(claims.issuer, claims.widget_id, claims.user_id)
-        key = {claims.issuer, claims.audience, claims.widget_id, claims.jti}
-
-        case :mnesia.read(@bindings, key, :write) do
-          [{@bindings, ^key, ^page_id, user_id, iat, exp}]
-          when user_id == claims.user_id and iat == claims.iat and exp == claims.exp and
-                 iat > reset and iat > revoked and now < exp ->
-            :ok
-
-          _ ->
-            :mnesia.abort(:unauthorized)
-        end
-      end)
+      transaction(fn -> authorized_transaction(claims, page_id, now) end)
     else
       _ -> {:error, :unavailable_or_invalid}
+    end
+  end
+
+  defp authorized_transaction(claims, page_id, now) do
+    reset = reset_cutoff()
+    revoked = revocation_cutoff(claims.issuer, claims.widget_id, claims.user_id)
+    key = {claims.issuer, claims.audience, claims.widget_id, claims.jti}
+
+    case :mnesia.read(@bindings, key, :write) do
+      [{@bindings, ^key, ^page_id, user_id, iat, exp}]
+      when user_id == claims.user_id and iat == claims.iat and exp == claims.exp ->
+        if valid_binding_time?(iat, exp, now, reset, revoked),
+          do: :ok,
+          else: :mnesia.abort(:unauthorized)
+
+      _ ->
+        :mnesia.abort(:unauthorized)
     end
   end
 
@@ -93,33 +105,35 @@ defmodule WebWidget.Integration.BindingStore do
              now - issued_at < control_ttl(),
          :ok <- available?() do
       transaction(fn ->
-        reset = reset_cutoff()
-        request_key = {issuer, widget_id, request_id}
-        user_key = {issuer, widget_id, user_id}
-
-        case :mnesia.read(@controls, request_key, :write) do
-          [{@controls, ^request_key, ^user_id, ^issued_at, cutoff, _expiry}] ->
-            {:ok, cutoff, false}
-
-          [] ->
-            if issued_at <= reset, do: :mnesia.abort(:stale_control_request)
-            current = revocation_cutoff(issuer, widget_id, user_id)
-            cutoff = max(current, now)
-            :mnesia.write({@revocations, user_key, cutoff})
-
-            :mnesia.write(
-              {@controls, request_key, user_id, issued_at, cutoff, issued_at + control_ttl()}
-            )
-
-            {:ok, cutoff, true}
-
-          _ ->
-            :mnesia.abort(:request_conflict)
-        end
+        revoke_transaction(issuer, widget_id, user_id, request_id, issued_at, now)
       end)
     else
       _ -> {:error, :unavailable_or_invalid}
     end
+  end
+
+  defp revoke_transaction(issuer, widget_id, user_id, request_id, issued_at, now) do
+    request_key = {issuer, widget_id, request_id}
+
+    case :mnesia.read(@controls, request_key, :write) do
+      [{@controls, ^request_key, ^user_id, ^issued_at, cutoff, _expiry}] ->
+        {:ok, cutoff, false}
+
+      [] ->
+        create_revocation(issuer, widget_id, user_id, request_key, issued_at, now)
+
+      _ ->
+        :mnesia.abort(:request_conflict)
+    end
+  end
+
+  defp create_revocation(issuer, widget_id, user_id, request_key, issued_at, now) do
+    if issued_at <= reset_cutoff(), do: :mnesia.abort(:stale_control_request)
+    user_key = {issuer, widget_id, user_id}
+    cutoff = max(revocation_cutoff(issuer, widget_id, user_id), now)
+    :mnesia.write({@revocations, user_key, cutoff})
+    :mnesia.write({@controls, request_key, user_id, issued_at, cutoff, issued_at + control_ttl()})
+    {:ok, cutoff, true}
   end
 
   def reset_cutoff_value do
@@ -178,13 +192,19 @@ defmodule WebWidget.Integration.BindingStore do
     running = :mnesia.system_info(:running_db_nodes)
     active = Enum.filter(nodes, &(&1 in running))
 
-    if length(active) >= div(length(nodes), 2) + 1 do
-      if Enum.all?(@tables, &(&1 in :mnesia.system_info(:tables))) do
+    cond do
+      length(active) < div(length(nodes), 2) + 1 ->
+        :ok
+
+      Enum.all?(@tables, &(&1 in :mnesia.system_info(:tables))) ->
         Enum.each(@tables, &ensure_copy/1)
         ensure_metadata()
-      else
-        if node() == Enum.min(active), do: create_tables(active)
-      end
+
+      node() == Enum.min(active) ->
+        create_tables(active)
+
+      true ->
+        :ok
     end
   rescue
     _ -> :ok
@@ -278,20 +298,19 @@ defmodule WebWidget.Integration.BindingStore do
     if key == :"$end_of_table" do
       :start
     else
-      transaction(fn ->
-        case :mnesia.read(table, key, :write) do
-          [{^table, ^key, _, _, _, exp}] when table == @bindings ->
-            if exp <= System.system_time(:second), do: :mnesia.delete({table, key})
-
-          [{^table, ^key, _, _, _, exp}] when table == @controls ->
-            if exp <= System.system_time(:second), do: :mnesia.delete({table, key})
-
-          _ ->
-            :ok
-        end
-      end)
+      transaction(fn -> prune_key(table, key) end)
 
       prune_table(table, key, remaining - 1)
+    end
+  end
+
+  defp prune_key(table, key) do
+    case :mnesia.read(table, key, :write) do
+      [{^table, ^key, _, _, _, exp}] when table in [@bindings, @controls] ->
+        if exp <= System.system_time(:second), do: :mnesia.delete({table, key})
+
+      _ ->
+        :ok
     end
   end
 
@@ -326,11 +345,18 @@ defmodule WebWidget.Integration.BindingStore do
     window = Keyword.get(opts, :first_binding_window_seconds, 5)
     control = Keyword.get(opts, :control_proof_ttl_seconds, 30)
 
-    is_list(nodes) and nodes != [] and nodes == Enum.uniq(nodes) and
-      node() in nodes and Enum.all?(nodes, &is_atom/1) and
-      is_integer(lifetime) and is_integer(lead) and lead > 0 and lifetime > lead and
-      is_integer(window) and window > 0 and is_integer(control) and control > 0
+    valid_nodes?(nodes) and valid_timings?(lifetime, lead, window, control)
   end
+
+  defp valid_nodes?(nodes),
+    do:
+      is_list(nodes) and nodes != [] and nodes == Enum.uniq(nodes) and
+        node() in nodes and Enum.all?(nodes, &is_atom/1)
+
+  defp valid_timings?(lifetime, lead, window, control),
+    do:
+      is_integer(lifetime) and is_integer(lead) and lead > 0 and lifetime > lead and
+        is_integer(window) and window > 0 and is_integer(control) and control > 0
 
   defp binding_window do
     :web_widget

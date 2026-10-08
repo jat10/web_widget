@@ -4,7 +4,7 @@ defmodule WebWidgetWeb.WidgetLive do
   alias WebWidget.Adapter
   alias WebWidget.Conversation.State, as: Conversation
   alias WebWidget.Embedding.Settings
-  alias WebWidget.Integration.Chat
+  alias WebWidget.Integration.{BindingStore, Chat}
   alias WebWidget.Protocol.Events
   alias WebWidget.Protocol.Response
   alias WebWidget.Runtime
@@ -284,8 +284,7 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   def handle_event("widget.auth.status", _params, socket) do
-    {:reply, %{ok: true, available: WebWidget.Integration.BindingStore.available?() == :ok},
-     socket}
+    {:reply, %{ok: true, available: BindingStore.available?() == :ok}, socket}
   end
 
   def handle_event(
@@ -400,30 +399,12 @@ defmodule WebWidgetWeb.WidgetLive do
       Runtime.backend_revoked?(socket.assigns.chat.session) ->
         {:reply, %{ok: false, reason: "backend_revoked"}, backend_revoke_chat(socket)}
 
-      WebWidget.Integration.BindingStore.available?() != :ok ->
+      BindingStore.available?() != :ok ->
         {:reply, %{ok: false, reason: "store_unavailable"},
          expire_chat(socket, "store_unavailable")}
 
       true ->
-        text = String.trim(text)
-
-        if text != "" and String.length(text) <= socket.assigns.config.max_length and
-             socket.assigns.chat do
-          case Chat.submit(socket.assigns.chat, text) do
-            {:ok, chat} ->
-              {:reply, %{ok: true},
-               socket
-               |> assign_chat(chat)
-               |> assign(mode: :conversation, conversation_opened: true)
-               |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
-
-            {:error, chat, error} ->
-              {:reply, %{ok: false, error: error},
-               socket |> assign_chat(chat) |> assign(error: error)}
-          end
-        else
-          {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
-        end
+        submit_integrated(socket, String.trim(text))
     end
   end
 
@@ -454,6 +435,26 @@ defmodule WebWidgetWeb.WidgetLive do
     {:reply, %{ok: false, error: ui(socket, "Enter a text message.")}, socket}
   end
 
+  defp submit_integrated(socket, text) do
+    if text != "" and String.length(text) <= socket.assigns.config.max_length and
+         socket.assigns.chat do
+      case Chat.submit(socket.assigns.chat, text) do
+        {:ok, chat} ->
+          {:reply, %{ok: true},
+           socket
+           |> assign_chat(chat)
+           |> assign(mode: :conversation, conversation_opened: true)
+           |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
+
+        {:error, chat, error} ->
+          {:reply, %{ok: false, error: error},
+           socket |> assign_chat(chat) |> assign(error: error)}
+      end
+    else
+      {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
+    end
+  end
+
   @impl true
   def handle_info({:web_response, _, _}, %{assigns: %{authentication_pending: true}} = socket),
     do: {:noreply, socket}
@@ -478,7 +479,7 @@ defmodule WebWidgetWeb.WidgetLive do
         chat.session.expires_at <= System.system_time(:second) ->
           {:noreply, expire_chat(socket, "expired")}
 
-        WebWidget.Integration.BindingStore.available?() != :ok ->
+        BindingStore.available?() != :ok ->
           {:noreply, expire_chat(socket, "store_unavailable")}
 
         true ->

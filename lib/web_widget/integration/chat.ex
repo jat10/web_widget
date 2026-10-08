@@ -2,7 +2,7 @@ defmodule WebWidget.Integration.Chat do
   @moduledoc false
   alias WebWidget.{Adapter, Runtime}
   alias WebWidget.Conversation.State
-  alias WebWidget.Integration.{Diagnostics, Response}
+  alias WebWidget.Integration.{Diagnostics, InitClaims, Response}
 
   def open(widget_id, params, page_id \\ nil, requested_id \\ nil, expected_sender \\ nil)
 
@@ -102,9 +102,7 @@ defmodule WebWidget.Integration.Chat do
 
   def update_context(chat, attrs) when is_map(attrs) do
     with {:ok, context} <-
-           WebWidget.Integration.InitClaims.normalize(
-             Map.put(attrs, :user_id, chat.session.sender_id)
-           ),
+           InitClaims.normalize(Map.put(attrs, :user_id, chat.session.sender_id)),
          true <- is_nil(chat.active),
          true <- Runtime.authorized?(chat.session) do
       requested = context.conversation_id

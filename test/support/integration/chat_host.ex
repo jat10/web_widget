@@ -65,6 +65,26 @@ defmodule WebWidget.TestIntegration.ChatHost do
       })
     end
 
+    if request.content == "markdown renewal" do
+      Task.start(fn ->
+        Process.sleep(250)
+
+        publish(context, %{
+          receipt
+          | type: :message_edit,
+            payload: %{body: "## Update\n\n**Partial**"}
+        })
+
+        Process.sleep(1_000)
+
+        publish(context, %{
+          receipt
+          | type: :message_complete,
+            payload: %{body: "## Update\n\n**Finished**"}
+        })
+      end)
+    end
+
     {:ok, receipt}
   end
 
