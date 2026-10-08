@@ -12,9 +12,15 @@
   "id": "ww-v4a.2",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Implemented package-owned Mnesia ram_copies with configured replica membership, quorum and majority checks, transactional first-page claim/reconnect, revocation cutoffs, idempotent control requests, reset cutoff and bounded cleanup. Single-node tests plus real three-node peer script cover replay, concurrent claims, rolling restart, revocation race, minority failure and full RAM reset. Store is not wired into JWT verification until ww-v4a.3; process-local ReplayGuard remains temporarily for existing behavior.",
+      "timestamp": "2026-10-08T08:49:13Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Implement replicated Mnesia token bindings and revocation cutoffs",
   "type": "task",
-  "updated_at": "2026-10-08T08:34:54Z"
+  "updated_at": "2026-10-08T08:49:13Z"
 }
