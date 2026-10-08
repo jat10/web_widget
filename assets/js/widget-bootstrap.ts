@@ -4,6 +4,7 @@ type Handler = (event: MessageEvent) => void;
 
 const fragment = new URLSearchParams(window.location.hash.slice(1));
 let identityToken = fragment.get("identity_token");
+let selectedConversationId: string | null = null;
 if (identityToken !== null) {
   fragment.delete("identity_token");
   const rest = fragment.toString();
@@ -36,6 +37,8 @@ const allowed = (event: MessageEvent) =>
 
 export const currentIdentityToken = () => identityToken;
 export const acceptIdentityToken = (token: string) => { identityToken = token; };
+export const currentConversationId = () => selectedConversationId;
+export const acceptConversationId = (id: string) => { selectedConversationId = id; };
 export const currentParentOrigin = () => parentOrigin;
 
 export function postToParent(type: string, detail: object = {}) {

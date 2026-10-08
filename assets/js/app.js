@@ -28,12 +28,16 @@ import components from "../react-components"
 import "../css/app.css"
 import "./widget-demo"
 import {WidgetContext} from "./widget-context"
-import {currentIdentityToken} from "./widget-bootstrap"
+import {currentConversationId, currentIdentityToken} from "./widget-bootstrap"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: () => ({_csrf_token: csrfToken, identity_token: currentIdentityToken()}),
+  params: () => ({
+    _csrf_token: csrfToken,
+    identity_token: currentIdentityToken(),
+    conversation_id: currentConversationId(),
+  }),
   hooks: {...getHooks(components), WidgetContext},
 })
 

@@ -71,9 +71,16 @@ defmodule WebWidgetWeb.WidgetLive do
 
   defp authenticate_on_mount(socket) do
     if connected?(socket) and socket.assigns.integrated do
-      proof = get_connect_params(socket)["identity_token"]
+      params = get_connect_params(socket)
+      proof = params["identity_token"]
+      requested_id = params["conversation_id"]
 
-      case Chat.open(socket.assigns.widget_id, %{"identity_token" => proof}, socket.id) do
+      case Chat.open(
+             socket.assigns.widget_id,
+             %{"identity_token" => proof},
+             socket.id,
+             requested_id
+           ) do
         {:ok, chat} ->
           socket =
             socket
@@ -300,7 +307,18 @@ defmodule WebWidgetWeb.WidgetLive do
              conversation_id: Map.get(params, "conversation_id"),
              prompt_context: Map.get(params, "prompt_context")
            }) do
-      socket = socket |> assign_chat(updated) |> restore_mode(updated.conversation_id)
+      socket =
+        socket
+        |> assign_chat(updated)
+        |> restore_mode(updated.conversation_id)
+
+      socket =
+        if is_binary(updated.conversation_id) and updated.conversation_id != chat.conversation_id do
+          push_event(socket, "widget.conversation", %{conversation_id: updated.conversation_id})
+        else
+          socket
+        end
+
       {:reply, %{ok: true, conversation_id: updated.conversation_id}, socket}
     else
       _ -> {:reply, %{ok: false, reason: "invalid_context"}, socket}

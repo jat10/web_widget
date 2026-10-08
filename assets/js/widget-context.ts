@@ -1,6 +1,6 @@
 import { ViewHook } from "phoenix_live_view";
 import {
-  acceptIdentityToken, postToParent, registerWidgetHandler, setPublicReady,
+  acceptConversationId, acceptIdentityToken, postToParent, registerWidgetHandler, setPublicReady,
   unregisterWidgetHandler, waitForStylesheet,
 } from "./widget-bootstrap";
 
@@ -144,6 +144,9 @@ export class WidgetContext extends ViewHook {
     this.allowedDomains = JSON.parse(this.el.dataset.allowedDomains || "[]");
     this.accepted = this.el.dataset.authorized === "true";
     this.handleEvent("widget.conversation", data => {
+      if (this.el.dataset.authenticated === "true" && nonblank(data.conversation_id)) {
+        acceptConversationId(data.conversation_id);
+      }
       postToParent("zaq.widget.conversation", data);
     });
     this.handleEvent("widget.authentication.accepted", data => {
