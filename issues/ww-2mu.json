@@ -6,9 +6,15 @@
   "description": "PR #15 / issue #14: automatic LiveView reconnect reauthenticates JWT but loses the selected conversation and rendered answer. Reproduced in Playwright after waiting for zaq:ready: the streamed Finished answer disappears and the mock host Saved answer history is not requested/rendered. WidgetLive.authenticate_on_mount calls Chat.open with only JWT and page id; integrated widget client replays parentContext only when explicitly set, not after a conversation_created receipt. Keep production fix separate from integration-test review; add a failing reconnect-history test with real mock host on resolution.",
   "id": "ww-2mu",
   "labels": [],
+  "comments": [
+    {
+      "text": "Evidence: Playwright extension of assets/tests/auth-bootstrap.spec.ts streaming test awaited zaq:ready after liveSocket.disconnect/connect, then expected canonical mock-host Saved answer. Chromium failed in ~10s: element not found. WebKit CI on 33feef9 failed earlier waiting for prior Finished content after actual reconnect. The fast Chromium success was a test synchronization race. Existing host sends conversation_created, but parent client stores conversation_id only in demoBootstrap; integrated parentContext is unset, so connected mount opens without selected conversation. No production code changed in test-review work.",
+      "timestamp": "2026-10-08T11:04:01Z"
+    }
+  ],
   "priority": 1,
   "status": "open",
   "title": "Restore selected conversation after authenticated LiveView reconnect",
   "type": "bug",
-  "updated_at": "2026-10-08T11:03:55Z"
+  "updated_at": "2026-10-08T11:04:01Z"
 }
