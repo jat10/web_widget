@@ -1,5 +1,5 @@
 {
-  "assignee": "",
+  "assignee": "Jad",
   "blocked_by": [],
   "blocks": [
     "ww-v4a.2"
@@ -10,8 +10,8 @@
   "labels": [],
   "parent": "ww-v4a",
   "priority": 2,
-  "status": "open",
+  "status": "in_progress",
   "title": "Finalize authentication, configuration, and migration contract",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:44Z"
+  "updated_at": "2026-10-08T08:31:19Z"
 }
