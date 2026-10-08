@@ -1,6 +1,8 @@
 {
   "assignee": "",
-  "blocked_by": [],
+  "blocked_by": [
+    "ww-v4a.2"
+  ],
   "blocks": [],
   "created": "2026-10-08T08:27:26Z",
   "description": "Change SignedIdentity, Session, Runtime, Chat, WidgetLive, and application wiring. Validate HS256 claims, scope, times, five-second first use; bind to Phoenix verified root socket.id via Mnesia before protected host work, subscriptions, or history. Reconnect same page using valid binding and new process-bound session; reject other-page replay. Preserve runtime-generation and ownership checks. Add focused tests.",
@@ -11,5 +13,5 @@
   "status": "open",
   "title": "Validate lightweight JWT and authenticate at connected LiveView mount",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:26Z"
+  "updated_at": "2026-10-08T08:27:44Z"
 }

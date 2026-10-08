@@ -3,7 +3,9 @@
   "blocked_by": [
     "ww-v4a.1"
   ],
-  "blocks": [],
+  "blocks": [
+    "ww-v4a.3"
+  ],
   "created": "2026-10-08T08:27:26Z",
   "description": "Package-owned ram_copies for issuer/audience/widget/jti to verified page/user/iat/exp bindings, user revocation cutoffs, cluster reset cutoff, and idempotent control nonce results. Transactional claim/revocation race handling, majority protection, explicit cluster membership, fail-closed unavailable/minority behavior, bounded expiry cleanup, rolling restart preservation, full RAM reset rejection. Add focused real peer-node tests.",
   "id": "ww-v4a.2",
