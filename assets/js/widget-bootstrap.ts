@@ -113,7 +113,7 @@ window.addEventListener("message", event => {
     applyStylesheet(data.url);
     return;
   }
-  if (!["zaq.widget.connect", "zaq.widget.init", "zaq.widget.settings.update", "zaq.widget.settings.get", "zaq.widget.auth.status"].includes(data?.type)) return;
+  if (!["zaq.widget.connect", "zaq.widget.init", "zaq.widget.context.update", "zaq.widget.settings.update", "zaq.widget.settings.get", "zaq.widget.auth.status"].includes(data?.type)) return;
   if (handler) handler(event);
   else if (queued.length < 20) queued.push(event);
 });

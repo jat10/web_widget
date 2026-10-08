@@ -1,4 +1,4 @@
-import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings, type TokenProvider } from "./widget-client";
+import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings, type WidgetContextUpdate, type TokenProvider } from "./widget-client";
 import { stylesheetURL } from "./widget-stylesheet";
 
 function endpointProvider(path: string): TokenProvider {
@@ -161,6 +161,7 @@ function createEmbed() {
     async connect(context?: WidgetInit) { return connect().connect(context); },
     async init(context: WidgetInit | DemoWidgetInit) { return connect().init(context); },
     async updateSettings(settings: Partial<WidgetSettings>) { return connect().updateSettings(settings); },
+    async updateContext(context: WidgetContextUpdate) { return connect().updateContext(context); },
     async getSettings() { return connect().getSettings(); },
     dispose() {
       initialAbort?.abort();

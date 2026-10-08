@@ -79,19 +79,15 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       %{ok: false}
     )
 
-    render_event(
-      ctx.view,
-      "widget.context",
-      %{identity_token: token(ctx, %{conversation_id: "foreign"})},
-      %{ok: false}
-    )
-
     refute has_element?(ctx.view, "#web-widget")
+    init(ctx)
+    render_event(ctx.view, "widget.context.update", %{conversation_id: "foreign"}, %{ok: false})
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
   end
 
-  test "all initialization fields come from signed claims and unsigned extensions are rejected",
+  test "identity and parent conversation context remain separate",
        ctx do
-    proof = token(ctx, %{prompt_context: "Signed context", conversation_id: nil})
+    proof = token(ctx)
 
     for override <- [
           %{user_id: "visitor"},
@@ -109,10 +105,15 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     end
 
     render_event(ctx.view, "widget.context", %{identity_token: proof}, %{ok: true})
+
+    render_event(ctx.view, "widget.context.update", %{prompt_context: "Parent context"}, %{
+      ok: true
+    })
+
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
 
     assert_receive {:shared_request,
-                    %{content: "instant", prompt_context: "Signed context", conversation_id: nil},
+                    %{content: "instant", prompt_context: "Parent context", conversation_id: nil},
                     %{sender_id: "visitor"}, _}
   end
 
@@ -307,15 +308,19 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       )
 
     render_event(ctx.view, "widget.context", %{identity_token: wrong}, %{ok: false})
+    refute_receive {:shared_request, %{type: :conversation_init}, %{sender_id: "another-visitor"}, _}
     init(ctx)
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
     assert_receive {:shared_request, %{content: "instant"}, %{sender_id: "visitor"}, _}
   end
 
   defp init(ctx, params \\ %{}) do
-    render_event(ctx.view, "widget.context", %{identity_token: token(ctx, params)}, %{
+    render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{
       ok: true
     })
+
+    if map_size(params) > 0,
+      do: render_event(ctx.view, "widget.context.update", params, %{ok: true})
   end
 
   defp token(ctx, claims \\ %{}),

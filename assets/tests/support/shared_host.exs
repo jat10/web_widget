@@ -38,10 +38,9 @@ defmodule WebWidget.E2ESharedHost do
     ])
   end
 
-  def bootstrap(conversation_id \\ nil, ttl \\ 604_800) do
+  def bootstrap(ttl \\ 604_800) do
     now = System.system_time(:second)
-    claims = %{widget_id: 420, user_id: "e2e-visitor", conversation_id: conversation_id,
-      prompt_context: "Signed page context", iss: "e2e-parent", aud: "e2e-widget",
+    claims = %{widget_id: 420, user_id: "e2e-visitor", iss: "e2e-parent", aud: "e2e-widget",
       iat: now, exp: now + ttl, jti: Ecto.UUID.generate()}
     {token, 0} = System.cmd("node", ["test/support/integration/jwt_interop.cjs"],
       env: [{"WIDGET_TEST_KEY", key()}, {"WIDGET_TEST_CLAIMS", Jason.encode!(claims)}])

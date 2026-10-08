@@ -22,6 +22,7 @@ test("generated installation script authenticates, chats and restores with a fre
       sessionStorage.setItem("smoke-conversation", event.detail.conversation_id);
     });
     await window.zaq.widget.init({ identity_token });
+    await window.zaq.widget.updateContext({ prompt_context: "Parent page context" });
   }, bootstrap.identity_token);
   await expect(widget.locator(".zaq-widget")).toBeVisible();
   expect(await page.evaluate(async identity_token => {
@@ -35,10 +36,15 @@ test("generated installation script authenticates, chats and restores with a fre
   await widget.getByPlaceholder("Ask a question…").press("Enter");
   await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem("smoke-conversation"))).toBe("conversation-1");
+  expect(await page.evaluate(async () => {
+    try { await window.zaq.widget.updateContext({ conversation_id: "foreign" }); return false; }
+    catch { return true; }
+  })).toBe(true);
+  await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
 
   // Full iframe reload needs a newly minted proof, then canonical host history.
   const savedId = await page.evaluate(() => sessionStorage.getItem("smoke-conversation"));
-  const fresh = await (await request.get("http://127.0.0.1:4021/identity", { params: { conversation_id: savedId! } })).json();
+  const fresh = await (await request.get("http://127.0.0.1:4021/identity")).json();
   await page.evaluate(() => new Promise<void>((resolve, reject) => {
     const frame = document.getElementById("zaq-widget") as HTMLIFrameElement;
     const timer = setTimeout(() => reject(new Error("Missing reauthentication request")), 10000);
@@ -48,6 +54,7 @@ test("generated installation script authenticates, chats and restores with a fre
     frame.src = frame.src;
   }));
   await page.evaluate(identity_token => window.zaq.widget.init({ identity_token }), fresh.identity_token);
+  await page.evaluate(conversation_id => window.zaq.widget.updateContext({ conversation_id }), savedId);
   await expect(widget.getByText("Saved answer", { exact: true })).toBeVisible();
   await expect(widget.locator("#widget-instance-stylesheet")).toHaveCount(0);
   expect(await page.evaluate(async () => {
@@ -89,8 +96,9 @@ test("token expiry and renewal preserve the mounted chat and draft", async ({ pa
   await expect(input).toHaveValue("Keep this unsent draft");
   await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
   expect(await input.evaluate(element => element === (window as any).originalComposer)).toBe(true);
-  const fresh = await (await request.get("http://127.0.0.1:4021/identity?conversation_id=conversation-1")).json();
+  const fresh = await (await request.get("http://127.0.0.1:4021/identity")).json();
   await page.evaluate(identity_token => window.zaq.widget.init({ identity_token }), fresh.identity_token);
+  await page.evaluate(() => window.zaq.widget.updateContext({ conversation_id: "conversation-1" }));
   await expect(widget.getByText("Saved answer", { exact: true })).toBeVisible();
   await expect(input).toHaveValue("Keep this unsent draft");
   await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();

@@ -5,15 +5,14 @@ defmodule WebWidget.Integration.SignedIdentity do
   Configure `identity_verifier: :connector_key`, `identity_issuer` and
   `identity_audience` in the integration options. Mint a fresh proof for each
   iframe connection using `sign/4` on the authenticated parent backend.
-  The third argument is a map containing `:user_id` and optional
-  `:conversation_id` and `:prompt_context` (default nil). No other init fields
-  are accepted. Standard JWT claims bind issuer, audience, issue/expiry times
+  The third argument is a map containing only `:user_id`.
+  Standard JWT claims bind issuer, audience, issue/expiry times
   and a random token ID. Use the raw connector key as the HMAC secret, without
   salt or Base64 decoding. Signed tokens provide integrity, not confidentiality.
   """
   alias WebWidget.Integration.{BindingStore, InitClaims}
 
-  @claim_keys ~w(widget_id user_id conversation_id prompt_context iss aud iat exp jti nbf)
+  @claim_keys ~w(widget_id user_id iss aud iat exp jti nbf)
   @default_age 604_800
   @max_proof_bytes 200_000
 
@@ -21,7 +20,8 @@ defmodule WebWidget.Integration.SignedIdentity do
     now = System.system_time(:second)
     ttl = Keyword.get(opts, :ttl, configured_max_age())
 
-    with {:ok, init} <- InitClaims.normalize(init),
+    with true <- is_map(init) and Map.keys(init) == [:user_id],
+         {:ok, init} <- InitClaims.normalize(init),
          true <-
            valid_key?(key) and is_integer(widget_id) and widget_id > 0 and
              is_integer(ttl) and ttl in 1..configured_max_age() and
@@ -29,8 +29,6 @@ defmodule WebWidget.Integration.SignedIdentity do
       claims = %{
         "widget_id" => widget_id,
         "user_id" => init.user_id,
-        "conversation_id" => init.conversation_id,
-        "prompt_context" => init.prompt_context,
         "iss" => opts[:issuer],
         "aud" => opts[:audience],
         "iat" => now,
@@ -61,8 +59,6 @@ defmodule WebWidget.Integration.SignedIdentity do
          %{
            "widget_id" => id,
            "user_id" => sender,
-           "conversation_id" => conversation,
-           "prompt_context" => prompt,
            "iss" => ^issuer,
            "aud" => ^audience,
            "iat" => issued,
@@ -71,11 +67,7 @@ defmodule WebWidget.Integration.SignedIdentity do
          } <- claims,
          true <- Enum.all?(Map.keys(claims), &(&1 in @claim_keys)),
          {:ok, init} <-
-           InitClaims.normalize(%{
-             user_id: sender,
-             conversation_id: conversation,
-             prompt_context: prompt
-           }),
+           InitClaims.normalize(%{user_id: sender}),
          true <- is_integer(id) and id > 0 and id == scope.channel_config_id,
          true <- valid_times?(issued, expiry, Map.get(claims, "nbf", issued), now),
          true <- identifier?(nonce) and byte_size(nonce) >= 16,

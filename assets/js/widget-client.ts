@@ -1,5 +1,6 @@
 export type WidgetSettings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 export type WidgetInit = { identity_token: string };
+export type WidgetContextUpdate = { conversation_id?: string | null; prompt_context?: string | null };
 /** Standalone mock fixtures only; rejected by integrated ZAQ widgets. */
 export type DemoWidgetInit = { user_id: string; prompt_context?: string | null; conversation_id?: string | null };
 export type TokenProvider = (signal: AbortSignal) => Promise<string>;
@@ -21,6 +22,7 @@ export function createWidgetClient(
   const origin = widgetUrl.origin;
   let disposed = false, bootstrapReady = false, publicReady = false, terminal = false;
   let demoBootstrap: DemoWidgetInit | undefined;
+  let parentContext: WidgetContextUpdate | undefined;
   let settings: WidgetSettings | undefined;
   let provider = options.tokenProvider;
   let acceptedToken: string | undefined;
@@ -160,8 +162,10 @@ export function createWidgetClient(
       }
       if (waitingForStore) pollStore(); else schedule();
     } else if (data?.type === "zaq.widget.ready") {
+      const firstReady = !publicReady;
       publicReady = true;
       iframe.dispatchEvent(new CustomEvent("zaq:ready"));
+      if (firstReady && parentContext) void request("zaq.widget.context.update", parentContext).catch(() => {});
     } else if (data?.type === "zaq.widget.disconnected") {
       bootstrapReady = false; publicReady = false;
       iframe.dispatchEvent(new CustomEvent("zaq:disconnected", { detail: { reason: data.reason || "network" } }));
@@ -229,6 +233,15 @@ export function createWidgetClient(
     async updateSettings(patch: Partial<WidgetSettings>) {
       const result = await request("zaq.widget.settings.update", { settings: patch });
       return result.settings!;
+    },
+    async updateContext(context: WidgetContextUpdate) {
+      if (!context || typeof context !== "object" || Array.isArray(context) ||
+          Object.keys(context).some(key => !["conversation_id", "prompt_context"].includes(key))) {
+        throw new Error("Invalid widget context update.");
+      }
+      const result = await request("zaq.widget.context.update", context);
+      parentContext = { ...context };
+      return result;
     },
     async getSettings() {
       const result = await request("zaq.widget.settings.get", {});

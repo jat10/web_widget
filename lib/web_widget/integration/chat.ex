@@ -4,13 +4,20 @@ defmodule WebWidget.Integration.Chat do
   alias WebWidget.Conversation.State
   alias WebWidget.Integration.{Diagnostics, Response}
 
-  def open(widget_id, params, page_id \\ nil)
+  def open(widget_id, params, page_id \\ nil, requested_id \\ nil, expected_sender \\ nil)
 
-  def open(widget_id, %{"identity_token" => proof} = params, page_id)
+  def open(
+        widget_id,
+        %{"identity_token" => proof} = params,
+        page_id,
+        requested_id,
+        expected_sender
+      )
       when map_size(params) == 1 do
     with {:ok, session} <- Runtime.authenticate(widget_id, proof, page_id),
+         true <- expected_sender in [nil, session.sender_id],
          {:ok, monitor} <- Runtime.monitor(session) do
-      case subscribe_and_initialize(session, session.init.conversation_id, id(), session.init) do
+      case subscribe_and_initialize(session, requested_id, id(), session.init) do
         {:ok, chat} ->
           {:ok, Map.put(chat, :monitor, monitor)}
 
@@ -24,7 +31,7 @@ defmodule WebWidget.Integration.Chat do
     end
   end
 
-  def open(_, _, _), do: {:error, "Initialization accepts only identity_token."}
+  def open(_, _, _, _, _), do: {:error, "Initialization accepts only identity_token."}
 
   defp subscribe_and_initialize(session, requested, request, params) do
     with {:ok, subscription} <- Runtime.subscribe(session) do
@@ -77,6 +84,66 @@ defmodule WebWidget.Integration.Chat do
       timer = expiration_timer(session, generation)
       Process.cancel_timer(chat.timer)
       {:ok, %{chat | session: session, timer: timer, auth_generation: generation}}
+    end
+  end
+
+  def update_context(chat, attrs) when is_map(attrs) do
+    with {:ok, context} <-
+           WebWidget.Integration.InitClaims.normalize(
+             Map.put(attrs, :user_id, chat.session.sender_id)
+           ),
+         true <- is_nil(chat.active),
+         true <- Runtime.authorized?(chat.session) do
+      requested = context.conversation_id
+
+      cond do
+        is_nil(requested) and is_nil(chat.conversation_id) and not chat.blocked ->
+          {:ok, %{chat | prompt_context: context.prompt_context}}
+
+        is_binary(requested) and requested == chat.conversation_id and not chat.blocked ->
+          {:ok, chat}
+
+        is_binary(requested) ->
+          resume(chat, requested)
+
+        true ->
+          {:error, :invalid_context}
+      end
+    else
+      _ -> {:error, :invalid_context}
+    end
+  end
+
+  def update_context(_, _), do: {:error, :invalid_context}
+
+  defp resume(chat, requested) do
+    request = id()
+
+    response =
+      Runtime.dispatch(
+        %{type: "widget.init", request_id: request, conversation_id: requested, params: %{}},
+        chat.session
+      )
+
+    with true <- Response.correlated?(response, request),
+         %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
+           response,
+         true <- Runtime.authorized?(chat.session),
+         {:ok, state, positions} <- history(chat.session, requested),
+         true <- Runtime.authorized?(chat.session) do
+      {:ok,
+       %{
+         chat
+         | conversation_id: requested,
+           state: state,
+           positions: positions,
+           prompt_context: nil,
+           blocked: false,
+           outcome: nil,
+           persisted_refs: %{}
+       }}
+    else
+      _ -> {:error, :invalid_context}
     end
   end
 

@@ -65,8 +65,7 @@ defmodule WebWidget.Integration.Protocol do
            invoke(integration.identity_verifier, [proof, scope]),
          true <- identifier?(sender),
          true <- is_integer(expiry) and expiry > System.system_time(:second),
-         {:ok, init} <-
-           InitClaims.normalize(Map.get(verified, :init, %{user_id: String.trim(sender)})),
+         {:ok, init} <- InitClaims.normalize(%{user_id: String.trim(sender)}),
          true <- init.user_id == String.trim(sender) do
       {:ok,
        struct!(

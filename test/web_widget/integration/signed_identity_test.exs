@@ -103,17 +103,15 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     )
   end
 
-  test "bootstrap claims are signed, schema checked and protected against tampering", ctx do
-    init = %{
-      user_id: "visitor",
-      conversation_id: "saved",
-      prompt_context: String.duplicate("context", 1000)
-    }
+  test "identity claims are minimal, schema checked and protected against tampering", ctx do
+    init = %{user_id: "visitor"}
 
     {:ok, proof} =
       SignedIdentity.sign(ctx.key, ctx.config.id, init, issuer: "parent", audience: "widget")
 
-    assert {:ok, %{init: ^init}} = authenticate(ctx, proof)
+    assert {:ok, %{init: %{user_id: "visitor", conversation_id: nil, prompt_context: nil}}} =
+             authenticate(ctx, proof)
+
     [_, payload, _] = String.split(proof, ".")
     claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
 
@@ -121,7 +119,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           Map.put(claims, "settings", %{theme: "dark"}),
           Map.put(claims, "prompt_context", %{}),
           Map.put(claims, "conversation_id", false),
-          Map.delete(claims, "prompt_context")
+          Map.delete(claims, "user_id")
         ] do
       forged_schema = jwt(ctx.key, invalid)
       assert {:error, :unauthorized} = authenticate(ctx, forged_schema)
@@ -152,8 +150,6 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     %{
       "widget_id" => ctx.config.id,
       "user_id" => "visitor",
-      "conversation_id" => nil,
-      "prompt_context" => nil,
       "iss" => "parent",
       "aud" => "widget",
       "iat" => now,
@@ -163,18 +159,14 @@ defmodule WebWidget.Integration.SignedIdentityTest do
   end
 
   test "Node signs tokens accepted here and verifies tokens signed here", ctx do
-    claims =
-      Map.merge(claims(ctx), %{
-        "conversation_id" => "chat-123",
-        "prompt_context" => "Menu — مرحبا"
-      })
+    claims = claims(ctx)
 
     {proof, 0} =
       System.cmd("node", ["test/support/integration/jwt_interop.cjs"],
         env: [{"WIDGET_TEST_KEY", ctx.key}, {"WIDGET_TEST_CLAIMS", Jason.encode!(claims)}]
       )
 
-    assert {:ok, %{init: %{conversation_id: "chat-123", prompt_context: "Menu — مرحبا"}}} =
+    assert {:ok, %{init: %{user_id: "visitor", conversation_id: nil, prompt_context: nil}}} =
              authenticate(ctx, proof)
 
     {:ok, proof} = sign(ctx)
@@ -186,8 +178,6 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     assert %{
              "user_id" => "visitor",
-             "conversation_id" => nil,
-             "prompt_context" => nil,
              "iss" => "parent",
              "aud" => "widget"
            } = Jason.decode!(payload)

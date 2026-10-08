@@ -26,7 +26,7 @@ export class WidgetContext extends ViewHook {
 
   private receiveContext = (event: MessageEvent) => {
     if (window.parent === window || event.source !== window.parent || !this.allowedDomains.includes(event.origin)) return;
-    if (!["zaq.widget.connect", "zaq.widget.init", "zaq.widget.settings.update", "zaq.widget.settings.get", "zaq.widget.auth.status"].includes(event.data?.type)) return;
+    if (!["zaq.widget.connect", "zaq.widget.init", "zaq.widget.context.update", "zaq.widget.settings.update", "zaq.widget.settings.get", "zaq.widget.auth.status"].includes(event.data?.type)) return;
     this.queue = this.queue.then(() => this.receive(event));
   };
 
@@ -37,6 +37,17 @@ export class WidgetContext extends ViewHook {
       let reply: any;
       if (data.type === "zaq.widget.auth.status") {
         this.respond(event, await this.dispatch("widget.auth.status", {}));
+        return;
+      }
+      if (data.type === "zaq.widget.context.update") {
+        if (Object.keys(data).some(key => !["type", "request_id", "conversation_id", "prompt_context"].includes(key))) {
+          throw new Error("Unsupported context field.");
+        }
+        const reply = await this.dispatch("widget.context.update", {
+          conversation_id: data.conversation_id ?? null,
+          prompt_context: data.prompt_context ?? null,
+        });
+        this.respond(event, reply);
         return;
       }
       if (data.type === "zaq.widget.connect" || data.type === "zaq.widget.init") {

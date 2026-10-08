@@ -273,9 +273,40 @@ defmodule WebWidgetWeb.WidgetLive do
      socket}
   end
 
+  def handle_event(
+        "widget.context.update",
+        params,
+        %{assigns: %{integrated: true, chat: chat}} = socket
+      )
+      when not is_nil(chat) do
+    with true <- is_nil(socket.assigns.pending_reply),
+         true <- Enum.all?(Map.keys(params), &(&1 in ["conversation_id", "prompt_context"])),
+         {:ok, updated} <-
+           Chat.update_context(chat, %{
+             conversation_id: Map.get(params, "conversation_id"),
+             prompt_context: Map.get(params, "prompt_context")
+           }) do
+      socket = socket |> assign_chat(updated) |> restore_mode(updated.conversation_id)
+      {:reply, %{ok: true, conversation_id: updated.conversation_id}, socket}
+    else
+      _ -> {:reply, %{ok: false, reason: "invalid_context"}, socket}
+    end
+  end
+
+  def handle_event("widget.context.update", _params, socket) do
+    {:reply, %{ok: false, reason: "authentication_required"}, socket}
+  end
+
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
     with true <- is_nil(socket.assigns.pending_reply),
-         {:ok, chat} <- Chat.open(socket.assigns.widget_id, params, socket.id) do
+         {:ok, chat} <-
+           Chat.open(
+             socket.assigns.widget_id,
+             params,
+             socket.id,
+             socket.assigns.chat && socket.assigns.chat.conversation_id,
+             socket.assigns.verified_sender
+           ) do
       if socket.assigns.verified_sender in [nil, chat.session.sender_id] do
         if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
 
