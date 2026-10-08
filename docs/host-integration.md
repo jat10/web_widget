@@ -1,82 +1,8 @@
 # Phoenix host integration
 
-## Integration status
+`web_widget` is a dependency of the host application. The host supplies connector configuration, trusted shared-protocol constructors, a config-bound sink callback, its PubSub server, and its LiveView socket. ZAQ owns routing, permissions, identity resolution, and durable conversations. The package owns iframe delivery, signed identity verification, page binding, browser state, and host response delivery to the correct widget. It has no compile-time ZAQ dependency.
 
-Routing and assets below are implemented package capabilities. The selected ZAQ
-integration targets shared protocol v1 at revision
-`c38e7e4e5`. The package runtime builder, verified
-server session, shared ingress, LiveView response encoding and signed bootstrap
-are implemented. Start with the [authenticated chat smoke](authenticated-chat.md).
-Follow the
-[adapter contract](adapter-contract.md) and [wiring plan](exec-plans/wiring-widget.md).
-The existing mock host is not a working ZAQ installation.
-
-## Current local ZAQ mount
-
-ZAQ imports `WebWidget.Router` and mounts `web_widget("/widget")` in its browser
-pipeline outside BO authentication. The macro serves the dependency's compiled
-assets directly. A fresh Git dependency installed from a release tag includes the
-tracked bundle. ZAQ needs no asset install task, build command, static-path
-allowlist entry, or endpoint `WebWidget.Static` plug.
-The same ZAQ endpoint serves `/widget/<id>`, `/web_widget/assets/` and `/live`.
-Point ngrok at ZAQ's HTTP port (normally 4000), and use that public origin as the
-global base URL. Omit `integration.public_url` or use that same origin; no separate
-widget endpoint on 4012 is required in this topology. Widget 12 must be enabled
-and allow the parent page's exact origin, `http://localhost:4010`.
-
-The alternate configuration-only topology below remains available but is not
-needed for this local setup. Authentication/chat migration is still milestone 2.
-
-## ZAQ configuration-only endpoint
-
-Do not edit ZAQ's endpoint/router. The package can start its own endpoint once,
-without its Repo, demo runtime or DNS cluster:
-
-```elixir
-config :web_widget, start_web_server: false, start_integration_server: true
-
-config :web_widget, WebWidgetWeb.Endpoint,
-  adapter: Bandit.PhoenixAdapter,
-  url: [host: "localhost", port: 4012, scheme: "http"],
-  http: [ip: {127, 0, 0, 1}, port: 4012],
-  secret_key_base: System.fetch_env!("WEB_WIDGET_SECRET_KEY_BASE"),
-  live_view: [signing_salt: "widget-live"],
-  pubsub_server: WebWidget.PubSub,
-  server: true
-```
-
-Use a securely generated endpoint secret (at least 64 bytes). Dependency config
-files are not imported; the host must supply these endpoint options. Keep normal
-socket origin checking enabled. For a separate endpoint, add
-`public_url: "http://localhost:4012"` to the integration options below. Use an
-HTTPS public origin in production. Paths, credentials, queries and fragments in
-this URL are unsupported. If `public_url` is omitted, the supplied ZAQ global
-base URL is used; configure a reverse proxy for `/widget`, `/web_widget/assets`
-and `/live` to the package endpoint. The snippet cannot install proxy routes.
-
-In BO at `/bo/channels/retrieval/web_widget`, save a disabled connector, set exact
-parent origins and agent routing, and generate/provision its key server-side.
-Set the global base URL in System Configuration before enabling. The adapter
-implements both `build/2` and `embed_script/2`, which BO requires for availability.
-Copy the installation snippet:
-
-```html
-<script src="http://localhost:4012/web_widget/assets/embed.js" data-widget-id="42" defer></script>
-```
-
-The script creates `#zaq-widget` and applies the existing frame layout. An optional
-`iframe-location-id="#my-widget-container"` selects an existing div with a parent-supplied
-height; the iframe fills it without taking over the page or locking parent scrolling.
-When the container itself is `#zaq-widget`, the iframe uses `#zaq-widget-frame`.
-It does
-not fabricate identity or initialize an authenticated chat. The current
-`zaq.widget.init({user_id})` API remains a mock/demo API; verified bootstrap and
-shared-response rendering remain milestone 2. No key belongs in this snippet.
-The package endpoint opt-in does not imply that chat authentication is complete.
-
-## Generic Phoenix host mounting (not required for ZAQ)
-
-### Install the Git dependency and mount the router
+## Routes and assets
 
 Add a released Git tag to the host's Mix dependencies and run `mix deps.get`:
 
@@ -84,13 +10,9 @@ Add a released Git tag to the host's Mix dependencies and run `mix deps.get`:
 {:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}
 ```
 
-The tagged source contains `priv/static/assets`; no Node installation or asset
-build is needed in the host. Git dependencies do not fetch GitHub Release
-attachments.
+Git dependency installs use the bundle committed in the tag; they do not fetch release attachments.
 
-Mount in the host's root browser scope, outside any existing `live_session`
-(the macro creates its own). The default prefix is `/widget`; additional mounts
-can use a custom prefix or aliased scope.
+Mount the browser widget and backend control routes in separate scopes. The browser scope needs the normal session, LiveView flash, CSRF and secure headers. The API scope needs no browser session or CSRF; each request carries a strict signed backend proof. The control plug can parse its JSON body even when the host endpoint has no general JSON parser.
 
 ```elixir
 import WebWidget.Router
@@ -99,152 +21,54 @@ scope "/" do
   pipe_through :browser
   web_widget("/widget")
 end
+
+scope "/" do
+  pipe_through :api
+  web_widget_api("/widget-api")
+end
 ```
 
-The browser pipeline must fetch session and LiveView flash, protect against CSRF,
-and set secure browser headers. Keep the host's `Plug.Session` and LiveView socket
-at `/live`, using the same session options in
-`websocket: [connect_info: [session: @session_options]]`. The endpoint uses its
-existing router without an additional static plug.
+Expose the host's LiveView socket at `/live` with the same `Plug.Session` options used for the widget route. Mount `web_widget` outside other authenticated `live_session` blocks; its macro creates its own. Keep normal socket origin checks. `allowed_domains` controls iframe parent origins separately. The package supplies the widget root layout, LiveView hook and browser bundle.
 
-The macro registers `/web_widget/assets/*path` before its LiveView routes. Its
-`WebWidget.Static` route serves files from the dependency's `priv/static/assets`
-with content types, ETags and path validation supplied by Plug.Static. The macro
-supplies an iframe root layout loading JS/CSS and lazy React chunks from that path.
-The bundle registers `WidgetContext` and LiveReact's
-`ReactHook` and connects to the host's `/live` socket. Widget hooks run inside the iframe. The embedding website separately loads
-`/web_widget/assets/embed.js` to expose the parent-side `zaq.widget` API. The iframe does not load the host app
-bundle. Currently the endpoint must be root-mounted with the standard `/live` path.
+The `web_widget/1` macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`, using `WebWidget.Static` as a route. Released Git tags include the tracked production bundle. The host needs no Node installation, asset copy/build task, static-path allowlist entry, or endpoint static plug. Do not run a second package endpoint when mounting in the host endpoint.
 
-For hosts choosing manual mounting, mount outside authenticated live sessions. Parent identity is verified
-by the adapter before shared Context construction, independently of BO login.
-Keep normal socket origin checks: the iframe connects to its own host origin;
-`allowed_domains` governs the parent embedding origin.
+ZAQ's local mount uses the existing host endpoint for `/widget/:id`, `/widget-api/:id/disconnect`, `/web_widget/assets`, and `/live`. A separate configuration-only package endpoint is supported for deployments that proxy all four paths to it; keep one endpoint topology per public URL.
 
-## Configure the ZAQ runtime
+## Runtime builder and shared protocol
 
-For local development, add `{:web_widget, path: "../web_widget"}` to ZAQ's
-dependencies and resolve compatible Phoenix/LiveView/LiveReact versions. Configure
-this entry in the existing Channels map, preserving the other providers:
-
-```elixir
-web_widget: %{
-  bridge: Zaq.Channels.WebBridge,
-  runtime_builder: WebWidget.Integration.RuntimeBuilder
-}
-```
-
-The builder implements `build(config, hooks)` and returns
-`{:ok, {state_spec_or_nil, listener_specs}}` or `{:error, reason}`.
-ZAQ's existing BridgeSupervisor owns child startup/restart/teardown. Do not manually
-start a second widget runtime alongside it.
-
-Use one enabled `web_widget` connector per widget. Its persisted positive integer
-ID is the trusted Context/Delivery configuration ID; its string form is the route
-and registry ID, for example `/widget/42`. Configure `display_name`, exact
-`allowed_domains`. Do not persist `stylesheet_url`. Add optional
-`stylesheet-url="https://your-app.example/widget-brand.css"` to the embed script
-instead. Relative URLs resolve against the parent document. The loader sends the
-HTTP(S) URL through the existing source/origin-validated postMessage handshake;
-the iframe loads one stylesheet link and reapplies it after reload. Omission uses
-bundled CSS; runtime configuration no longer loads custom stylesheets. A CSS load
-failure leaves built-in styles available. Serve CSS without credentials or login
-redirects, and use HTTPS for an HTTPS iframe. This works alongside
-`iframe-location-id`. Manual callers can use
-`zaq.widget.mount(widgetUrl, selector, stylesheetUrl)`.
-Browser initialization still accepts only `identity_token`; stylesheet params
-are not supported in init or updateSettings.
-Do not add a separate widget ID, theme or language setting. Keep multiple
-conversations disabled for this first integration.
-
-Retain the trusted constructor hooks and config-bound sink in server state. Supply
-`Zaq.PubSub` and the identity verifier through trusted adapter application
-configuration; hooks do not contain a PubSub server. The application configuration
-to add when installing in ZAQ is:
+Register `WebWidget.Integration.RuntimeBuilder` as the `web_widget` channel runtime builder. The host's existing supervisor owns its child lifecycle. One enabled connector corresponds to one package runtime and a positive integer connector ID. The string form is the public widget route ID. The builder reads the host's resolved connector key privately; no key appears in public widget configuration or the installation snippet.
 
 ```elixir
 config :web_widget, :integration,
-  public_url: "http://localhost:4012",
   pubsub_server: Zaq.PubSub,
-  identity_verifier: {MyApp.WidgetIdentity, :verify, []}
+  identity_verifier: :connector_key,
+  identity_issuer: "test-widget",
+  identity_audience: "zaq-web-widget",
+  token_url: "/api/widget-token"
 ```
 
-`MyApp.WidgetIdentity` is an application-owned verifier to implement, not supplied
-by the package. It receives `(proof, %{widget_id: string_id, channel_config_id: id})`
-after any configured prefix arguments, verifies proof and scope, and returns
-`{:ok, %{sender_id: external_id, expires_at: unix_seconds, init: verified_init}}`
-or `{:error, reason}`. `verified_init` contains only `user_id`, `conversation_id`
-and `prompt_context` from the verified proof. Omitting it permits only a fresh
-conversation with nil prompt context; browser input cannot supply overrides.
-It must not accept an unchecked browser ID. Absent verifier/PubSub configuration
-or invalid hooks fail builder construction. `build/3` accepts explicit options
-for tests without changing application environment.
+The package also accepts a trusted custom verifier MFA for browser identity, but the signed backend disconnect route is available only with connector-key verification. The verifier receives `(proof, %{widget_id: string_id, channel_config_id: integer_id, page_id: signed_socket_id})` after any configured prefix arguments and returns `{:ok, %{sender_id: external_id, expires_at: unix_seconds}}` or an error. Conversation and prompt metadata are supplied later through `zaq.widget.updateContext`, never through JWT identity or verifier output.
 
-## Origins and runtime availability
+`RuntimeBuilder.build/2` returns `{:ok, {runtime_child_spec, []}}`. Trusted hooks provide `message`, `command`, `context`, `delivery`, `response`, and `sink_mfa` constructors. The package calls `sink_mfa` in the caller with a constructed payload and server-owned context. The host routes messages, authorizes resume/history, persists conversation state, and publishes `{:web_response, adapter_event_name, shared_response}` to the private delivery topic. The package subscribes before the first question, checks request/conversation/message correlation, and forwards public `response.*` events to its React UI. No second browser WebSocket, SSE, AG-UI, or compile-time host dependency is needed.
 
-Origins must be exact HTTP(S) origins, including any non-default port. Paths,
-wildcards, credentials, queries, and fragments are rejected; a trailing slash is
-normalized. Missing, null, or empty `allowed_domains` disables the widget, including
-same-origin embedding. The route sets CSP `frame-ancestors` from this list and
-removes `X-Frame-Options`; unavailable widgets use `frame-ancestors 'none'`.
-The browser bootstrap also checks the parent window and allowed origin.
-Reload existing iframes after changing origin configuration. The standalone demo
-explicitly allows `http://localhost:4000` in development.
+For an integrated connector, the installer emits a public script containing the widget ID and the optional `token_url` attribute from integration configuration. The embedding website supplies that authenticated same-origin endpoint and may use:
 
-For local testing, override the demo origins when starting the development server:
-
-```sh
-WEB_WIDGET_DEMO_ALLOWED_DOMAINS=http://localhost:4010 mix phx.server
+```html
+<script src="https://ZAQ-HOST/web_widget/assets/embed.js"
+        data-widget-id="42" data-token-url="/api/widget-token" defer></script>
 ```
 
-Use a comma-separated list to allow multiple origins. This development-only
-override replaces the demo allowlist and requires restarting the server.
+`iframe-location-id="#my-widget-container"` selects an existing div with a parent-supplied height. If that div is `#zaq-widget`, the iframe ID is `#zaq-widget-frame`; otherwise it is `#zaq-widget`. `stylesheet-url` is a parent-supplied HTTP(S) CSS URL, handled by the validated postMessage handshake. Neither stylesheet nor presentation settings belong in JWT identity. See [styling](styling-guideline.md) and the [website guide](integration-guideline.md).
 
-Widget IDs are globally unique.
-HTTP and connected mounts look up the ID afresh. Missing/stopped runtimes render
-“Widget unavailable” without chat hooks and reject browser events. This is an
-HTTP 200 error screen, not a redirect or HTTP 404. Currently runtime changes do not
-revoke already-mounted views; reconnect/remount checks again. ZAQ integration must
-also revoke connected-session access, as required by the adapter contract. The resolved display name
-supplies the document title and conversation header.
+## Authentication state and deployment
 
-Incomplete or malformed paths under the mounted widget prefix (such as `/widget`
-or `/widget/support/extra`) return a friendly HTTP 404 without debug details or
-chat scripts. Their framing policy remains `frame-ancestors 'none'`. Embedding
-pages should show their own unavailable message when a frame cannot load or
-does not announce readiness; browsers do not display denied iframe content.
+Set `config :web_widget, :authentication` with a seven-day `token_ttl_seconds` (or another value longer than renewal lead), five-second `first_binding_window_seconds`, five-minute `refresh_lead_seconds`, 30-second `control_proof_ttl_seconds`, and explicit `replica_nodes`. Each configured node must agree on membership. The package uses replicated majority-protected Mnesia RAM tables for page bindings, control idempotency, user revocation cutoffs, and reset metadata. A minority fails closed. A restart rejoins surviving state; complete RAM loss establishes a new cutoff only at quorum. No host SQL migration is needed. Tokens issued in the reset/cutoff second may need retry in the next second.
 
-## Shared callback and server session (LiveView migration pending)
+The initial JWT is bound to the signed Phoenix `socket.id` before conversation initialization. Subsequent checks gate dispatch and response application. In-place renewal preserves the same sender, widget, page, subscription, active stream, draft, and settings. A normal LiveView reconnect uses the same bound token. A full iframe reload needs a new token. The parent client fetches fresh tokens and schedules renewal from server metadata. On store unavailability it waits for authority to recover; backend disconnect is terminal for that iframe.
 
-Verify parent identity server-side before constructing Context, subscribing,
-loading history or submitting a question. A browser `user_id` and allowed origin
-are insufficient. Verification/key provisioning belongs to the adapter/host,
-not a `widget.authenticate` command in ZAQ's shared protocol.
+`web_widget_api("/widget-api")` mounts `POST /widget-api/:widget_id/disconnect`. The backend sends JSON `{"user_id":"..."}` and `Authorization: Bearer <control JWT>`. The JWT has strict `iss`, `aud: identity_audience <> ":control"`, `op: "disconnect"`, numeric `widget_id`, `user_id`, integer `iat`/`exp`, and random `jti`; validity is at most 30 seconds. The request nonce is idempotent in Mnesia. The cutoff commits before a scoped PubSub broadcast; matching LiveViews unsubscribe, notify their parent, display the refresh message, and close transport. A browser JWT cannot authorize this operation. See [authenticated chat](authenticated-chat.md) for issuance examples.
 
-Construct shared payloads and trusted Context/Delivery through the supplied hooks.
-Invoke the config-bound MFA with its configured arguments first:
-
-```elixir
-{module, function, args} = hooks.sink_mfa
-apply(module, function, args ++ [payload, [context: verified_context]])
-```
-
-Commands return a semantic Response directly, async questions return
-`{:ok, Response}` acceptance, and sync questions return one terminal Response.
-Handle pre-acceptance `{:error, reason}` and semantic error responses explicitly.
-Do not use the current mock callback's event-first argument order or `:ok` receipt.
-
-Fresh init means readiness with no conversation creation. Subscribe to a private,
-server-generated session destination on `Zaq.PubSub` before submitting the first
-question; include it in trusted Delivery. Consume
-`{:web_response, adapter_event_name, response}` and encode the public `response.*`
-UI events once. Bind the first accepted conversation ID from the correlated receipt.
-Do not route ZAQ replies through the old `Adapter.send_event/1` conversation topic.
-
-Preserve request/message correlation, full-text streaming replacement and safe
-failure/timeout handling. Reverify and authorize resume, then restore canonical
-history without reseeding parent context or automatically retrying questions.
-See the [contract](adapter-contract.md) for the complete lifecycle.
+Exact allowed HTTP(S) parent origins determine the CSP `frame-ancestors` policy and parent postMessage acceptance. Missing or empty origins deny embedding, including same-origin. Missing/stopped runtimes render an unavailable view. Connector replacement invalidates previous runtime sessions; new mounts resolve the current runtime.
 
 ## Build and release assets
 
@@ -269,64 +93,6 @@ embed script, readiness, settings and resizing. The
 [signed bootstrap guide](authenticated-chat.md) covers backend proof issuance
 and the configuration needed before real ZAQ use.
 
-## Baseline and acceptance
+## Verification
 
-From the sibling ZAQ root, the existing host baseline is:
-
-```sh
-mix test test/zaq/channels/web/widget_conformance_test.exs
-```
-
-Milestone 0 ran it successfully: 2 tests, 0 failures. This fixture exercises ZAQ's
-shared protocol and deterministic LLM HTTP boundary; it does not load the real
-package endpoint or prove parent identity/session security. The wiring plan adds
-real-package smoke coverage followed by authenticated iframe acceptance. The
-current widget Playwright suite uses mock hosts and cannot replace those checks.
-
-The package also provides an optional constructor-compatibility smoke. From this
-repository root, with the pinned sibling ZAQ checkout available:
-
-```sh
-MIX_ENV=test mix run --no-start test/support/integration/shared_protocol_smoke.exs ../zaq
-```
-
-It loads the actual shared constructor modules and stylesheet validator from that checkout into an
-isolated package VM. It starts the real package runtime through the builder,
-verifies a test session, constructs readiness/question/Delivery/Context values and
-checks a fixture receipt and PubSub terminal. It also checks real constructor
-rejection of malformed input. It uses a test-only verifier and sink, starts no ZAQ
-application or database, and does not modify ZAQ or add a reverse dependency.
-This verifies package/constructor compatibility, not host routing, persistence,
-real agent execution or iframe acceptance.
-
-
-### Configuration-only host runtime check
-
-The local ZAQ checkout is configured with the path dependency, package builder,
-`Zaq.PubSub` and `{WebWidget.Integration.UnconfiguredIdentity, :verify, []}`.
-That package-owned verifier rejects every proof while allowing runtime startup;
-replace it with a real verifier before chat use. No ZAQ modules or tests were
-changed. Restart a running ZAQ instance before checking newly installed runtimes.
-
-From ZAQ, run the package-owned lifecycle smoke:
-
-```sh
-MIX_ENV=test mix run ../web_widget/test/support/integration/host_runtime_smoke.exs
-```
-
-It verifies enable/change/disable/re-enable and exact settings/hooks delivery
-using synthetic configs through the existing CommunicationBridge lifecycle.
-It does not write saved channel records or start a second listener/endpoint.
-The host owns one runtime state child; listener specs are empty by design.
-The smoke passes against the updated BO contract (1 test, 0 failures).
-A separate rollback-only BO smoke uses the actual package builder:
-
-```sh
-MIX_ENV=test mix run ../web_widget/test/support/integration/host_bo_smoke.exs
-```
-
-It verifies create/key generation/agent routing/enable/snippet/settings restart/
-rotation/disable/re-enable. Signed proof and shared-response LiveView wiring
-are now implemented in the package; live agent acceptance remains separate. See the wiring plan for the upstream baseline test runner:
-upstream tests expecting an absent adapter must run separately from this installed
-package smoke.
+Run `mix assets.build`, `mix test`, and `mix precommit` in this repository. Run Chromium Playwright tests in `assets/` with the installed browser. The package also provides `test/support/integration/shared_protocol_smoke.exs` for the pinned sibling ZAQ constructor contract and host mounted asset smoke scripts under `test/support/integration/`. These checks do not call a live agent/model; a final deployment smoke should exercise its real token endpoint, first question, authorized resume, renewal, and backend disconnect.

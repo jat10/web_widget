@@ -9,8 +9,9 @@ ZAQ's [installation handoff](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/do
 and published constructors own the host protocol. This document owns the widget's
 integration decisions and presentation mapping, not a second shared schema.
 
-The package implements the milestone 2 authenticated chat path. The authentication
-and cluster decisions below are the target for issue #14; they are not yet deployed.
+The package implements the milestone 2 authenticated chat path and the issue #14
+authentication and cluster decisions below. Host deployment still requires the
+matching token endpoint, router macro, and Mnesia membership configuration.
 The historical [implemented delivery boundary](#implemented-delivery-boundary)
 records earlier migration evidence. The [wiring plan](exec-plans/wiring-widget.md)
 tracks its original acceptance work.
@@ -222,7 +223,8 @@ operation is `POST /widget-api/:widget_id/disconnect`. A backend proof is an
 HS256 JWT in the `Authorization: Bearer` header, signed with that widget
 connector's configured key. It has a strict claim set: `iss`, control-only
 `aud`, `op: "disconnect"`, `widget_id`, `user_id`, integer `iat` and `exp`, and
-random `jti`. The control audience is distinct from the browser JWT audience;
+random `jti`. The control audience is `identity_audience <> ":control"`,
+distinct from the browser JWT audience;
 validity is at most 30 seconds by default. The path widget ID and JSON body
 user ID must match the signed claims. Runtime connector lookup supplies the key
 and issuer for that scope. Other operations, unknown claims and ordinary browser

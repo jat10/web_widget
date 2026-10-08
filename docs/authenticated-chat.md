@@ -1,37 +1,8 @@
-# Authenticated ZAQ chat smoke
+# Authenticated ZAQ chat smoke and operations
 
-## Response diagnostics
+## Host setup
 
-After compiling/restarting ZAQ with the current path dependency, enable diagnostic
-logs in its IEx session:
-
-```elixir
-Application.put_env(:web_widget, :response_diagnostics, true)
-:logger.update_formatter_config(:default, :truncate, :infinity)
-```
-
-Send a new message or reload a saved conversation. Look for `[web_widget.response]`
-in ZAQ's server logs. Entries contain the complete received response and payload,
-including nested fields, together with whether a live event was applied or ignored.
-Inspection has no collection/string limits; the Logger setting above also removes
-its message-size truncation. Full responses may include private content, so use
-this only while debugging. No authentication/session object is added to the log.
-Use `:summary` instead of `true` for field-presence/count diagnostics without
-payload values. Disable with `false`, and restore your previous Logger truncation
-setting when finished (Elixir's default is `8192`).
-
-The current ZAQ widget stream reduces tool status to generic `activity/running`
-steps; its final widget payload and canonical history omit tool traces. Thus BO
-can show a persisted tool call while the widget receives no explicit tool event
-or result. The package's shared response adapter currently maps only generic
-activity steps. Displaying real tool calls requires an agreed public tool-event
-contract from ZAQ and corresponding adapter support; generic activity must not
-be guessed to be a tool call.
-
-## Setup
-
-Keep the existing builder and router/static mount. Opt in to connector-key
-verification in ZAQ configuration; no ZAQ source implementation is needed:
+Mount `web_widget("/widget")` in the host browser pipeline and `web_widget_api("/widget-api")` in a separate backend API scope. Serve the installed assets before the router and expose the existing LiveView socket at `/live`. Configure connector-key verification, issuer, audience, host PubSub, and explicit Mnesia replica membership. See [host integration](host-integration.md) for the complete mount.
 
 ```elixir
 config :web_widget, :integration,
@@ -39,184 +10,55 @@ config :web_widget, :integration,
   identity_verifier: :connector_key,
   identity_issuer: "test-widget",
   identity_audience: "zaq-web-widget"
+
+config :web_widget, :authentication,
+  token_ttl_seconds: 604_800,
+  first_binding_window_seconds: 5,
+  refresh_lead_seconds: 300,
+  control_proof_ttl_seconds: 30,
+  replica_nodes: [:"node1@host", :"node2@host", :"node3@host"]
 ```
 
-Keep Phoenix parameter filtering for `token` and `secret` enabled (ZAQ already
-configures these) so proof values do not enter request logs.
+Use your real node names and keep the same membership on every node. The package stores JWT page bindings, user revocation cutoffs, control request results, and reset metadata in replicated Mnesia `ram_copies` with majority reads/writes. It requires a configured quorum to create or recover the tables. A minority fails closed. A node that restarts rejoins surviving RAM state; complete RAM loss establishes a reset cutoff at quorum. Tokens issued at or before that cutoff cannot bind; with integer-second timestamps, issue a new token in a later second. No host SQL migration is needed. The token lifetime must exceed the renewal lead.
 
-Run `mix deps.get` in ZAQ to fetch the new JOSE dependency, then restart ZAQ
-after changing configuration and enable the connector in BO. The
-builder consumes its resolved `config.token` privately. Missing/placeholder keys
-fail configuration validation. Keep the generated key in the embedding website's
-backend secret store. Never include it in HTML, the installation script or `init`.
+The resolved connector `config.token` is read privately by the runtime builder. Store its copy only on the embedding website's backend. Keep Phoenix filtering for `token` and `secret` enabled. Install the package's JOSE dependency through normal host dependency setup. Do not put the connector key in HTML, browser JavaScript, the token endpoint response, or the installation script.
 
-On that authenticated backend, derive the sender from the logged-in session and
-mint a proof with the same issuer/audience and the numeric BO widget ID:
+## Identity and parent context
+
+The parent backend signs a compact HS256 JWT with protected header exactly `{"alg":"HS256","typ":"JWT"}`. Required claims are numeric positive `widget_id`, authenticated `user_id`, matching `iss` and `aud`, integer `iat` and `exp`, and random `jti` (16–255 characters). Optional integer `nbf` is enforced. The raw UTF-8 connector key is the HMAC secret; do not Base64-decode it. Unknown claims and old Phoenix.Token proofs fail closed. The default maximum JWT lifetime is seven days.
 
 ```elixir
 {:ok, identity_token} = WebWidget.Integration.SignedIdentity.sign(
-  connector_key, 12,
-  %{
-    user_id: authenticated_external_user_id,
-    conversation_id: requested_conversation_id, # nil for a new conversation
-    prompt_context: "Current page: /menu" # or nil
-  },
-  issuer: "test-widget", audience: "zaq-web-widget", ttl: 300
+  connector_key, 12, %{user_id: authenticated_external_user_id},
+  issuer: "test-widget", audience: "zaq-web-widget"
 )
 ```
 
-Tokens now use standard **JWT with HS256 (HMAC-SHA256)**, verified with
-[JOSE's strict algorithm allowlist](https://hexdocs.pm/jose/JOSE.JWS.html#verify_strict/3).
-There is no salt or Phoenix-specific encoding. Use the exact authentication key
-copied from ZAQ BO as UTF-8 secret bytes; **do not Base64-decode it**. Any language
-can issue this JWT using its JWT library. Existing Phoenix.Token proofs are rejected.
+Expose a same-origin authenticated `GET /api/widget-token` on the embedding website. Return `{"identity_token":"<JWT>"}` and `Cache-Control: no-store`. The installation script can fetch it through `data-token-url="/api/widget-token"`. It puts the first token in the iframe URL fragment; the iframe removes the fragment before LiveView connects. The public parent API is `zaq.widget.connect()`. `zaq.widget.init({identity_token})` remains a deprecated direct-token alias; unsigned `user_id` works only in standalone mock fixtures.
 
-The required JWT header is `{"alg":"HS256","typ":"JWT"}`. Only those header
-fields are supported. Required payload fields are:
+Conversation ID and prompt context are **not JWT claims**. Once `zaq:ready` fires, the parent may call `zaq.widget.updateContext({conversation_id})` to ask ZAQ to authorize and load an existing conversation, or `zaq.widget.updateContext({prompt_context})` to retain validated plain text for the first new question. Foreign, deleted, and unknown IDs fail without creating a replacement. Parent context cannot change identity, widget scope, routing, or authentication. Clear saved IDs on logout or account change. The first accepted question creates a conversation and emits `zaq:conversation` with its ID; opening the widget alone creates none.
 
-| Claim | Value |
-| --- | --- |
-| `widget_id` | Numeric positive connector ID, e.g. `12` (not `"12"`). |
-| `user_id` | Nonblank authenticated external user ID, at most 255 bytes. |
-| `conversation_id` | Existing conversation ID or JSON `null`. |
-| `prompt_context` | String of at most 100,000 UTF-8 bytes or JSON `null`. |
-| `iss` | Exact configured `identity_issuer`. |
-| `aud` | Exact configured `identity_audience` string. |
-| `iat` | Issued-at time, integer Unix seconds. |
-| `exp` | Expiration time, integer Unix seconds; after `iat` and at most 300 seconds later. |
-| `jti` | Fresh random token ID, e.g. UUID v4; 16–255 characters. |
+The host receives the selected conversation ID on message and history requests and authorizes the verified sender. A resumed or later question does not reseed prompt context. A request whose result is unknown remains blocked until explicit authorized history recovery; it is never resent automatically.
 
-Optional `nbf` must be integer Unix seconds and no later than the current time.
-Future `iat`, expired tokens, unknown claims (including settings), and other
-algorithms are rejected. Clocks must be synchronized; no clock-skew allowance is
-applied. Signing protects integrity, not confidentiality: do not put secrets in
-prompt context.
+## Renewal and disconnect
 
-### Website backend example: Node.js
+The server returns `expires_at`, `refresh_at`, and `server_time`. The parent client schedules a new token five minutes before expiry by default, deduplicates requests, retries transient failures, and refreshes the bound session in place. Its subscription, selected conversation, active response, draft, and settings remain. A normal LiveView reconnect reuses the same bound JWT. A full iframe page load needs a new token because first binding is limited to five seconds and one page. At expiry, sending and response application pause until fresh authorization succeeds. A five-minute message submission timeout is a separate limit.
 
-Store the BO key in your **backend** environment as `ZAQ_WIDGET_SECRET`.
-Install [jose](https://github.com/panva/jose) in that backend with `npm install jose`.
-The existing authentication/CSRF middleware and input validation are supplied by
-your website; do not expose a signing endpoint that accepts arbitrary user IDs.
+The backend control endpoint is `POST /widget-api/:widget_id/disconnect`. The parent backend signs a distinct HS256 JWT in the `Authorization: Bearer` header. Its strict claims are `iss`, `aud: identity_audience <> ":control"`, `op: "disconnect"`, numeric `widget_id`, `user_id`, integer `iat` and `exp`, and random `jti`; maximum lifetime is 30 seconds. The JSON body contains exactly `{"user_id":"..."}`. The path and body must match the proof. A browser identity JWT cannot authorize this endpoint.
 
-```javascript
-import { SignJWT } from "jose";
-import { randomUUID } from "node:crypto";
-
-const secret = process.env.ZAQ_WIDGET_SECRET;
-if (!secret) throw new Error("Missing ZAQ_WIDGET_SECRET");
-const key = new TextEncoder().encode(secret);
-
-// Call after authenticating the visitor and validating resume/context inputs.
-async function issueWidgetToken(authenticatedUserId, conversationId, promptContext) {
-  const now = Math.floor(Date.now() / 1000);
-  return new SignJWT({
-    widget_id: 12,
-    user_id: authenticatedUserId,
-    conversation_id: conversationId ?? null,
-    prompt_context: promptContext ?? null
-  })
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
-    .setIssuer("test-widget")
-    .setAudience("zaq-web-widget")
-    .setIssuedAt(now)
-    .setExpirationTime(now + 300)
-    .setJti(randomUUID())
-    .sign(key);
-}
-
-// Inside POST /api/widget-identity, after your session/CSRF checks:
-// const token = await issueWidgetToken(req.user.id, validatedConversationId, validatedContext);
-// res.set("Cache-Control", "no-store").json({ identity_token: token });
+```elixir
+{:ok, proof} = WebWidget.Integration.ControlProof.sign(
+  connector_key, 12, authenticated_external_user_id,
+  issuer: "test-widget", audience: "zaq-web-widget:control"
+)
+# POST /widget-api/12/disconnect with Authorization: Bearer <proof>
+# and JSON {"user_id":"<authenticated_external_user_id>"}
 ```
 
-Python, PHP, Go and other backends should sign the same JSON claims with HS256
-using the same raw secret. No Elixir service or signer is required. The Elixir
-helper above is optional convenience for Phoenix backends.
+The cutoff is committed transactionally before a scoped PubSub broadcast. Retrying with the **same proof** returns the same cutoff; use a new proof for a new operation. Matching sessions and subscriptions are invalidated. The iframe displays “Refresh the page to reconnect.”, emits `zaq:authentication-required` with `reason: "backend_revoked"`, and closes its LiveView transport. The parent stops token renewal for that iframe. A new token issued in the cutoff second may need to be issued again in the next second.
 
-### Website frontend
+## Smoke checks
 
-The frontend calls its own backend endpoint using its existing login session.
-That endpoint returns JSON containing the signed JWT, not the connector key.
-The frontend passes the JWT to the iframe via `init`; the iframe forwards it
-through LiveView to the server-side widget verifier inside ZAQ.
+Check a fresh mount, first question, live response, saved conversation resume, renewal during streaming, expiry recovery, and backend disconnect. Confirm other users and widget IDs remain active after a targeted disconnect. Browser coverage lives in `assets/tests/auth-bootstrap.spec.ts` and `assets/tests/shared-widget.spec.ts`; the integration tests exercise scope, proof rejection, replay, and cutoff races. The constructor smoke loads the sibling ZAQ contract without a live agent/model.
 
-After the unchanged BO installation script has loaded, initialize in the browser:
-
-```javascript
-const frame = document.getElementById("zaq-widget");
-let conversationId = sessionStorage.getItem("zaq-conversation-12");
-
-frame.addEventListener("zaq:conversation", ({ detail }) => {
-  conversationId = detail.conversation_id;
-  sessionStorage.setItem("zaq-conversation-12", conversationId);
-});
-
-async function authenticateWidget() {
-  // Implement this endpoint on your website's authenticated backend.
-  const response = await fetch("/api/widget-identity", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversation_id: conversationId }),
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error("Widget identity unavailable");
-  const { identity_token } = await response.json();
-  await zaq.widget.init({ identity_token });
-}
-
-frame.addEventListener("zaq:authentication-required", () => {
-  authenticateWidget().catch(console.error);
-});
-await authenticateWidget();
-```
-
-Clear stored conversation IDs on logout/account changes; ZAQ still authorizes
-every resume. The backend must derive `user_id` from its authenticated session,
-validate requested conversation/context inputs, then sign all three fields.
-The frontend cannot override them in `init`. Signed prompt context remains ordinary
-user input, not privileged instructions. Use your backend's normal CSRF protection
-for its signing endpoint. Old identity-only tokens are rejected; mint fresh tokens
-as JWTs with the signed initialization schema.
-Opening the widget creates no conversation. The first accepted question supplies
-the ID through `zaq:conversation`; full reloads use that ID and a fresh proof.
-Unknown/foreign/deleted conversations fail without creating a replacement.
-
-Proofs expire within five minutes. Nonces are consumed atomically per LiveView
-process; another connection must obtain a fresh proof. The replay cache is
-node-local and volatile, while surviving connector replacement. Use this built-in
-verifier for the single-node smoke; a clustered/durable replay policy requires a
-custom verifier. Runtime replacement/rotation and expiry revoke connected sessions
-and subscriptions. Renewal cannot change an iframe's verified sender.
-
-On token expiry, the existing chat and unsent draft remain visible, with sending
-disabled, while the parent requests a new token. A successful init restores
-authorized history and enables sending without remounting the composer. Failed
-renewal leaves sending blocked; connector revocation/replacement still clears the
-view. Previously expiry cleared `parent_context` and messages, removing the React
-root before token issuance completed and causing a visible blink. Browser coverage
-now verifies composer DOM identity and draft preservation across real expiry and
-renewal using a short-lived test token.
-
-Resume loads the first 50 canonical messages and preserves their transcript
-positions separately. Pagination UI and longer-transcript acceptance are outside
-this first smoke. Timeouts are unknown outcomes: the widget blocks further sends
-until explicit reinitialization/history recovery and never automatically resends.
-
-`init` accepts only `{identity_token}`. Its signed application fields are exactly
-`user_id`, `conversation_id` and `prompt_context`; the signing helper fills omitted
-optional fields with nil. Unknown claims and unsigned initialization fields fail
-closed. Any future init field must be explicitly added to the signed schema.
-Settings and per-instance stylesheet params are not initialization fields.
-Apply presentation separately:
-
-```javascript
-await zaq.widget.updateSettings({ theme: "dark", language: "fr" });
-```
-
-The shared LiveView fixture covers authentication, lazy creation, queued streaming,
-correlation, resume, expiry, revocation and failure. The browser test
-`assets/tests/shared-widget.spec.ts` exercises the generated installation script
-and signed bootstrap over the real LiveView transport. The constructor smoke loads
-the actual sibling ZAQ contract. These checks do not call a live agent/model;
-configure your agent and backend identity endpoint for that acceptance test.
+For response diagnostics, set `Application.put_env(:web_widget, :response_diagnostics, :summary)` in ZAQ's IEx session. Logs show field presence and outcome without payload values. `true` logs complete responses and may include private content; use it only briefly while debugging, then restore `false`. ZAQ currently reduces tool status to generic activity steps; the widget cannot infer real tool calls without an agreed public tool event contract.
