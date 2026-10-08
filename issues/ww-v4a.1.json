@@ -9,9 +9,15 @@
   "id": "ww-v4a.1",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Contract updated: seven-day configurable HS256 JWT with five-second first binding, verified LiveView socket.id, quorum-protected Mnesia RAM state/reset cutoff, in-place renewal, same-origin GET token endpoint, distinct backend disconnect proof, and context separation. This is target behavior; implementation follows in child issues.",
+      "timestamp": "2026-10-08T08:34:07Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Finalize authentication, configuration, and migration contract",
   "type": "task",
-  "updated_at": "2026-10-08T08:31:19Z"
+  "updated_at": "2026-10-08T08:34:07Z"
 }
