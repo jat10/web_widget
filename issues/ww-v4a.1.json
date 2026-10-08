@@ -4,6 +4,7 @@
   "blocks": [
     "ww-v4a.2"
   ],
+  "closed_at": "2026-10-08T08:34:35Z",
   "created": "2026-10-08T08:27:26Z",
   "description": "Update docs/adapter-contract.md before implementation. Decide lightweight HS256 JWT claims and seven-day default validity, five-second first binding, five-minute renewal lead, verified LiveView page identity, Mnesia majority/membership/reset rules, distinct browser and backend proofs, SDK connect and lifecycle events, token endpoint, and context migration. Reconcile existing signed context and process-local replay contract; define backward compatibility and host migration.",
   "id": "ww-v4a.1",
@@ -16,8 +17,8 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Finalize authentication, configuration, and migration contract",
   "type": "task",
-  "updated_at": "2026-10-08T08:34:07Z"
+  "updated_at": "2026-10-08T08:34:35Z"
 }
