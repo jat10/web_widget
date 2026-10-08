@@ -1,7 +1,7 @@
 defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
   use WebWidgetWeb.ConnCase
   import Phoenix.LiveViewTest
-  alias WebWidget.Integration.{RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
   alias WebWidget.TestIntegration.ChatHost
 
   setup %{conn: conn} do
@@ -29,8 +29,25 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       )
 
     start_supervised!(spec)
+    reset = await_reset()
+    delay = max(0, (reset + 1) * 1_000 - System.system_time(:millisecond))
+    if delay > 0, do: Process.sleep(delay)
     {:ok, view, _} = live(conn, "/widget/#{id}")
-    %{view: view, key: key, id: id, spec: spec}
+    assert_push_event(view, "widget.authentication.required", %{reason: "initial_authentication"})
+    %{view: view, key: key, id: id, spec: spec, conn: conn}
+  end
+
+  test "connected mount authenticates before shared host initialization", ctx do
+    proof = token(ctx)
+    conn = put_connect_params(ctx.conn, %{"identity_token" => proof})
+    {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
+
+    assert_receive {:shared_request, %{type: :conversation_init}, %{sender_id: "visitor"}, _}
+    assert has_element?(view, "#web-widget")
+
+    {:ok, replayed, _} = live(conn, "/widget/#{ctx.id}")
+    refute has_element?(replayed, "#web-widget")
+    refute_receive {:shared_request, %{type: :conversation_init}, _, _}
   end
 
   test "verified init is lazy; queued response precedes receipt without losing the answer", ctx do
@@ -269,6 +286,20 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     if expected.ok do
       assert has_element?(view, "#web-widget")
+    end
+  end
+
+  defp await_reset(remaining \\ 50)
+  defp await_reset(0), do: flunk("binding store did not become available")
+
+  defp await_reset(remaining) do
+    case BindingStore.reset_cutoff_value() do
+      reset when is_integer(reset) ->
+        reset
+
+      _ ->
+        Process.sleep(100)
+        await_reset(remaining - 1)
     end
   end
 end

@@ -1,6 +1,6 @@
 defmodule WebWidget.Integration.SignedIdentityTest do
   use ExUnit.Case, async: true
-  alias WebWidget.Integration.{RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -18,6 +18,9 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     config = Map.put(config, :token, key)
     {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
     start_supervised!(spec)
+    reset = await_reset()
+    delay = max(0, (reset + 1) * 1_000 - System.system_time(:millisecond))
+    if delay > 0, do: Process.sleep(delay)
 
     %{
       config: config,
@@ -25,23 +28,24 @@ defmodule WebWidget.Integration.SignedIdentityTest do
       options: options,
       spec: spec,
       key: key,
-      id: to_string(config.id)
+      id: to_string(config.id),
+      page_id: Base.url_encode64(:crypto.strong_rand_bytes(16), padding: false)
     }
   end
 
   test "signed proofs bind sender, widget, issuer, audience and expiry", ctx do
     {:ok, proof} = sign(ctx)
-    assert {:ok, session} = Runtime.authenticate(ctx.id, proof)
+    assert {:ok, session} = authenticate(ctx, proof)
     assert session.sender_id == "visitor"
-    assert {:ok, _} = Runtime.authenticate(ctx.id, proof)
+    assert {:ok, _} = authenticate(ctx, proof)
 
     for bad <- [nil, "visitor", proof <> "x"] do
-      assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, bad)
+      assert {:error, :unauthorized} = authenticate(ctx, bad)
     end
 
     for opts <- [[issuer: "wrong"], [audience: "wrong"]] do
       {:ok, bad} = sign(ctx, opts)
-      assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, bad)
+      assert {:error, :unauthorized} = authenticate(ctx, bad)
     end
 
     {:ok, wrong_widget} =
@@ -50,19 +54,20 @@ defmodule WebWidget.Integration.SignedIdentityTest do
         audience: "widget"
       )
 
-    assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, wrong_widget)
+    assert {:error, :unauthorized} = authenticate(ctx, wrong_widget)
 
     expired = jwt(ctx.key, Map.put(claims(ctx), "exp", System.system_time(:second) - 1))
 
-    assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, expired)
+    assert {:error, :unauthorized} = authenticate(ctx, expired)
   end
 
-  test "replay is rejected in another process and after runtime replacement", ctx do
+  test "same-page reconnect survives process replacement but not runtime ownership", ctx do
     {:ok, proof} = sign(ctx)
-    assert {:ok, session} = Runtime.authenticate(ctx.id, proof)
+    assert {:ok, session} = authenticate(ctx, proof)
 
-    assert Task.async(fn -> Runtime.authenticate(ctx.id, proof) end) |> Task.await() ==
-             {:error, :unauthorized}
+    assert {:ok, reconnected} = Task.async(fn -> authenticate(ctx, proof) end) |> Task.await()
+    refute Runtime.authorized?(reconnected)
+    assert {:error, :unauthorized} = authenticate(ctx, proof, "other-page")
 
     assert {:ok, ref} = Runtime.monitor(session)
     stop_supervised!(ctx.spec.id)
@@ -70,8 +75,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     start_supervised!(ctx.spec)
     refute Runtime.authorized?(session)
 
-    assert Task.async(fn -> Runtime.authenticate(ctx.id, proof) end) |> Task.await() ==
-             {:error, :unauthorized}
+    assert {:ok, _} = authenticate(ctx, proof)
   end
 
   test "rotation rejects old proofs; keys never appear in public configuration", ctx do
@@ -80,7 +84,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     config = %{ctx.config | token: Base.url_encode64(:crypto.strong_rand_bytes(32))}
     {:ok, {spec, []}} = RuntimeBuilder.build(config, ctx.hooks, ctx.options)
     start_supervised!(spec)
-    assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, proof)
+    assert {:error, :unauthorized} = authenticate(ctx, proof)
     {:ok, public} = Runtime.fetch_widget(ctx.id)
     refute inspect(public) =~ ctx.key
 
@@ -109,7 +113,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     {:ok, proof} =
       SignedIdentity.sign(ctx.key, ctx.config.id, init, issuer: "parent", audience: "widget")
 
-    assert {:ok, %{init: ^init}} = Runtime.authenticate(ctx.id, proof)
+    assert {:ok, %{init: ^init}} = authenticate(ctx, proof)
     [_, payload, _] = String.split(proof, ".")
     claims = payload |> Base.url_decode64!(padding: false) |> Jason.decode!()
 
@@ -120,7 +124,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           Map.delete(claims, "prompt_context")
         ] do
       forged_schema = jwt(ctx.key, invalid)
-      assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, forged_schema)
+      assert {:error, :unauthorized} = authenticate(ctx, forged_schema)
     end
 
     for invalid <- [
@@ -139,7 +143,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     [part | rest] = String.split(proof, ".")
 
     assert {:error, :unauthorized} =
-             Runtime.authenticate(ctx.id, Enum.join([part <> "x" | rest], "."))
+             authenticate(ctx, Enum.join([part <> "x" | rest], "."))
   end
 
   defp claims(ctx) do
@@ -171,7 +175,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
       )
 
     assert {:ok, %{init: %{conversation_id: "chat-123", prompt_context: "Menu — مرحبا"}}} =
-             Runtime.authenticate(ctx.id, proof)
+             authenticate(ctx, proof)
 
     {:ok, proof} = sign(ctx)
 
@@ -198,29 +202,29 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           %{"alg" => "HS256", "typ" => "other"},
           %{"alg" => "HS256", "typ" => "JWT", "kid" => "remote-key"}
         ] do
-      assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, jwt(ctx.key, claims, header))
+      assert {:error, :unauthorized} = authenticate(ctx, jwt(ctx.key, claims, header))
     end
 
     unsigned =
       Base.url_encode64(Jason.encode!(%{alg: "none", typ: "JWT"}), padding: false) <>
         "." <> Base.url_encode64(Jason.encode!(claims), padding: false) <> "."
 
-    assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, unsigned)
+    assert {:error, :unauthorized} = authenticate(ctx, unsigned)
 
     assert {:error, :unauthorized} =
-             Runtime.authenticate(
-               ctx.id,
+             authenticate(
+               ctx,
                jwt(Base.url_encode64(:crypto.strong_rand_bytes(32)), claims)
              )
 
     assert {:error, :unauthorized} =
-             Runtime.authenticate(
-               ctx.id,
+             authenticate(
+               ctx,
                Phoenix.Token.sign(ctx.key, "web-widget-init-v2", claims)
              )
 
     for invalid <- [
-          Map.put(claims, "exp", claims["iat"] + 301),
+          Map.put(claims, "exp", claims["iat"] + 604_801),
           Map.put(claims, "iat", claims["iat"] + 60),
           Map.put(claims, "nbf", claims["iat"] + 60),
           Map.put(claims, "iat", "now"),
@@ -229,14 +233,31 @@ defmodule WebWidget.Integration.SignedIdentityTest do
           Map.delete(claims, "iat"),
           Map.put(claims, "widget_id", to_string(ctx.config.id))
         ] do
-      assert {:error, :unauthorized} = Runtime.authenticate(ctx.id, jwt(ctx.key, invalid))
+      assert {:error, :unauthorized} = authenticate(ctx, jwt(ctx.key, invalid))
     end
 
     assert {:ok, _} =
-             Runtime.authenticate(ctx.id, jwt(ctx.key, Map.put(claims, "nbf", claims["iat"])))
+             authenticate(ctx, jwt(ctx.key, Map.put(claims, "nbf", claims["iat"])))
   end
 
   defp jwt(key, claims, header \\ %{"alg" => "HS256", "typ" => "JWT"}) do
     key |> JOSE.JWK.from_oct() |> JOSE.JWT.sign(header, claims) |> JOSE.JWS.compact() |> elem(1)
+  end
+
+  defp authenticate(ctx, proof, page_id \\ nil),
+    do: Runtime.authenticate(ctx.id, proof, page_id || ctx.page_id)
+
+  defp await_reset(remaining \\ 50)
+  defp await_reset(0), do: flunk("binding store did not become available")
+
+  defp await_reset(remaining) do
+    case BindingStore.reset_cutoff_value() do
+      reset when is_integer(reset) ->
+        reset
+
+      _ ->
+        Process.sleep(100)
+        await_reset(remaining - 1)
+    end
   end
 end

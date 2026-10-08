@@ -57,9 +57,9 @@ defmodule WebWidget.Integration.Protocol do
   def new(_, _), do: {:error, :invalid_integration_config}
 
   @doc false
-  def authenticate(integration, proof, runtime_ref) do
+  def authenticate(integration, proof, runtime_ref, page_id \\ nil) do
     id = integration.hooks.widget_id
-    scope = %{widget_id: Integer.to_string(id), channel_config_id: id}
+    scope = %{widget_id: Integer.to_string(id), channel_config_id: id, page_id: page_id}
 
     with {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
            invoke(integration.identity_verifier, [proof, scope]),
@@ -75,6 +75,8 @@ defmodule WebWidget.Integration.Protocol do
            sender_id: String.trim(sender),
            expires_at: expiry,
            init: init,
+           binding_claims: Map.get(verified, :binding_claims),
+           page_id: Map.get(verified, :page_id),
            runtime_ref: runtime_ref,
            owner: self(),
            topic:

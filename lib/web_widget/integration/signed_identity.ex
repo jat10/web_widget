@@ -1,6 +1,6 @@
 defmodule WebWidget.Integration.SignedIdentity do
   @moduledoc """
-  Short-lived HS256 JWT parent-backend identity assertions. Never expose the signing key.
+  HS256 JWT parent-backend identity assertions. Never expose the signing key.
 
   Configure `identity_verifier: :connector_key`, `identity_issuer` and
   `identity_audience` in the integration options. Mint a fresh proof for each
@@ -11,20 +11,20 @@ defmodule WebWidget.Integration.SignedIdentity do
   and a random token ID. Use the raw connector key as the HMAC secret, without
   salt or Base64 decoding. Signed tokens provide integrity, not confidentiality.
   """
-  alias WebWidget.Integration.{InitClaims, ReplayGuard}
+  alias WebWidget.Integration.{BindingStore, InitClaims}
 
   @claim_keys ~w(widget_id user_id conversation_id prompt_context iss aud iat exp jti nbf)
-  @max_age 300
+  @default_age 604_800
   @max_proof_bytes 200_000
 
   def sign(key, widget_id, init, opts) do
     now = System.system_time(:second)
-    ttl = Keyword.get(opts, :ttl, @max_age)
+    ttl = Keyword.get(opts, :ttl, configured_max_age())
 
     with {:ok, init} <- InitClaims.normalize(init),
          true <-
            valid_key?(key) and is_integer(widget_id) and widget_id > 0 and
-             is_integer(ttl) and ttl in 1..@max_age and
+             is_integer(ttl) and ttl in 1..configured_max_age() and
              identifier?(opts[:issuer]) and identifier?(opts[:audience]) do
       claims = %{
         "widget_id" => widget_id,
@@ -79,8 +79,25 @@ defmodule WebWidget.Integration.SignedIdentity do
          true <- is_integer(id) and id > 0 and id == scope.channel_config_id,
          true <- valid_times?(issued, expiry, Map.get(claims, "nbf", issued), now),
          true <- identifier?(nonce) and byte_size(nonce) >= 16,
-         :ok <- ReplayGuard.claim({id, nonce}, expiry, self()) do
-      {:ok, %{sender_id: sender, expires_at: expiry, init: init}}
+         true <- identifier?(Map.get(scope, :page_id)),
+         binding = %{
+           issuer: issuer,
+           audience: audience,
+           widget_id: id,
+           user_id: sender,
+           jti: nonce,
+           iat: issued,
+           exp: expiry
+         },
+         :ok <- BindingStore.claim(binding, scope.page_id, now) do
+      {:ok,
+       %{
+         sender_id: sender,
+         expires_at: expiry,
+         init: init,
+         binding_claims: binding,
+         page_id: scope.page_id
+       }}
     else
       _ -> {:error, :unauthorized}
     end
@@ -93,7 +110,13 @@ defmodule WebWidget.Integration.SignedIdentity do
   defp valid_times?(issued, expiry, not_before, now) do
     is_integer(issued) and is_integer(expiry) and is_integer(not_before) and
       issued <= now and not_before <= now and expiry > now and
-      expiry > issued and expiry - issued <= @max_age
+      expiry > issued and expiry - issued <= configured_max_age()
+  end
+
+  defp configured_max_age do
+    :web_widget
+    |> Application.get_env(:authentication, [])
+    |> Keyword.get(:token_ttl_seconds, @default_age)
   end
 
   def valid_key?(key) when is_binary(key),

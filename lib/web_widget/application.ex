@@ -10,8 +10,7 @@ defmodule WebWidget.Application do
     children =
       [
         {Registry, keys: :unique, name: WebWidget.RuntimeRegistry},
-        WebWidget.Integration.BindingStore,
-        WebWidget.Integration.ReplayGuard
+        WebWidget.Integration.BindingStore
       ] ++ web_children()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: WebWidget.Supervisor)

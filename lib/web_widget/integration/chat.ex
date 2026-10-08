@@ -4,8 +4,11 @@ defmodule WebWidget.Integration.Chat do
   alias WebWidget.Conversation.State
   alias WebWidget.Integration.{Diagnostics, Response}
 
-  def open(widget_id, %{"identity_token" => proof} = params) when map_size(params) == 1 do
-    with {:ok, session} <- Runtime.authenticate(widget_id, proof),
+  def open(widget_id, params, page_id \\ nil)
+
+  def open(widget_id, %{"identity_token" => proof} = params, page_id)
+      when map_size(params) == 1 do
+    with {:ok, session} <- Runtime.authenticate(widget_id, proof, page_id),
          {:ok, monitor} <- Runtime.monitor(session) do
       case subscribe_and_initialize(session, session.init.conversation_id, id(), session.init) do
         {:ok, chat} ->
@@ -20,7 +23,7 @@ defmodule WebWidget.Integration.Chat do
     end
   end
 
-  def open(_, _), do: {:error, "Initialization accepts only identity_token."}
+  def open(_, _, _), do: {:error, "Initialization accepts only identity_token."}
 
   defp subscribe_and_initialize(session, requested, request, params) do
     with {:ok, subscription} <- Runtime.subscribe(session) do

@@ -64,11 +64,11 @@ defmodule WebWidget.Runtime do
   end
 
   @doc "Verifies identity through the runtime's configured verifier; never trusts a browser ID."
-  def authenticate(widget_id, proof) do
+  def authenticate(widget_id, proof, page_id \\ nil) do
     with {:ok, %{allowed_domains: [_ | _]}} <- fetch_widget(widget_id),
          {:ok, %{integration: integration, runtime_ref: runtime_ref}} <-
            delivery_config(widget_id),
-         {:ok, session} <- Protocol.authenticate(integration, proof, runtime_ref),
+         {:ok, session} <- Protocol.authenticate(integration, proof, runtime_ref, page_id),
          {:ok, _config} <- session_config(session) do
       {:ok, session}
     else

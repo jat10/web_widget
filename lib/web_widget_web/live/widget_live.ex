@@ -14,7 +14,9 @@ defmodule WebWidgetWeb.WidgetLive do
   def mount(%{"widget_id" => widget_id}, _session, socket) do
     case WebWidget.Runtime.fetch_widget(widget_id) do
       {:ok, %{allowed_domains: [_ | _]} = widget} ->
-        mount_widget(socket, widget)
+        with {:ok, socket} <- mount_widget(socket, widget) do
+          authenticate_on_mount(socket)
+        end
 
       _ ->
         {:ok, assign(socket, unavailable: true, page_title: "Widget unavailable")}
@@ -64,6 +66,34 @@ defmodule WebWidgetWeb.WidgetLive do
          max_length: 2000
        }
      )}
+  end
+
+  defp authenticate_on_mount(socket) do
+    if connected?(socket) and socket.assigns.integrated do
+      proof = get_connect_params(socket)["identity_token"]
+
+      case Chat.open(socket.assigns.widget_id, %{"identity_token" => proof}, socket.id) do
+        {:ok, chat} ->
+          socket =
+            socket
+            |> assign_chat(chat)
+            |> assign(
+              verified_sender: chat.session.sender_id,
+              parent_context: %{user_id: chat.session.sender_id}
+            )
+            |> restore_mode(chat.conversation_id)
+
+          {:ok, socket}
+
+        _ ->
+          {:ok,
+           socket
+           |> assign(authentication_pending: true)
+           |> push_event("widget.authentication.required", %{reason: "initial_authentication"})}
+      end
+    else
+      {:ok, socket}
+    end
   end
 
   @impl true
@@ -205,7 +235,7 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
     with true <- is_nil(socket.assigns.pending_reply),
-         {:ok, chat} <- Chat.open(socket.assigns.widget_id, params) do
+         {:ok, chat} <- Chat.open(socket.assigns.widget_id, params, socket.id) do
       if socket.assigns.verified_sender in [nil, chat.session.sender_id] do
         if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
 
