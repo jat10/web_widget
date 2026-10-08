@@ -10,7 +10,7 @@ defmodule WebWidget.Integration.Protocol do
   alias WebWidget.Integration.{InitClaims, Session}
 
   @enforce_keys [:hooks, :pubsub_server, :identity_verifier]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [control_key: nil, control_issuer: nil, control_audience: nil]
 
   @constructors [message: 1, command: 1, context: 2, delivery: 1, response: 1]
   @events %{
@@ -47,7 +47,10 @@ defmodule WebWidget.Integration.Protocol do
        %__MODULE__{
          hooks: Map.take(hooks, [:widget_id, :sink_mfa | Keyword.keys(@constructors)]),
          pubsub_server: server,
-         identity_verifier: verifier
+         identity_verifier: verifier,
+         control_key: Keyword.get(opts, :control_key),
+         control_issuer: Keyword.get(opts, :control_issuer),
+         control_audience: Keyword.get(opts, :control_audience)
        }}
     else
       _ -> {:error, :invalid_integration_config}

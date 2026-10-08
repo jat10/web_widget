@@ -155,6 +155,15 @@ export class WidgetContext extends ViewHook {
       this.accepted = false;
       setPublicReady(false);
       postToParent("zaq.widget.authentication.required", { reason: data.reason || "expired" });
+      if (data.reason === "backend_revoked") {
+        const alert = document.createElement("div");
+        alert.id = "widget-backend-revoked";
+        alert.setAttribute("role", "alert");
+        alert.textContent = "Refresh the page to reconnect.";
+        alert.style.cssText = "position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:#fff;color:#111;font:16px system-ui;text-align:center;padding:24px";
+        document.body.append(alert);
+        window.setTimeout(() => (window as any).liveSocket?.disconnect(), 0);
+      }
     });
     registerWidgetHandler(this.receiveContext);
     if (this.accepted) {

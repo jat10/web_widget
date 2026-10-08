@@ -74,6 +74,17 @@ defmodule WebWidget.Integration.BindingStore do
     end
   end
 
+  def revoked?(claims) do
+    with true <- valid_claim?(claims),
+         :ok <- available?() do
+      transaction(fn ->
+        revocation_cutoff(claims.issuer, claims.widget_id, claims.user_id) >= claims.iat
+      end)
+    else
+      _ -> {:error, :unavailable_or_invalid}
+    end
+  end
+
   def revoke_user(issuer, widget_id, user_id, request_id, issued_at, now) do
     with true <-
            valid_identifier?(issuer) and is_integer(widget_id) and widget_id > 0 and

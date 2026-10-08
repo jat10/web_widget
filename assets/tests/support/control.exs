@@ -11,7 +11,16 @@ defmodule WebWidget.E2EControl do
     conn
     |> put_resp_content_type("application/json")
     |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.bootstrap(
-      if(conn.query_params["short"] == "true", do: 3, else: 604_800))))
+      if(conn.query_params["short"] == "true", do: 3, else: 604_800),
+      conn.query_params["user_id"] || "e2e-visitor")))
+  end
+
+  get "/control-proof" do
+    conn = fetch_query_params(conn)
+    {:ok, proof} = WebWidget.Integration.ControlProof.sign(
+      WebWidget.E2ESharedHost.key(), 420, conn.query_params["user_id"],
+      issuer: "e2e-parent", audience: "e2e-widget:control")
+    conn |> put_resp_content_type("application/json") |> send_resp(200, Jason.encode!(%{proof: proof}))
   end
 
   post "/sessions/:id" do

@@ -20,4 +20,8 @@ defmodule WebWidget.TestHost.Router do
     pipe_through :browser
     web_widget("/chat")
   end
+
+  scope "/" do
+    web_widget_api()
+  end
 end

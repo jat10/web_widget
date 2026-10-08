@@ -15,7 +15,7 @@ defmodule WebWidget.Runtime do
   use GenServer
 
   alias WebWidget.Embedding.Origins
-  alias WebWidget.Integration.{Protocol, Session}
+  alias WebWidget.Integration.{BindingStore, ControlProof, Protocol, Session}
 
   @widget_fields [
     :widget_id,
@@ -48,6 +48,72 @@ defmodule WebWidget.Runtime do
     else
       _ -> {:error, :unavailable}
     end
+  end
+
+  @doc "Verifies a backend disconnect proof, commits the cutoff, then notifies matching sessions."
+  def disconnect(widget_id, user_id, proof) when is_binary(widget_id) and is_binary(user_id) do
+    with {id, ""} <- Integer.parse(widget_id),
+         true <- id > 0 and Integer.to_string(id) == widget_id,
+         {:ok, %{integration: %Protocol{} = integration, pubsub_server: pubsub}} <-
+           delivery_config(widget_id),
+         true <- is_binary(integration.control_key),
+         {:ok, %{jti: nonce, iat: issued}} <-
+           ControlProof.verify(
+             integration.control_key,
+             integration.control_issuer,
+             integration.control_audience,
+             proof,
+             id,
+             user_id
+           ),
+         {:ok, cutoff, _created} <-
+           BindingStore.revoke_user(
+             integration.control_issuer,
+             id,
+             user_id,
+             nonce,
+             issued,
+             System.system_time(:second)
+           ),
+         :ok <-
+           Phoenix.PubSub.broadcast(
+             pubsub,
+             revocation_topic(widget_id, user_id),
+             {:widget_backend_revoked, widget_id, user_id, cutoff}
+           ) do
+      {:ok, cutoff}
+    else
+      {:error, :unavailable_or_invalid} -> {:error, :unavailable}
+      {:error, :stale_control_request} -> {:error, :unauthorized}
+      {:error, :unavailable} -> {:error, :unavailable}
+      _ -> {:error, :unauthorized}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
+  def disconnect(_, _, _), do: {:error, :unauthorized}
+
+  def backend_revoked?(%Session{binding_claims: claims}) when is_map(claims),
+    do: BindingStore.revoked?(claims) == true
+
+  def backend_revoked?(_), do: false
+
+  def revocation_topic(widget_id, user_id),
+    do: "web_widget:revocation:" <> widget_id <> ":" <> user_id
+
+  def subscribe_revocation(session) do
+    with {:ok, config} <- session_config(session),
+         topic = revocation_topic(session.widget_id, session.sender_id),
+         :ok <- Phoenix.PubSub.subscribe(config.pubsub_server, topic) do
+      {:ok, {config.pubsub_server, topic}}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
   end
 
   @doc "Invokes a legacy/mock callback; integrated runtimes require dispatch/2 with a session."

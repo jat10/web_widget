@@ -1,0 +1,87 @@
+defmodule WebWidget.Integration.ControlProof do
+  @moduledoc """
+  Short-lived, operation-specific backend proof for widget disconnect.
+  The connector key stays on the parent backend and the widget server.
+  """
+
+  alias WebWidget.Integration.SignedIdentity
+
+  @keys ~w(iss aud op widget_id user_id iat exp jti)
+  @max_bytes 4_096
+
+  def sign(key, widget_id, user_id, opts) do
+    now = System.system_time(:second)
+    ttl = Keyword.get(opts, :ttl, lifetime())
+
+    with true <- SignedIdentity.valid_key?(key),
+         true <- is_integer(widget_id) and widget_id > 0,
+         true <-
+           identifier?(user_id) and identifier?(opts[:issuer]) and
+             identifier?(opts[:audience]),
+         true <- is_integer(ttl) and ttl in 1..lifetime() do
+      claims = %{
+        "iss" => opts[:issuer],
+        "aud" => opts[:audience],
+        "op" => "disconnect",
+        "widget_id" => widget_id,
+        "user_id" => user_id,
+        "iat" => now,
+        "exp" => now + ttl,
+        "jti" => Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+      }
+
+      {_metadata, proof} =
+        key
+        |> JOSE.JWK.from_oct()
+        |> JOSE.JWT.sign(%{"alg" => "HS256", "typ" => "JWT"}, claims)
+        |> JOSE.JWS.compact()
+
+      {:ok, proof}
+    else
+      _ -> {:error, :invalid_control_config}
+    end
+  end
+
+  def verify(key, issuer, audience, proof, widget_id, user_id) when is_binary(proof) do
+    now = System.system_time(:second)
+
+    with true <- SignedIdentity.valid_key?(key) and byte_size(proof) <= @max_bytes,
+         {true, payload, %JOSE.JWS{fields: header, b64: :undefined}} <-
+           JOSE.JWS.verify_strict(JOSE.JWK.from_oct(key), ["HS256"], proof),
+         true <- header == %{"typ" => "JWT"},
+         {:ok, claims} <- Jason.decode(payload),
+         true <- is_map(claims) and Enum.sort(Map.keys(claims)) == Enum.sort(@keys),
+         %{
+           "iss" => ^issuer,
+           "aud" => ^audience,
+           "op" => "disconnect",
+           "widget_id" => ^widget_id,
+           "user_id" => ^user_id,
+           "iat" => issued,
+           "exp" => expiry,
+           "jti" => nonce
+         } <- claims,
+         true <- identifier?(user_id) and identifier?(nonce) and byte_size(nonce) >= 16,
+         true <- is_integer(issued) and is_integer(expiry) and issued <= now and expiry > now,
+         true <- expiry > issued and expiry - issued <= lifetime() do
+      {:ok, %{jti: nonce, iat: issued}}
+    else
+      _ -> {:error, :unauthorized}
+    end
+  rescue
+    _ -> {:error, :unauthorized}
+  end
+
+  def verify(_, _, _, _, _, _), do: {:error, :unauthorized}
+
+  defp identifier?(value),
+    do:
+      is_binary(value) and String.valid?(value) and String.trim(value) == value and
+        byte_size(value) in 1..255
+
+  defp lifetime do
+    :web_widget
+    |> Application.get_env(:authentication, [])
+    |> Keyword.get(:control_proof_ttl_seconds, 30)
+  end
+end

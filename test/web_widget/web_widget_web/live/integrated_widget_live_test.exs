@@ -1,7 +1,7 @@
 defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
   use WebWidgetWeb.ConnCase
   import Phoenix.LiveViewTest
-  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Integration.{BindingStore, ControlProof, RuntimeBuilder, SignedIdentity}
   alias WebWidget.TestIntegration.ChatHost
 
   setup %{conn: conn} do
@@ -308,10 +308,71 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       )
 
     render_event(ctx.view, "widget.context", %{identity_token: wrong}, %{ok: false})
-    refute_receive {:shared_request, %{type: :conversation_init}, %{sender_id: "another-visitor"}, _}
+
+    refute_receive {:shared_request, %{type: :conversation_init}, %{sender_id: "another-visitor"},
+                    _}
+
     init(ctx)
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
     assert_receive {:shared_request, %{content: "instant"}, %{sender_id: "visitor"}, _}
+  end
+
+  test "backend disconnect is scoped, idempotent and terminal for the active widget", ctx do
+    init(ctx)
+    assert_receive {:shared_request, %{type: :conversation_init}, _, _}
+
+    other_conn =
+      put_connect_params(ctx.conn, %{"identity_token" => token(ctx, %{user_id: "other"})})
+
+    {:ok, other, _} = live(other_conn, "/widget/#{ctx.id}")
+    assert_receive {:shared_request, %{type: :conversation_init}, %{sender_id: "other"}, _}
+
+    {:ok, control} =
+      ControlProof.sign(ctx.key, ctx.id, "visitor",
+        issuer: "parent",
+        audience: "widget:control"
+      )
+
+    endpoint = "/widget-api/#{ctx.id}/disconnect"
+
+    request = fn proof, user ->
+      Phoenix.ConnTest.build_conn()
+      |> Plug.Conn.put_req_header("authorization", "Bearer " <> proof)
+      |> post(endpoint, %{user_id: user})
+    end
+
+    assert %{status: 401} = request.(token(ctx), "visitor")
+    assert %{status: 401} = request.(control, "another-visitor")
+
+    assert %{status: 401} =
+             Phoenix.ConnTest.build_conn()
+             |> Plug.Conn.put_req_header("authorization", "Bearer " <> control)
+             |> post("/widget-api/#{ctx.id + 1}/disconnect", %{user_id: "visitor"})
+
+    assert %{status: 200, resp_body: body} = request.(control, "visitor")
+    cutoff = Jason.decode!(body)["cutoff"]
+    assert is_integer(cutoff)
+    assert_push_event(ctx.view, "widget.authentication.required", %{reason: "backend_revoked"})
+    render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+    refute_receive {:shared_request, %{content: "blocked"}, _, _}
+    assert %{status: 200, resp_body: retry_body} = request.(control, "visitor")
+    assert Jason.decode!(retry_body)["cutoff"] == cutoff
+    render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{ok: false})
+    render_event(other, "widget.submit", %{text: "instant"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "instant"}, %{sender_id: "other"}, _}
+  end
+
+  test "a send after cutoff fails closed before the revocation broadcast", ctx do
+    init(ctx)
+    assert_receive {:shared_request, %{type: :conversation_init}, _, _}
+    now = System.system_time(:second)
+
+    assert {:ok, _, true} =
+             BindingStore.revoke_user("parent", ctx.id, "visitor", Ecto.UUID.generate(), now, now)
+
+    render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+    assert_push_event(ctx.view, "widget.authentication.required", %{reason: "backend_revoked"})
+    refute_receive {:shared_request, %{content: "blocked"}, _, _}
   end
 
   defp init(ctx, params \\ %{}) do

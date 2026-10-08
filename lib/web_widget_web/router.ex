@@ -21,6 +21,11 @@ defmodule WebWidgetWeb.Router do
     web_widget("/widget")
   end
 
+  scope "/" do
+    pipe_through :api
+    web_widget_api("/widget-api")
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", WebWidgetWeb do
   #   pipe_through :api

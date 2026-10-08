@@ -35,6 +35,7 @@ defmodule WebWidgetWeb.WidgetLive do
        integrated: Runtime.integrated?(widget.widget_id),
        chat: nil,
        authentication_pending: false,
+       terminal: false,
        verified_sender: nil,
        settings: Settings.defaults(),
        widget_locale: locale,
@@ -247,11 +248,25 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event(
         "widget.auth.renew",
+        _params,
+        %{assigns: %{terminal: true}} = socket
+      ) do
+    {:reply, %{ok: false, reason: "backend_revoked"}, socket}
+  end
+
+  def handle_event(
+        "widget.auth.renew",
         %{"identity_token" => proof} = params,
         %{assigns: %{integrated: true, chat: chat}} = socket
       )
       when map_size(params) == 1 and not is_nil(chat) do
-    case Chat.renew(chat, proof) do
+    case if(Runtime.backend_revoked?(chat.session),
+           do: {:error, :backend_revoked},
+           else: Chat.renew(chat, proof)
+         ) do
+      {:error, :backend_revoked} ->
+        {:reply, %{ok: false, reason: "backend_revoked"}, backend_revoke_chat(socket)}
+
       {:ok, renewed} ->
         {:reply, Map.put(Chat.authorization_metadata(renewed), :ok, true),
          assign(socket, :chat, renewed)}
@@ -298,7 +313,7 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
-    with true <- is_nil(socket.assigns.pending_reply),
+    with true <- not socket.assigns.terminal and is_nil(socket.assigns.pending_reply),
          {:ok, chat} <-
            Chat.open(
              socket.assigns.widget_id,
@@ -381,29 +396,34 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.submit", %{"text" => text}, %{assigns: %{integrated: true}} = socket)
       when is_binary(text) do
-    if WebWidget.Integration.BindingStore.available?() != :ok do
-      {:reply, %{ok: false, reason: "store_unavailable"},
-       expire_chat(socket, "store_unavailable")}
-    else
-      text = String.trim(text)
+    cond do
+      Runtime.backend_revoked?(socket.assigns.chat.session) ->
+        {:reply, %{ok: false, reason: "backend_revoked"}, backend_revoke_chat(socket)}
 
-      if text != "" and String.length(text) <= socket.assigns.config.max_length and
-           socket.assigns.chat do
-        case Chat.submit(socket.assigns.chat, text) do
-          {:ok, chat} ->
-            {:reply, %{ok: true},
-             socket
-             |> assign_chat(chat)
-             |> assign(mode: :conversation, conversation_opened: true)
-             |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
+      WebWidget.Integration.BindingStore.available?() != :ok ->
+        {:reply, %{ok: false, reason: "store_unavailable"},
+         expire_chat(socket, "store_unavailable")}
 
-          {:error, chat, error} ->
-            {:reply, %{ok: false, error: error},
-             socket |> assign_chat(chat) |> assign(error: error)}
+      true ->
+        text = String.trim(text)
+
+        if text != "" and String.length(text) <= socket.assigns.config.max_length and
+             socket.assigns.chat do
+          case Chat.submit(socket.assigns.chat, text) do
+            {:ok, chat} ->
+              {:reply, %{ok: true},
+               socket
+               |> assign_chat(chat)
+               |> assign(mode: :conversation, conversation_opened: true)
+               |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
+
+            {:error, chat, error} ->
+              {:reply, %{ok: false, error: error},
+               socket |> assign_chat(chat) |> assign(error: error)}
+          end
+        else
+          {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
         end
-      else
-        {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
-      end
     end
   end
 
@@ -438,12 +458,23 @@ defmodule WebWidgetWeb.WidgetLive do
   def handle_info({:web_response, _, _}, %{assigns: %{authentication_pending: true}} = socket),
     do: {:noreply, socket}
 
+  def handle_info(
+        {:widget_backend_revoked, widget_id, user_id, _cutoff},
+        %{assigns: %{integrated: true, chat: chat, widget_id: widget_id}} = socket
+      )
+      when not is_nil(chat) and chat.session.sender_id == user_id do
+    {:noreply, backend_revoke_chat(socket)}
+  end
+
   def handle_info({:web_response, event, response}, %{assigns: %{chat: chat}} = socket)
       when not is_nil(chat) do
     if Runtime.authorized?(chat.session) do
       {:noreply, assign_chat(socket, Chat.receive_response(chat, event, response))}
     else
       cond do
+        Runtime.backend_revoked?(chat.session) ->
+          {:noreply, backend_revoke_chat(socket)}
+
         chat.session.expires_at <= System.system_time(:second) ->
           {:noreply, expire_chat(socket, "expired")}
 
@@ -503,6 +534,20 @@ defmodule WebWidgetWeb.WidgetLive do
       authentication_pending: false,
       accepted_context: %{user_id: chat.session.sender_id, conversation_id: chat.conversation_id}
     )
+  end
+
+  defp backend_revoke_chat(socket) do
+    Chat.close(socket.assigns.chat)
+
+    socket
+    |> assign(
+      chat: nil,
+      terminal: true,
+      authentication_pending: true,
+      pending_reply: nil,
+      typing: false
+    )
+    |> push_event("widget.authentication.required", %{reason: "backend_revoked"})
   end
 
   defp expire_chat(%{assigns: %{authentication_pending: true}} = socket, _reason), do: socket

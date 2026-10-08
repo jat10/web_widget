@@ -35,46 +35,59 @@ defmodule WebWidget.Integration.Chat do
 
   defp subscribe_and_initialize(session, requested, request, params) do
     with {:ok, subscription} <- Runtime.subscribe(session) do
-      response =
-        Runtime.dispatch(
-          %{
-            type: "widget.init",
-            request_id: request,
-            conversation_id: requested,
-            params: %{}
-          },
-          session
-        )
+      case Runtime.subscribe_revocation(session) do
+        {:ok, revocation} ->
+          initialize_subscribed(session, requested, request, params, subscription, revocation)
 
-      with true <- Response.correlated?(response, request),
-           %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
-             response,
-           true <- Runtime.authorized?(session),
-           {:ok, state, positions} <- history(session, requested),
-           true <- Runtime.authorized?(session) do
-        generation = make_ref()
-        timer = expiration_timer(session, generation)
-
-        {:ok,
-         %{
-           session: session,
-           subscription: subscription,
-           timer: timer,
-           auth_generation: generation,
-           conversation_id: requested,
-           active: nil,
-           state: state,
-           positions: positions,
-           persisted_refs: %{},
-           outcome: nil,
-           prompt_context: params.prompt_context,
-           blocked: false
-         }}
-      else
         _ ->
           Adapter.unsubscribe(subscription)
-          {:error, "Unable to initialize or restore this conversation."}
+          {:error, "Unable to subscribe to widget revocation."}
       end
+    end
+  end
+
+  defp initialize_subscribed(session, requested, request, params, subscription, revocation) do
+    response =
+      Runtime.dispatch(
+        %{
+          type: "widget.init",
+          request_id: request,
+          conversation_id: requested,
+          params: %{}
+        },
+        session
+      )
+
+    with true <- Response.correlated?(response, request),
+         %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
+           response,
+         true <- Runtime.authorized?(session),
+         {:ok, state, positions} <- history(session, requested),
+         true <- Runtime.authorized?(session) do
+      generation = make_ref()
+      timer = expiration_timer(session, generation)
+
+      {:ok,
+       %{
+         session: session,
+         subscription: subscription,
+         revocation_subscription: revocation,
+         timer: timer,
+         auth_generation: generation,
+         conversation_id: requested,
+         active: nil,
+         state: state,
+         positions: positions,
+         persisted_refs: %{},
+         outcome: nil,
+         prompt_context: params.prompt_context,
+         blocked: false
+       }}
+    else
+      _ ->
+        Adapter.unsubscribe(subscription)
+        Adapter.unsubscribe(revocation)
+        {:error, "Unable to initialize or restore this conversation."}
     end
   end
 
@@ -264,6 +277,7 @@ defmodule WebWidget.Integration.Chat do
 
   def close(chat) do
     Adapter.unsubscribe(chat.subscription)
+    Adapter.unsubscribe(chat.revocation_subscription)
     Process.demonitor(chat.monitor, [:flush])
     Process.cancel_timer(chat.timer)
     :ok
