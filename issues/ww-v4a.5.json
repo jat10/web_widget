@@ -3,7 +3,9 @@
   "blocked_by": [
     "ww-v4a.4"
   ],
-  "blocks": [],
+  "blocks": [
+    "ww-v4a.9"
+  ],
   "created": "2026-10-08T08:27:26Z",
   "description": "Update embed.ts, widget-client.ts, widget-context.ts, app.js and assets. Script data-token-url defaults to same-origin fresh token endpoint; allow custom provider. Deliver initial token in iframe URL fragment and remove it after reading; use zaq.widget.connect for in-place renewal. Schedule from server times, dedupe requests, bounded retries, visibility/network rescheduling, cold-load stale-token recovery. Keep authenticated listener outside LiveView hook; separate bootstrap-ready from public ready. Preserve exact source/origin checks, container iframe IDs, stylesheet ordering, disposal, and failure reasons. Add browser tests.",
   "id": "ww-v4a.5",

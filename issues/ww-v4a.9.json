@@ -1,6 +1,8 @@
 {
   "assignee": "",
-  "blocked_by": [],
+  "blocked_by": [
+    "ww-v4a.5"
+  ],
   "blocks": [],
   "created": "2026-10-08T08:27:26Z",
   "description": "Update docs/integration-guideline.md, authenticated-chat.md, host-integration.md, styling-guideline.md, README.md. Document lightweight JWT examples, seven-day expiry versus five-second first binding, Mnesia membership/majority/recovery and cutoffs, renewal, token endpoint/provider, connect/init migration, lifecycle reasons, two router macros and backend proof. Coordinate JWT schema change with parent backends and validate mix web_widget.assets.install delivery.",
@@ -11,5 +13,5 @@
   "status": "open",
   "title": "Update host integration, SDK, and operations documentation",
   "type": "task",
-  "updated_at": "2026-10-08T08:27:26Z"
+  "updated_at": "2026-10-08T08:27:45Z"
 }
