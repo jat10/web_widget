@@ -1,0 +1,15 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-08T08:27:26Z",
+  "description": "Remove conversation_id and prompt_context from JWT claims. Carry selected conversation ID with message/history requests and authorize resume through ZAQ; pass validated initial prompt context with first new-conversation question. Add small parent context-update API without granting identity, scope, or routing authority. Preserve unknown-outcome timeout and never automatically resend after reconnect. Add focused tests.",
+  "id": "ww-v4a.6",
+  "labels": [],
+  "parent": "ww-v4a",
+  "priority": 2,
+  "status": "open",
+  "title": "Separate conversation metadata from JWT identity",
+  "type": "task",
+  "updated_at": "2026-10-08T08:27:26Z"
+}
