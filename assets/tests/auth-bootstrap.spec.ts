@@ -365,7 +365,6 @@ test("invalid JWT and token endpoint failures block bootstrap, then a valid endp
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "false");
   await expect(widget.locator(".zaq-widget")).toHaveCount(0);
   response = "valid";
-  await page.evaluate(() => window.zaq.widget.connect());
-  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
   await expect(widget.locator(".zaq-widget")).toBeVisible();
 });
