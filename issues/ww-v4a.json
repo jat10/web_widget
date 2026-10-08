@@ -10,11 +10,15 @@
     {
       "text": "Planning only: issue #14 reviewed against ea0aade. No implementation started. Beadwork initialized on this checkout with ww prefix. First ready task is contract and configuration; update adapter contract before code.",
       "timestamp": "2026-10-08T08:27:45Z"
+    },
+    {
+      "text": "All nine child issues implemented, committed, pushed, and closed on fix/authentication. Final gates: mix precommit 167 pass, distributed Mnesia peer check passed, mix assets.build passed, full Chromium 81 pass plus six focused authenticated browser checks including two new cases, sibling ZAQ constructor smoke 2 pass, isolated host installed-assets smoke passed.",
+      "timestamp": "2026-10-08T10:19:37Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Harden widget authentication and connection lifecycle",
   "type": "epic",
-  "updated_at": "2026-10-08T08:31:18Z"
+  "updated_at": "2026-10-08T10:19:37Z"
 }
