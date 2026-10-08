@@ -1,5 +1,5 @@
 {
-  "assignee": "",
+  "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
   "created": "2026-10-08T10:39:50Z",
@@ -7,8 +7,8 @@
   "id": "ww-ocy",
   "labels": [],
   "priority": 1,
-  "status": "open",
+  "status": "in_progress",
   "title": "Complete PR 15 authentication integration tests",
   "type": "task",
-  "updated_at": "2026-10-08T10:39:50Z"
+  "updated_at": "2026-10-08T10:39:52Z"
 }
