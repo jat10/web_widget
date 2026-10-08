@@ -13,9 +13,15 @@
   "id": "ww-v4a.3",
   "labels": [],
   "parent": "ww-v4a",
+  "comments": [
+    {
+      "text": "Connected integrated LiveView mounts now read identity_token from LiveView connect params, bind HS256 JWT to verified root socket.id before Chat.open host init/subscription, and fail closed on missing proof. SignedIdentity uses clustered BindingStore; process-local ReplayGuard removed. Session authorization rechecks binding/revocation. Existing postMessage init remains temporarily for migration and phase ww-v4a.5; signed conversation metadata removal is tracked in ww-v4a.6. mix test: 160 tests, 0 failures after mix assets.build. Real distributed store checks passed under ww-v4a.2.",
+      "timestamp": "2026-10-08T08:58:01Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Validate lightweight JWT and authenticate at connected LiveView mount",
   "type": "task",
-  "updated_at": "2026-10-08T08:50:26Z"
+  "updated_at": "2026-10-08T08:58:01Z"
 }
