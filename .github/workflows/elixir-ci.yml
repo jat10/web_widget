@@ -84,7 +84,9 @@ jobs:
         run: mix coveralls.json
 
       - name: Run three-node Mnesia integration checks
-        run: mix run --no-start test/support/integration/binding_store_cluster.exs
+        run: |
+          epmd -daemon
+          mix run --no-start test/support/integration/binding_store_cluster.exs
 
       - name: Save coverage report
         if: always()
