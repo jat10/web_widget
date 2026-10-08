@@ -86,6 +86,12 @@ defmodule WebWidgetWeb.WidgetLive do
 
           {:ok, socket}
 
+        {:error, :store_unavailable} ->
+          {:ok,
+           socket
+           |> assign(authentication_pending: true)
+           |> push_event("widget.authentication.required", %{reason: "store_unavailable"})}
+
         _ ->
           {:ok,
            socket
@@ -120,6 +126,11 @@ defmodule WebWidgetWeb.WidgetLive do
           phx-update="ignore"
           data-allowed-domains={Jason.encode!(@allowed_domains)}
           data-authenticated={to_string(@integrated)}
+          data-authorized={to_string(@chat != nil and not @authentication_pending)}
+          data-auth-expires-at={@chat && @chat.session.expires_at}
+          data-auth-refresh-at={@chat && Chat.authorization_metadata(@chat).refresh_at}
+          data-auth-server-time={@chat && System.system_time(:second)}
+          data-auth-credential-id={@chat && Chat.authorization_metadata(@chat).credential_id}
         />
         <.react
           :if={@parent_context != nil}
@@ -245,6 +256,9 @@ defmodule WebWidgetWeb.WidgetLive do
         {:reply, Map.put(Chat.authorization_metadata(renewed), :ok, true),
          assign(socket, :chat, renewed)}
 
+      {:error, :store_unavailable} ->
+        {:reply, %{ok: false, reason: "store_unavailable"}, socket}
+
       _ ->
         {:reply, %{ok: false, reason: "invalid_credential"}, socket}
     end
@@ -252,6 +266,11 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.auth.renew", _params, socket) do
     {:reply, %{ok: false, reason: "authentication_required"}, socket}
+  end
+
+  def handle_event("widget.auth.status", _params, socket) do
+    {:reply, %{ok: true, available: WebWidget.Integration.BindingStore.available?() == :ok},
+     socket}
   end
 
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
@@ -282,6 +301,9 @@ defmodule WebWidgetWeb.WidgetLive do
         {:reply, %{ok: false, error: "Reload the widget to change identity."}, socket}
       end
     else
+      {:error, :store_unavailable} ->
+        {:reply, %{ok: false, reason: "store_unavailable"}, socket}
+
       _ ->
         {:reply, %{ok: false, error: "Unable to authenticate or restore this widget session."},
          socket}
@@ -328,24 +350,29 @@ defmodule WebWidgetWeb.WidgetLive do
 
   def handle_event("widget.submit", %{"text" => text}, %{assigns: %{integrated: true}} = socket)
       when is_binary(text) do
-    text = String.trim(text)
-
-    if text != "" and String.length(text) <= socket.assigns.config.max_length and
-         socket.assigns.chat do
-      case Chat.submit(socket.assigns.chat, text) do
-        {:ok, chat} ->
-          {:reply, %{ok: true},
-           socket
-           |> assign_chat(chat)
-           |> assign(mode: :conversation, conversation_opened: true)
-           |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
-
-        {:error, chat, error} ->
-          {:reply, %{ok: false, error: error},
-           socket |> assign_chat(chat) |> assign(error: error)}
-      end
+    if WebWidget.Integration.BindingStore.available?() != :ok do
+      {:reply, %{ok: false, reason: "store_unavailable"},
+       expire_chat(socket, "store_unavailable")}
     else
-      {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
+      text = String.trim(text)
+
+      if text != "" and String.length(text) <= socket.assigns.config.max_length and
+           socket.assigns.chat do
+        case Chat.submit(socket.assigns.chat, text) do
+          {:ok, chat} ->
+            {:reply, %{ok: true},
+             socket
+             |> assign_chat(chat)
+             |> assign(mode: :conversation, conversation_opened: true)
+             |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
+
+          {:error, chat, error} ->
+            {:reply, %{ok: false, error: error},
+             socket |> assign_chat(chat) |> assign(error: error)}
+        end
+      else
+        {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
+      end
     end
   end
 
@@ -385,9 +412,16 @@ defmodule WebWidgetWeb.WidgetLive do
     if Runtime.authorized?(chat.session) do
       {:noreply, assign_chat(socket, Chat.receive_response(chat, event, response))}
     else
-      if chat.session.expires_at <= System.system_time(:second),
-        do: {:noreply, expire_chat(socket)},
-        else: {:noreply, revoke_chat(socket)}
+      cond do
+        chat.session.expires_at <= System.system_time(:second) ->
+          {:noreply, expire_chat(socket, "expired")}
+
+        WebWidget.Integration.BindingStore.available?() != :ok ->
+          {:noreply, expire_chat(socket, "store_unavailable")}
+
+        true ->
+          {:noreply, revoke_chat(socket)}
+      end
     end
   end
 
@@ -398,7 +432,7 @@ defmodule WebWidgetWeb.WidgetLive do
       when not is_nil(chat) do
     {:noreply,
      if(chat.session.topic == ref and chat.auth_generation == generation,
-       do: expire_chat(socket),
+       do: expire_chat(socket, "expired"),
        else: socket
      )}
   end
@@ -440,9 +474,9 @@ defmodule WebWidgetWeb.WidgetLive do
     )
   end
 
-  defp expire_chat(%{assigns: %{authentication_pending: true}} = socket), do: socket
+  defp expire_chat(%{assigns: %{authentication_pending: true}} = socket, _reason), do: socket
 
-  defp expire_chat(socket) do
+  defp expire_chat(socket, reason) do
     chat = socket.assigns.chat
     Adapter.unsubscribe(chat.subscription)
     Process.cancel_timer(chat.timer)
@@ -450,7 +484,7 @@ defmodule WebWidgetWeb.WidgetLive do
     # Keep the runtime monitor: connector revocation must still clear the view.
     socket
     |> assign(authentication_pending: true, pending_reply: nil, typing: false)
-    |> push_event("widget.authentication.required", %{})
+    |> push_event("widget.authentication.required", %{reason: reason})
   end
 
   defp revoke_chat(socket) do

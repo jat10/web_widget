@@ -72,6 +72,7 @@ defmodule WebWidget.Runtime do
          {:ok, _config} <- session_config(session) do
       {:ok, session}
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end
   end
@@ -93,6 +94,7 @@ defmodule WebWidget.Runtime do
            binding_claims: replacement.binding_claims
        }}
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end
   end

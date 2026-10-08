@@ -19,6 +19,7 @@ defmodule WebWidget.Integration.Chat do
           error
       end
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
       _ -> {:error, "Unable to authenticate this widget session."}
     end
   end

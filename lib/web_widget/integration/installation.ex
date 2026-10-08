@@ -18,11 +18,12 @@ defmodule WebWidget.Integration.Installation do
          true <- Regex.match?(~r/\A[a-zA-Z0-9][a-zA-Z0-9_-]*\z/, widget_id),
          true <- Keyword.keyword?(opts),
          {:ok, _} <- origin(base_url),
-         {:ok, url} <- origin(Keyword.get(opts, :public_url, base_url)) do
+         {:ok, url} <- origin(Keyword.get(opts, :public_url, base_url)),
+         {:ok, token_attribute} <- token_attribute(Keyword.get(opts, :token_url)) do
       src = Phoenix.HTML.html_escape(url <> "/web_widget/assets/embed.js")
 
       snippet =
-        "<script src=\"#{Phoenix.HTML.safe_to_string(src)}\" data-widget-id=\"#{widget_id}\" defer></script>"
+        "<script src=\"#{Phoenix.HTML.safe_to_string(src)}\" data-widget-id=\"#{widget_id}\"#{token_attribute} defer></script>"
 
       if byte_size(snippet) <= 32_768,
         do: {:ok, snippet},
@@ -33,6 +34,24 @@ defmodule WebWidget.Integration.Installation do
   end
 
   def widget_script(_, _, _), do: {:error, :invalid_widget_installation}
+
+  defp token_attribute(nil), do: {:ok, ""}
+
+  defp token_attribute(path) when is_binary(path) and byte_size(path) <= 2_048 do
+    with true <-
+           String.valid?(path) and String.starts_with?(path, "/") and
+             not String.starts_with?(path, "//") and
+             not Regex.match?(~r/[\s\\\x00-\x1f\x7f]/u, path),
+         {:ok, uri} <- URI.new(path),
+         true <- is_nil(uri.scheme) and is_nil(uri.host) and is_nil(uri.fragment) do
+      escaped = path |> Phoenix.HTML.html_escape() |> Phoenix.HTML.safe_to_string()
+      {:ok, " data-token-url=\"#{escaped}\""}
+    else
+      _ -> {:error, :invalid_widget_installation}
+    end
+  end
+
+  defp token_attribute(_), do: {:error, :invalid_widget_installation}
 
   defp origin(url) when is_binary(url) and byte_size(url) <= 2_048 do
     with true <- String.valid?(url),

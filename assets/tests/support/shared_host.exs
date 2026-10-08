@@ -38,7 +38,7 @@ defmodule WebWidget.E2ESharedHost do
     ])
   end
 
-  def bootstrap(conversation_id \\ nil, ttl \\ 300) do
+  def bootstrap(conversation_id \\ nil, ttl \\ 604_800) do
     now = System.system_time(:second)
     claims = %{widget_id: 420, user_id: "e2e-visitor", conversation_id: conversation_id,
       prompt_context: "Signed page context", iss: "e2e-parent", aud: "e2e-widget",

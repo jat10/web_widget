@@ -85,6 +85,7 @@ defmodule WebWidget.Integration.Protocol do
          })
        )}
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end
   rescue

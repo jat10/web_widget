@@ -91,4 +91,24 @@ defmodule WebWidget.Integration.InstallationTest do
     assert {:error, :invalid_widget_installation} =
              Installation.script(42, "https://zaq.example", nil)
   end
+
+  test "installation can name a parent same-origin token endpoint without exposing secrets" do
+    assert {:ok, snippet} =
+             Installation.script(42, "https://widget.example",
+               token_url: "/api/widget-token?a=1&b=2"
+             )
+
+    assert snippet =~ "data-token-url=\"/api/widget-token?a=1&amp;b=2\""
+
+    for path <- [
+          "https://other.example/token",
+          "//other.example/token",
+          "/token#fragment",
+          "/token\n",
+          "/token\" onload=\"x"
+        ] do
+      assert {:error, :invalid_widget_installation} =
+               Installation.script(42, "https://widget.example", token_url: path)
+    end
+  end
 end

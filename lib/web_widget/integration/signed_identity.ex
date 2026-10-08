@@ -99,6 +99,7 @@ defmodule WebWidget.Integration.SignedIdentity do
          page_id: scope.page_id
        }}
     else
+      {:error, :unavailable_or_invalid} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end
   rescue

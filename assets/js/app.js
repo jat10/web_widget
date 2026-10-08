@@ -28,16 +28,12 @@ import components from "../react-components"
 import "../css/app.css"
 import "./widget-demo"
 import {WidgetContext} from "./widget-context"
+import {currentIdentityToken} from "./widget-bootstrap"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
-const fragment = new URLSearchParams(window.location.hash.slice(1))
-let identityToken = fragment.get("identity_token")
-if (identityToken) {
-  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search)
-}
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
-  params: () => ({_csrf_token: csrfToken, identity_token: identityToken}),
+  params: () => ({_csrf_token: csrfToken, identity_token: currentIdentityToken()}),
   hooks: {...getHooks(components), WidgetContext},
 })
 
