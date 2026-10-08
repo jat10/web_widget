@@ -38,6 +38,40 @@ test("script stylesheet reaches the cross-origin iframe, survives reload, and re
   await expect(link).toHaveCount(0);
 });
 
+test("public ready waits for a stylesheet delivered during the presentation handshake", async ({ page }) => {
+  let stylesheetRequested = false;
+  let releaseStylesheet: (() => void) | undefined;
+  await page.route("**/delayed-brand.css", async route => {
+    stylesheetRequested = true;
+    await new Promise<void>(resolve => { releaseStylesheet = resolve; });
+    await route.fulfill({ contentType: "text/css", body: ":root { --zaq-widget-composer-background: #302640; }" });
+  });
+  await page.goto("/widget/missing");
+  await page.evaluate(() => {
+    (window as any).readyCount = 0;
+    const iframe = document.createElement("iframe");
+    iframe.src = "http://127.0.0.1:4020/widget/42";
+    window.addEventListener("message", event => {
+      if (event.source !== iframe.contentWindow || event.origin !== "http://127.0.0.1:4020") return;
+      if (event.data?.type === "zaq.widget.bootstrap.ready") {
+        window.setTimeout(() => iframe.contentWindow?.postMessage({
+          type: "zaq.widget.stylesheet", url: "http://127.0.0.1:4019/delayed-brand.css",
+        }, "http://127.0.0.1:4020"), 30);
+      }
+      if (event.data?.type === "zaq.widget.ready") (window as any).readyCount++;
+    });
+    document.body.append(iframe);
+  });
+  await expect.poll(() => stylesheetRequested).toBe(true);
+  try {
+    await page.waitForTimeout(180);
+    expect(await page.evaluate(() => (window as any).readyCount)).toBe(0);
+  } finally {
+    releaseStylesheet?.();
+  }
+  await expect.poll(() => page.evaluate(() => (window as any).readyCount)).toBe(1);
+});
+
 test("invalid stylesheet attributes fail before mounting", async ({ page }) => {
   await page.goto("/widget/missing");
   await page.addScriptTag({ url: "http://127.0.0.1:4020/web_widget/assets/embed.js" });

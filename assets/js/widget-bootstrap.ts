@@ -20,6 +20,9 @@ let publicReady = false;
 let parentOrigin: string | undefined;
 let queued: MessageEvent[] = [];
 let stylesheetPending: Promise<void> | undefined;
+let stylesheetReceived = false;
+let stylesheetDelivered: (() => void) | undefined;
+const stylesheetSignal = new Promise<void>(resolve => { stylesheetDelivered = resolve; });
 
 const allowedOrigins = (): string[] => {
   try {
@@ -65,14 +68,21 @@ export function setPublicReady(ready: boolean) {
   if (ready) postToParent("zaq.widget.ready");
 }
 
-export function waitForStylesheet(): Promise<void> {
-  if (stylesheetPending) return stylesheetPending;
-  // The parent may omit stylesheet-url. Its bootstrap message arrives promptly
-  // after bootstrap.ready; a short wait keeps public readiness ordered.
-  return new Promise(resolve => window.setTimeout(resolve, 100));
+export async function waitForStylesheet(): Promise<void> {
+  if (!stylesheetReceived) {
+    // The SDK always sends a stylesheet decision, including null when omitted.
+    // Keep a fallback for parents that only use the manual iframe protocol.
+    await Promise.race([
+      stylesheetSignal,
+      new Promise<void>(resolve => window.setTimeout(resolve, 1_000)),
+    ]);
+  }
+  await stylesheetPending;
 }
 
 function applyStylesheet(value: unknown) {
+  stylesheetReceived = true;
+  stylesheetDelivered?.();
   let url: string | null;
   try {
     url = value === null ? null : stylesheetURL(value);

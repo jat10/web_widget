@@ -77,7 +77,57 @@ test("token URL bootstraps in the fragment and renews without remounting", async
   expect(tokens).toBe(3);
 });
 
-test("backend disconnect closes every targeted tab and a fresh credential restores access", async ({ page, context, request }) => {
+test("identity JWT stays out of the LiveView WebSocket URL", async ({ page, request }) => {
+  const websocketUrls: string[] = [];
+  page.on("websocket", socket => websocketUrls.push(socket.url()));
+  await page.route("**/api/widget-token", async route => {
+    const issued = await request.get("http://127.0.0.1:4021/identity", {
+      params: { user_id: `transport-${crypto.randomUUID()}` },
+    });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+  await expect(page.frameLocator("#zaq-widget").locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect.poll(() => websocketUrls.length).toBeGreaterThan(0);
+  for (const url of websocketUrls) {
+    expect(new URL(url).searchParams.has("identity_token")).toBe(false);
+  }
+});
+
+test("revocation during a network disconnect remains terminal on reconnect", async ({ page, request }) => {
+  const user = `offline-revoked-${crypto.randomUUID()}`;
+  let tokens = 0;
+  await page.route("**/api/widget-token", async route => {
+    tokens++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    const { identity_token } = await issued.json();
+    await route.fulfill({
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+      body: JSON.stringify({ identity_token }),
+    });
+  });
+  await installTokenWidget(page);
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  expect(tokens).toBe(1);
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+  const { proof } = await (await request.get("http://127.0.0.1:4021/control-proof", { params: { user_id: user } })).json();
+  const revoked = await request.post("http://127.0.0.1:4020/widget-api/420/disconnect", {
+    headers: { Authorization: `Bearer ${proof}` }, data: { user_id: user },
+  });
+  expect(revoked.status()).toBe(200);
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+  await expect(widget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
+  expect(tokens).toBe(1);
+});
+
+test("backend disconnect is scoped and a retried proof preserves a fresh session", async ({ page, context, request }) => {
   const user = `revoked-${crypto.randomUUID()}`;
   const unrelatedUser = `unrelated-${crypto.randomUUID()}`;
   let tokens = 0;
@@ -165,11 +215,6 @@ test("backend disconnect closes every targeted tab and a fresh credential restor
   await unrelatedWidget.getByRole("textbox", { name: "Message", exact: true }).fill("instant");
   await unrelatedWidget.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
   await expect(unrelatedWidget.getByText("Immediate answer", { exact: true })).toBeVisible();
-  const retry = await disconnect();
-  expect(retry.status()).toBe(200);
-  expect((await retry.json()).cutoff).toBe((await first.json()).cutoff);
-  await page.waitForTimeout(300);
-  expect(tokens).toBe(3);
   const cutoff = (await first.json()).cutoff;
   await expect.poll(() => Math.floor(Date.now() / 1000)).toBeGreaterThan(cutoff);
   await other.evaluate(() => window.zaq.widget.dispose());
@@ -178,6 +223,14 @@ test("backend disconnect closes every targeted tab and a fresh credential restor
   await otherWidget.getByRole("textbox", { name: "Message", exact: true }).fill("instant");
   await otherWidget.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
   await expect(otherWidget.getByText("Immediate answer", { exact: true })).toBeVisible();
+  const retry = await disconnect();
+  expect(retry.status()).toBe(200);
+  expect((await retry.json()).cutoff).toBe(cutoff);
+  await other.waitForTimeout(300);
+  await expect(otherWidget.locator("#widget-backend-revoked")).toHaveCount(0);
+  await otherWidget.getByRole("textbox", { name: "Message", exact: true }).fill("instant");
+  await otherWidget.getByRole("textbox", { name: "Message", exact: true }).press("Enter");
+  await expect(otherWidget.getByText("Immediate answer", { exact: true })).toHaveCount(2);
   await expect(widget.locator("#widget-backend-revoked")).toHaveText("Refresh the page to reconnect.");
   await other.close();
   await unrelated.close();
@@ -328,12 +381,9 @@ for (const responsePhase of ["completed", "running"] as const) {
     expect(await submitted()).toBe(1);
     if (responsePhase === "running") {
       expect((await complete()).status()).toBe(204);
-      await widget.locator("body").evaluate(() => {
-        (window as any).liveSocket.disconnect();
-        (window as any).liveSocket.connect();
-      });
-      await expect.poll(() => page.evaluate(() => (window as any).reconnectReadyCount)).toBe(2);
-      await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
+      await expect.poll(status).toBe("finished");
+      await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished", { timeout: 10_000 });
+      expect(await page.evaluate(() => (window as any).reconnectReadyCount)).toBe(1);
       await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
       await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
       expect(tokens).toBe(1);
@@ -342,7 +392,7 @@ for (const responsePhase of ["completed", "running"] as const) {
   });
 }
 
-test("WebSocket disconnect replaces the LiveView process and session topic", async ({ page, request }) => {
+test("WebSocket reconnect replaces the LiveView process but keeps its page topic", async ({ page, request }) => {
   const user = `socket-${crypto.randomUUID()}`;
   await page.route("**/api/widget-token", async route => {
     const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
@@ -372,7 +422,7 @@ test("WebSocket disconnect replaces the LiveView process and session topic", asy
   await expect.poll(sessions).toHaveLength(1);
   const [after] = await sessions();
   expect(after.pid).not.toBe(before.pid);
-  expect(after.topic).not.toBe(before.topic);
+  expect(after.topic).toBe(before.topic);
 });
 
 test("delayed and lost renewal acknowledgements leave the active chat usable", async ({ page, request }) => {
@@ -609,7 +659,7 @@ test("a full iframe reload fetches a new JWT for its new LiveView page", async (
   await expect(widget.locator(".zaq-widget")).toBeVisible();
 });
 
-test("renewal endpoint outage retries, expires closed, and recovers in the same iframe", async ({ page, request }) => {
+test("renewal endpoint outage retries after expiry and recovers automatically in the same iframe", async ({ page, request }) => {
   const user = `outage-${crypto.randomUUID()}`;
   let attempts = 0;
   let available = false;
@@ -641,8 +691,10 @@ test("renewal endpoint outage retries, expires closed, and recovers in the same 
   await expect.poll(() => attempts).toBeGreaterThanOrEqual(3);
   await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeDisabled({ timeout: 10_000 });
   await expect(input).toHaveValue("Draft through expiry");
+  await expect(page.evaluate(() => window.zaq.widget.connect())).rejects.toThrow("Widget token endpoint failed.");
+  const failedAttempts = attempts;
   available = true;
-  await page.evaluate(() => window.zaq.widget.connect());
+  await expect.poll(() => attempts, { timeout: 5_000 }).toBeGreaterThan(failedAttempts);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
   await expect(input).toHaveValue("Draft through expiry");

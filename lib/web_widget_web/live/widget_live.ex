@@ -100,6 +100,9 @@ defmodule WebWidgetWeb.WidgetLive do
            |> assign(authentication_pending: true)
            |> push_event("widget.authentication.required", %{reason: "store_unavailable"})}
 
+        {:error, :backend_revoked} ->
+          {:ok, backend_revoke_chat(socket)}
+
         _ ->
           {:ok,
            socket
@@ -478,11 +481,17 @@ defmodule WebWidgetWeb.WidgetLive do
     do: {:noreply, socket}
 
   def handle_info(
-        {:widget_backend_revoked, widget_id, user_id, _cutoff},
+        {:widget_backend_revoked, widget_id, user_id, cutoff},
         %{assigns: %{integrated: true, chat: chat, widget_id: widget_id}} = socket
       )
       when not is_nil(chat) and chat.session.sender_id == user_id do
-    {:noreply, backend_revoke_chat(socket)}
+    issued = chat.session.binding_claims && Map.get(chat.session.binding_claims, :iat)
+
+    if is_integer(cutoff) and is_integer(issued) and issued <= cutoff do
+      {:noreply, backend_revoke_chat(socket)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info({:web_response, event, response}, %{assigns: %{chat: chat}} = socket)
@@ -556,7 +565,7 @@ defmodule WebWidgetWeb.WidgetLive do
   end
 
   defp backend_revoke_chat(socket) do
-    Chat.close(socket.assigns.chat)
+    if socket.assigns.chat, do: Chat.close(socket.assigns.chat)
 
     socket
     |> assign(

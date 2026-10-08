@@ -28,6 +28,7 @@ export function createWidgetClient(
   let acceptedToken: string | undefined;
   let pendingToken = options.initialToken;
   let expiryDeadline = 0, refreshDeadline = 0, retryCount = 0;
+  let expiryNotified = false;
   let renewalTimer: number | undefined, providerAbort: AbortController | undefined;
   let renewal: Promise<Result> | undefined;
   let loadedOnce = false;
@@ -75,6 +76,7 @@ export function createWidgetClient(
     expiryDeadline = Date.now() + (data.expires_at! - data.server_time!) * 1_000;
     refreshDeadline = Date.now() + (data.refresh_at! - data.server_time!) * 1_000;
     retryCount = 0;
+    expiryNotified = false;
     schedule();
     iframe.dispatchEvent(new CustomEvent("zaq:authenticated", { detail: data }));
   };
@@ -93,11 +95,17 @@ export function createWidgetClient(
   const retry = () => {
     if (disposed || terminal || !provider || waitingForStore) return;
     clearTimer();
-    if (expiryDeadline && Date.now() >= expiryDeadline) {
+    if (expiryDeadline && Date.now() >= expiryDeadline && !expiryNotified) {
+      expiryNotified = true;
+      retryCount = 0;
       iframe.dispatchEvent(new CustomEvent("zaq:authentication-required", { detail: { reason: "expired" } }));
-      return;
     }
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(retryCount++, 5));
+    const remaining = expiryDeadline ? expiryDeadline - Date.now() : Infinity;
+    const delay = Math.min(
+      remaining <= 0 ? 2_000 : 30_000,
+      1_000 * 2 ** Math.min(retryCount++, 5),
+      remaining > 0 ? Math.max(250, remaining) : Infinity,
+    );
     renewalTimer = window.setTimeout(() => { void refresh(true).catch(() => {}); }, delay);
   };
   const refresh = (force = false): Promise<Result> => {

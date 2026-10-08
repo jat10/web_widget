@@ -27,6 +27,7 @@ defmodule WebWidget.Integration.Chat do
       end
     else
       {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, "Unable to authenticate this widget session."}
     end
   end
@@ -76,6 +77,7 @@ defmodule WebWidget.Integration.Chat do
          auth_generation: generation,
          conversation_id: requested,
          active: nil,
+         restore_on_terminal: not is_nil(requested),
          state: state,
          positions: positions,
          persisted_refs: %{},
@@ -223,6 +225,7 @@ defmodule WebWidget.Integration.Chat do
          | conversation_id: conversation,
            prompt_context: nil,
            active: %{request_id: request, message_id: transport, created: false},
+           restore_on_terminal: false,
            state: State.submit(chat.state, message)
        }}
     else
@@ -260,6 +263,22 @@ defmodule WebWidget.Integration.Chat do
       _ ->
         Diagnostics.log(:ignored_validation_or_encoding, response)
         chat
+    end
+  end
+
+  def receive_response(
+        %{active: nil, restore_on_terminal: true, conversation_id: conversation} = chat,
+        event,
+        %{protocol_version: 1, type: :message_complete, conversation_id: conversation} = response
+      ) do
+    with true <- Runtime.authorized?(chat.session),
+         true <- identifier?(response.request_id) and identifier?(response.message_id),
+         {:ok, _} <- Response.encode(event, response, chat.session.widget_id),
+         {:ok, state, positions} <- history(chat.session, conversation),
+         true <- Runtime.authorized?(chat.session) do
+      %{chat | state: state, positions: positions, restore_on_terminal: false}
+    else
+      _ -> chat
     end
   end
 

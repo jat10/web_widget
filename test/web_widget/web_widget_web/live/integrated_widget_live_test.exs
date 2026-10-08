@@ -183,6 +183,38 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
   end
 
+  test "a restored conversation refreshes authorized history on its terminal event", ctx do
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, view, _} = live(conn, "/widget/#{ctx.id}")
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+
+    terminal =
+      ChatHost.response(%{request_id: "resumed-request"}, :message_complete, "conversation-1", %{
+        body: "Untrusted terminal body"
+      })
+
+    ChatHost.publish(context, %{terminal | conversation_id: "foreign"})
+    ChatHost.publish(context, %{terminal | protocol_version: 2})
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+
+    ChatHost.publish(context, terminal)
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+
+    assert render(view) =~ "Saved answer"
+    refute render(view) =~ "Untrusted terminal body"
+
+    ChatHost.publish(context, terminal)
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+    refute_receive {:shared_request, %{content: _}, _, _}
+  end
+
   test "an authorized context selection announces the conversation for reconnect", ctx do
     init(ctx)
 

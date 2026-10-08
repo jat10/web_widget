@@ -1,6 +1,8 @@
 # Run with: MIX_ENV=test mix run --no-start test/support/integration/binding_store_cluster.exs
 defmodule WebWidget.Integration.BindingStoreClusterCheck do
-  alias WebWidget.Integration.BindingStore
+  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Runtime
+  alias WebWidget.TestIntegration.Host
 
   def run do
     {:ok, _} = :net_kernel.start([:wwroot, :shortnames])
@@ -102,9 +104,41 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
     pre_reset = claims(System.system_time(:second))
     :ok = BindingStore.claim(pre_reset, "page-before-reset", pre_reset.iat)
 
+    {config, hooks, options} = Host.fixture()
+    key = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+    config = Map.put(config, :token, key)
+
+    options =
+      Keyword.merge(options,
+        pubsub_server: WebWidget.PubSub,
+        identity_verifier: :connector_key,
+        identity_issuer: "parent",
+        identity_audience: "widget"
+      )
+
+    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
+    {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, spec)
+
+    {:ok, current_proof} =
+      SignedIdentity.sign(key, config.id, %{user_id: "renewing-user"},
+        issuer: "parent",
+        audience: "widget",
+        ttl: 60
+      )
+
+    {:ok, session} = Runtime.authenticate(to_string(config.id), current_proof, "renewing-page")
+
+    {:ok, replacement_proof} =
+      SignedIdentity.sign(key, config.id, %{user_id: "renewing-user"},
+        issuer: "parent",
+        audience: "widget",
+        ttl: 60
+      )
+
     :peer.stop(p1)
     :peer.stop(p2)
     await(fn -> BindingStore.available?() == {:error, :unavailable} end)
+    {:error, :store_unavailable} = Runtime.renew(session, replacement_proof)
     {:error, :unavailable_or_invalid} = BindingStore.claim(claims(now + 10), "page-x", now + 10)
 
     {:error, :unavailable_or_invalid} =

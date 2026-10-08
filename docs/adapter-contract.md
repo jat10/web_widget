@@ -331,9 +331,12 @@ bound. If dispatch moves to another process, explicitly buffer this race.
 ## Outbound communication: ZAQ -> web_widget
 
 Subscribe on the configured host PubSub server before the first question using
-a server-generated unpredictable destination authorized for the verified iframe
-session. It must exist without a conversation ID. Keep it stable for that session;
-reconnect creates/reestablishes an authorized subscription after verification.
+a server-derived destination scoped to the verified root `socket.id`. It must
+exist without a conversation ID. Renewal and ordinary reconnect reuse that
+page's destination after verification; an iframe reload receives a new root
+socket ID and destination. The topic is not an authorization credential: verify
+the session and correlate every response before applying it. Integrations
+without a verified page ID retain a fresh random destination per session.
 
 ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
 single ingress and encode once into widget UI events; do not republish into the
@@ -344,6 +347,10 @@ Check protocol version, trusted event mapping, request ID, accepted conversation
 and transport message ID before applying events. Widget ID and sender come from
 the session. Reject stale/foreign responses; unsolicited events cannot switch
 conversations. UI output retains the `response.*` namespace.
+After a connected remount, the accepted request IDs from the former LiveView are
+gone. A valid terminal event for the already authorized conversation may trigger
+a fresh authorized history request; its payload is never applied as a stream
+event without the original request correlation.
 
 ## Outbound payloads
 

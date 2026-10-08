@@ -61,12 +61,22 @@ defmodule WebWidget.Integration.Protocol do
 
   @doc false
   def authenticate(integration, proof, runtime_ref, page_id \\ nil) do
+    authenticate(integration, proof, runtime_ref, page_id, nil)
+  end
+
+  def authenticate(integration, proof, runtime_ref, page_id, expected_sender) do
     id = integration.hooks.widget_id
     scope = %{widget_id: Integer.to_string(id), channel_config_id: id, page_id: page_id}
 
+    verify_scope =
+      if is_binary(expected_sender),
+        do: Map.put(scope, :expected_sender, expected_sender),
+        else: scope
+
     with {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
-           invoke(integration.identity_verifier, [proof, scope]),
+           invoke(integration.identity_verifier, [proof, verify_scope]),
          true <- identifier?(sender),
+         true <- expected_sender in [nil, sender],
          true <- is_integer(expiry) and expiry > System.system_time(:second),
          {:ok, init} <- InitClaims.normalize(%{user_id: String.trim(sender)}),
          true <- init.user_id == String.trim(sender) do
@@ -81,13 +91,12 @@ defmodule WebWidget.Integration.Protocol do
            page_id: Map.get(verified, :page_id),
            runtime_ref: runtime_ref,
            owner: self(),
-           topic:
-             "web_widget:session:" <>
-               Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+           topic: session_topic(Map.get(verified, :page_id))
          })
        )}
     else
       {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, :unauthorized}
     end
   rescue
@@ -95,6 +104,14 @@ defmodule WebWidget.Integration.Protocol do
   catch
     _, _ -> {:error, :unauthorized}
   end
+
+  defp session_topic(page_id) when is_binary(page_id) and byte_size(page_id) > 0,
+    do: "web_widget:session:" <> page_id
+
+  defp session_topic(_),
+    do:
+      "web_widget:session:" <>
+        Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
   @doc false
   def dispatch(integration, event, session) do

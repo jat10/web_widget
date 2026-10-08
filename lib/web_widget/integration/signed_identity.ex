@@ -68,30 +68,23 @@ defmodule WebWidget.Integration.SignedIdentity do
          true <- Enum.all?(Map.keys(claims), &(&1 in @claim_keys)),
          {:ok, init} <-
            InitClaims.normalize(%{user_id: sender}),
+         true <- Map.get(scope, :expected_sender) in [nil, init.user_id],
          true <- is_integer(id) and id > 0 and id == scope.channel_config_id,
          true <- valid_times?(issued, expiry, Map.get(claims, "nbf", issued), now),
          true <- identifier?(nonce) and byte_size(nonce) >= 16,
-         true <- identifier?(Map.get(scope, :page_id)),
-         binding = %{
-           issuer: issuer,
-           audience: audience,
-           widget_id: id,
-           user_id: sender,
-           jti: nonce,
-           iat: issued,
-           exp: expiry
-         },
-         :ok <- BindingStore.claim(binding, scope.page_id, now) do
-      {:ok,
-       %{
-         sender_id: sender,
-         expires_at: expiry,
-         init: init,
-         binding_claims: binding,
-         page_id: scope.page_id
-       }}
+         true <- identifier?(Map.get(scope, :page_id)) do
+      binding = %{
+        issuer: issuer,
+        audience: audience,
+        widget_id: id,
+        user_id: sender,
+        jti: nonce,
+        iat: issued,
+        exp: expiry
+      }
+
+      claim_binding(binding, scope.page_id, now, sender, expiry, init)
     else
-      {:error, :unavailable_or_invalid} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end
   rescue
@@ -99,6 +92,37 @@ defmodule WebWidget.Integration.SignedIdentity do
   end
 
   def verify(_, _, _, _, _), do: {:error, :unauthorized}
+
+  defp claim_binding(binding, page_id, now, sender, expiry, init) do
+    case BindingStore.claim(binding, page_id, now) do
+      :ok ->
+        {:ok,
+         %{
+           sender_id: sender,
+           expires_at: expiry,
+           init: init,
+           binding_claims: binding,
+           page_id: page_id
+         }}
+
+      {:error, :stale_or_revoked} ->
+        revoked_error(binding)
+
+      {:error, :unavailable_or_invalid} ->
+        {:error, :store_unavailable}
+
+      _ ->
+        {:error, :unauthorized}
+    end
+  end
+
+  defp revoked_error(binding) do
+    case BindingStore.revoked?(binding) do
+      true -> {:error, :backend_revoked}
+      false -> {:error, :unauthorized}
+      _ -> {:error, :store_unavailable}
+    end
+  end
 
   defp valid_times?(issued, expiry, not_before, now) do
     is_integer(issued) and is_integer(expiry) and is_integer(not_before) and

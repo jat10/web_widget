@@ -131,14 +131,20 @@ defmodule WebWidget.Runtime do
 
   @doc "Verifies identity through the runtime's configured verifier; never trusts a browser ID."
   def authenticate(widget_id, proof, page_id \\ nil) do
+    authenticate_with_sender(widget_id, proof, page_id, nil)
+  end
+
+  defp authenticate_with_sender(widget_id, proof, page_id, expected_sender) do
     with {:ok, %{allowed_domains: [_ | _]}} <- fetch_widget(widget_id),
          {:ok, %{integration: integration, runtime_ref: runtime_ref}} <-
            delivery_config(widget_id),
-         {:ok, session} <- Protocol.authenticate(integration, proof, runtime_ref, page_id),
+         {:ok, session} <-
+           Protocol.authenticate(integration, proof, runtime_ref, page_id, expected_sender),
          {:ok, _config} <- session_config(session) do
       {:ok, session}
     else
       {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, :unauthorized}
     end
   end
@@ -146,8 +152,10 @@ defmodule WebWidget.Runtime do
   @doc "Replaces authorization for the same process, verified page, widget and sender."
   def renew(%Session{} = current, proof) do
     with true <- is_binary(current.page_id) and is_map(current.binding_claims),
+         :ok <- BindingStore.available?(),
          {:ok, _} <- session_config(current),
-         {:ok, replacement} <- authenticate(current.widget_id, proof, current.page_id),
+         {:ok, replacement} <-
+           authenticate_with_sender(current.widget_id, proof, current.page_id, current.sender_id),
          true <-
            replacement.sender_id == current.sender_id and
              replacement.channel_config_id == current.channel_config_id and
@@ -160,6 +168,7 @@ defmodule WebWidget.Runtime do
            binding_claims: replacement.binding_claims
        }}
     else
+      {:error, :unavailable} -> {:error, :store_unavailable}
       {:error, :store_unavailable} -> {:error, :store_unavailable}
       _ -> {:error, :unauthorized}
     end

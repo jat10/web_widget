@@ -64,10 +64,16 @@ defmodule WebWidget.Integration.SignedIdentityTest do
   test "same-page reconnect survives process replacement but not runtime ownership", ctx do
     {:ok, proof} = sign(ctx)
     assert {:ok, session} = authenticate(ctx, proof)
+    assert session.topic == "web_widget:session:" <> ctx.page_id
 
     assert {:ok, reconnected} = Task.async(fn -> authenticate(ctx, proof) end) |> Task.await()
+    assert reconnected.topic == session.topic
     refute Runtime.authorized?(reconnected)
     assert {:error, :unauthorized} = authenticate(ctx, proof, "other-page")
+
+    {:ok, other_proof} = sign(ctx)
+    assert {:ok, other_page} = authenticate(ctx, other_proof, "other-page")
+    refute other_page.topic == session.topic
 
     assert {:ok, ref} = Runtime.monitor(session)
     stop_supervised!(ctx.spec.id)
@@ -76,6 +82,23 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     refute Runtime.authorized?(session)
 
     assert {:ok, _} = authenticate(ctx, proof)
+  end
+
+  test "rejected cross-user renewal does not bind the replacement JWT", ctx do
+    {:ok, current_proof} = sign(ctx)
+    {:ok, current} = authenticate(ctx, current_proof)
+
+    {:ok, replacement_proof} =
+      SignedIdentity.sign(ctx.key, ctx.config.id, %{user_id: "another-visitor"},
+        issuer: "parent",
+        audience: "widget"
+      )
+
+    assert {:error, :unauthorized} = Runtime.renew(current, replacement_proof)
+    assert Runtime.authorized?(current)
+
+    assert {:ok, %{sender_id: "another-visitor"}} =
+             authenticate(ctx, replacement_proof, ctx.page_id <> "-other")
   end
 
   test "stale first use cannot claim a page and a fresh JWT restores access", ctx do
