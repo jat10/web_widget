@@ -10,11 +10,15 @@
     {
       "text": "Removed connected flash and timer; recovery now clears banner immediately. Updated recovery and locale assertions; removed unused connected styles/translations; rebuilt assets. mix precommit passed with 179 tests. Browser validation underway.",
       "timestamp": "2026-10-09T15:19:49Z"
+    },
+    {
+      "text": "Validation complete: all 8 selected Chromium reconnect/connection status tests passed; asset build and mix precommit passed. Follow-up remains in the existing PR working tree.",
+      "timestamp": "2026-10-09T15:19:57Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Hide connection banner immediately after recovery",
   "type": "task",
-  "updated_at": "2026-10-09T15:19:49Z"
+  "updated_at": "2026-10-09T15:19:57Z"
 }
