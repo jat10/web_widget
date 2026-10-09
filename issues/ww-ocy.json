@@ -10,11 +10,15 @@
     {
       "text": "Audit: existing shared-widget and LiveView tests cover manual recovery, expiry, streaming, and host dispatch; browser gaps were automatic renewal, cross-page replay, endpoint failure/invalid signature, two-tab revocation, and explicit full-path assertions. Three-node RAM/quorum script existed but was absent from CI. Added focused browser assertions/tests and wired script into Elixir CI. Local results: 9 focused Chromium tests, 27 focused ExUnit tests, and three-node script pass. No production edits.",
       "timestamp": "2026-10-08T10:46:38Z"
+    },
+    {
+      "text": "Adding focused browser coverage for automatic renewal at the 300-second lead while the original response completes during pending token acquisition; verify same LiveView PID and no duplicate submission.",
+      "timestamp": "2026-10-09T10:22:41Z"
     }
   ],
   "priority": 1,
   "status": "in_progress",
   "title": "Complete PR 15 authentication integration tests",
   "type": "task",
-  "updated_at": "2026-10-08T10:46:38Z"
+  "updated_at": "2026-10-09T10:22:41Z"
 }
