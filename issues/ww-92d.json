@@ -6,9 +6,15 @@
   "description": "Fetch current main, preserve authentication branch changes while resolving rebase conflicts, validate resolution and push rebased branch using an explicit lease.",
   "id": "ww-92d",
   "labels": [],
+  "comments": [
+    {
+      "text": "Rebased all 20 authentication commits onto origin/main 6c10f7e (same as upstream/main). Preserved self-contained tracked assets, authentication docs, request tracking and delayed-error mock delivery through conflicts. Rebuilt tracked bundles and adapted delayed-error test to authenticated token endpoint. mix assets.build, TypeScript, mix precommit (179 tests) and six focused Chromium scenarios passed across targeted runs. Full browser suite not rerun. Pushed 536c314 to origin/fix/authentication with explicit lease against 9664c3f. Backup branch retained.",
+      "timestamp": "2026-10-09T11:01:14Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Rebase authentication branch onto latest main",
   "type": "task",
-  "updated_at": "2026-10-09T10:54:30Z"
+  "updated_at": "2026-10-09T11:01:14Z"
 }
