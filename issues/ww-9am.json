@@ -10,11 +10,15 @@
     {
       "text": "Diagnosis: failure is test line 561 expecting no banner after real-time disconnect and separate awaited steps. Widget contract intentionally shows banner after 2000ms. Inspector pauses allow timer to fire; expected zero is stale. Same risk at transient Connected assertion. Owner is test timing, not reconnect UI. Installed Playwright clock before navigation and pause after load; explicitly advance grace/retry/restored periods while preserving actual WebSocket/server/mock traffic. Normal Chromium run passed. Validating delayed stepping across browsers next.",
       "timestamp": "2026-10-09T10:20:39Z"
+    },
+    {
+      "text": "Fixed reconnect test timing with Playwright clock, including initial grace, 15-second retry threshold and temporary Connected notice. Actual sockets, authentication, history and host message/reply assertions unchanged. Normal Chromium run passed. Added temporary real 3-second pauses before absence and Connected assertions to simulate Inspector stepping: Chromium, Firefox and WebKit all passed (3/3). Removed diagnostic sleeps afterward; no application changes in this fix. Changes remain uncommitted.",
+      "timestamp": "2026-10-09T10:21:39Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Make reconnect UI timing assertions deterministic in debug mode",
   "type": "task",
-  "updated_at": "2026-10-09T10:20:39Z"
+  "updated_at": "2026-10-09T10:21:39Z"
 }
