@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import { useLiveReact } from "live_react";
 import {
   AssistantRuntimeProvider,
@@ -12,6 +12,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import "../css/widget.css";
+import { connectionSnapshot, subscribeConnection } from "../js/widget-connection";
 
 type Mode = "launcher" | "conversation";
 type Step = {
@@ -75,6 +76,7 @@ function dateLabel(timestamp: string, locale: string, t: Record<string, string>)
 export function WebWidget({ mode, messages, isRunning, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
   const { pushEvent } = useLiveReact();
   const t = config.strings;
+  const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deltas, setDeltas] = useState<Record<string, string>>({});
@@ -123,7 +125,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
     messages: datedMessages,
     convertMessage: message => convertMessage(message, t["Unable to complete response"]),
     isRunning,
-    isSendDisabled: submitting || isRunning || authenticationPending,
+    isSendDisabled: submitting || isRunning || authenticationPending || !connection.ready,
     onNew: async (message) => {
       const text = message.content
         .filter((part) => part.type === "text")
@@ -131,6 +133,10 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
         .join("\n")
         .trim();
       if (!text) return;
+      if (!connectionSnapshot().ready) {
+        runtime.thread.composer.setText(text);
+        return;
+      }
       setSubmitting(true);
       setError(null);
       try {
@@ -198,12 +204,12 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
 
   return (
     <I18n.Provider value={config}><AssistantRuntimeProvider runtime={runtime}>
-      <ThreadPrimitive.Root ref={root} className="zaq-widget" data-mode={mode} data-language={config.locale} data-theme={config.theme} style={{ colorScheme: config.theme === "auto" ? "light dark" : config.theme }} data-multiple-conversations={!!config.multiple_conversations} data-calendar-day={today} aria-label={config.title}>
-        {mode === "conversation" && config.multiple_conversations && <ConversationSidebar conversations={conversations} selectedId={conversationId} disabled={submitting || isRunning} onSelect={id => changeConversation("widget.conversation.select", { id })} onNew={() => changeConversation("widget.conversation.new")} />}
+      <ThreadPrimitive.Root ref={root} className="zaq-widget" data-mode={mode} data-language={config.locale} data-theme={config.theme} data-conversation-id={conversationId ?? ""} data-reconnecting={!connection.ready} style={{ colorScheme: config.theme === "auto" ? "light dark" : config.theme }} data-multiple-conversations={!!config.multiple_conversations} data-calendar-day={today} aria-label={config.title}>
+        {mode === "conversation" && config.multiple_conversations && <ConversationSidebar conversations={conversations} selectedId={conversationId} disabled={submitting || isRunning || !connection.ready} onSelect={id => changeConversation("widget.conversation.select", { id })} onNew={() => changeConversation("widget.conversation.new")} />}
         <div className="zaq-chat-main" key="chat-main">
-        {mode === "conversation" && <Conversation isTyping={isTyping} onClose={() => pushEvent("widget.close", {})} empty={messages.length === 0} />}
+        {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
-        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} error={error || responseError || null} />
+        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} recoveringResponse={submitting || isRunning} error={error || responseError || null} />
         </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider></I18n.Provider>
@@ -222,10 +228,18 @@ function ConversationSidebar({ conversations, selectedId, disabled, onSelect, on
   </aside>;
 }
 
-function FloatingComposer({ mode, config, busy, error }: { mode: Mode; config: Config; busy: boolean; error: string | null }) {
+function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { mode: Mode; config: Config; busy: boolean; recoveringResponse: boolean; error: string | null }) {
   const { strings: t } = useI18n();
+  const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   return (
     <footer className="zaq-widget-footer">
+      {connection.banner && <div className="zaq-connection" data-state={connection.banner}>
+        <p role="status" aria-live="polite" aria-atomic="true">
+          <span className="zaq-connection-dot" aria-hidden="true" />
+          {t[recoveringResponse
+            ? "Reconnecting to recover the response…" : "Connection lost. Reconnecting…"]}
+        </p>
+      </div>}
       {error && <p className="zaq-widget-error" role="alert">{error}</p>}
       <ComposerPrimitive.Root className="zaq-composer">
         <ComposerPrimitive.Input
@@ -234,8 +248,8 @@ function FloatingComposer({ mode, config, busy, error }: { mode: Mode; config: C
           maxLength={config.max_length}
           className="zaq-composer-input"
         />
-        <ComposerPrimitive.Send className="zaq-composer-send" disabled={busy} aria-label={t["Send message"]}>
-          {busy ? t["Working…"] : t["Send"]}
+        <ComposerPrimitive.Send className="zaq-composer-send" disabled={busy || !connection.ready} aria-label={t["Send message"]}>
+          {busy && connection.ready ? t["Working…"] : t["Send"]}
         </ComposerPrimitive.Send>
       </ComposerPrimitive.Root>
       <div className="zaq-widget-signature" dir="ltr">

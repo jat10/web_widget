@@ -10,6 +10,7 @@ attribute. You only need to override the properties you want to change.
 <script
   src="http://localhost:4000/web_widget/assets/embed.js"
   data-widget-id="13"
+  data-token-url="/api/widget-token"
   stylesheet-url="/widget-brand.css"
   defer>
 </script>
@@ -17,6 +18,9 @@ attribute. You only need to override the properties you want to change.
 
 The stylesheet loads **inside the iframe**. Adding it only to the parent page does
 not style the widget, because CSS does not cross the iframe boundary.
+Authenticated installations fetch the initial identity token from the parent
+page's same-origin `data-token-url`; the stylesheet is delivered during iframe
+bootstrap before public `zaq:ready`. Neither URL contains the connector key.
 
 - `/widget-brand.css` resolves against the parent page's origin.
 - `./styles/widget.css` resolves against the parent document's base URL, including
@@ -139,6 +143,7 @@ The default is `light`. `auto` follows browser appearance. The widget manages
 <script
   src="http://localhost:4000/web_widget/assets/embed.js"
   data-widget-id="13"
+  data-token-url="/api/widget-token"
   iframe-location-id="#zaq-widget"
   stylesheet-url="/widget-brand.css"
   defer>
@@ -152,7 +157,7 @@ the floating launcher and full-screen conversation behavior remain in effect.
 ## Scope of customization
 
 These 18 custom properties are the existing styling controls in
-[`assets/css/widget.css`](assets/css/widget.css). There is no CSS-property
+[`assets/css/widget.css`](../assets/css/widget.css). There is no CSS-property
 allowlist enforced on the stylesheet: normal CSS selectors also work inside the
 iframe, but internal class names and markup can change. Prefer the documented
 custom properties for brand customization.

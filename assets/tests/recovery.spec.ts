@@ -38,7 +38,8 @@ async function embed(page: Page, user: string, id = "test-widget", multiple = fa
   return widget;
 }
 
-test("chat submission times out after five minutes and restores the draft", async ({ page, request }) => {
+test("application submission watchdog times out after five minutes and restores the draft", async ({ page, request }) => {
+  await page.clock.install();
   let submissionHeld = false;
   await page.routeWebSocket(/\/live\/websocket/, socket => {
     const server = socket.connectToServer();
@@ -54,7 +55,14 @@ test("chat submission times out after five minutes and restores the draft", asyn
   const id = await session(request);
   await page.goto("/widget/missing");
   const widget = await embed(page, id);
-  await page.clock.install();
+  await widget.locator("body").evaluate(() => {
+    const channel = (window as any).liveSocket.main.channel;
+    const push = channel.push.bind(channel);
+    // Isolate the application's five-minute watchdog from Phoenix's separate
+    // 30-second push timeout, which disconnects and reloads the page first.
+    channel.push = (event: string, payload: any, timeout: number) =>
+      push(event, payload, event === "event" && payload.event === "widget.submit" ? 600000 : timeout);
+  });
   const input = widget.getByRole("textbox", { name: "Message", exact: true });
   await input.fill("Wait for acceptance");
   await input.press("Enter");
@@ -67,6 +75,7 @@ test("chat submission times out after five minutes and restores the draft", asyn
   await page.clock.fastForward(2000);
   await expect(widget.getByRole("alert")).toHaveText("Connection interrupted. Please try again.");
   await expect(input).toHaveValue("Wait for acceptance");
+  await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-reconnecting", "false");
   await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
   expect((await events(request, id)).filter(event => event.type === "message.create")).toHaveLength(0);
 });

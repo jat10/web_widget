@@ -15,7 +15,7 @@ defmodule WebWidget.Runtime do
   use GenServer
 
   alias WebWidget.Embedding.Origins
-  alias WebWidget.Integration.{Protocol, Session}
+  alias WebWidget.Integration.{BindingStore, ControlProof, Protocol, Session}
 
   @widget_fields [
     :widget_id,
@@ -50,6 +50,72 @@ defmodule WebWidget.Runtime do
     end
   end
 
+  @doc "Verifies a backend disconnect proof, commits the cutoff, then notifies matching sessions."
+  def disconnect(widget_id, user_id, proof) when is_binary(widget_id) and is_binary(user_id) do
+    with {id, ""} <- Integer.parse(widget_id),
+         true <- id > 0 and Integer.to_string(id) == widget_id,
+         {:ok, %{integration: %Protocol{} = integration, pubsub_server: pubsub}} <-
+           delivery_config(widget_id),
+         true <- is_binary(integration.control_key),
+         {:ok, %{jti: nonce, iat: issued}} <-
+           ControlProof.verify(
+             integration.control_key,
+             integration.control_issuer,
+             integration.control_audience,
+             proof,
+             id,
+             user_id
+           ),
+         {:ok, cutoff, _created} <-
+           BindingStore.revoke_user(
+             integration.control_issuer,
+             id,
+             user_id,
+             nonce,
+             issued,
+             System.system_time(:second)
+           ),
+         :ok <-
+           Phoenix.PubSub.broadcast(
+             pubsub,
+             revocation_topic(widget_id, user_id),
+             {:widget_backend_revoked, widget_id, user_id, cutoff}
+           ) do
+      {:ok, cutoff}
+    else
+      {:error, :unavailable_or_invalid} -> {:error, :unavailable}
+      {:error, :stale_control_request} -> {:error, :unauthorized}
+      {:error, :unavailable} -> {:error, :unavailable}
+      _ -> {:error, :unauthorized}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
+  def disconnect(_, _, _), do: {:error, :unauthorized}
+
+  def backend_revoked?(%Session{binding_claims: claims}) when is_map(claims),
+    do: BindingStore.revoked?(claims) == true
+
+  def backend_revoked?(_), do: false
+
+  def revocation_topic(widget_id, user_id),
+    do: "web_widget:revocation:" <> widget_id <> ":" <> user_id
+
+  def subscribe_revocation(session) do
+    with {:ok, config} <- session_config(session),
+         topic = revocation_topic(session.widget_id, session.sender_id),
+         :ok <- Phoenix.PubSub.subscribe(config.pubsub_server, topic) do
+      {:ok, {config.pubsub_server, topic}}
+    end
+  rescue
+    _ -> {:error, :unavailable}
+  catch
+    _, _ -> {:error, :unavailable}
+  end
+
   @doc "Invokes a legacy/mock callback; integrated runtimes require dispatch/2 with a session."
   def dispatch(%{widget_id: widget_id} = event) do
     case delivery_config(widget_id) do
@@ -64,17 +130,51 @@ defmodule WebWidget.Runtime do
   end
 
   @doc "Verifies identity through the runtime's configured verifier; never trusts a browser ID."
-  def authenticate(widget_id, proof) do
+  def authenticate(widget_id, proof, page_id \\ nil) do
+    authenticate_with_sender(widget_id, proof, page_id, nil)
+  end
+
+  defp authenticate_with_sender(widget_id, proof, page_id, expected_sender) do
     with {:ok, %{allowed_domains: [_ | _]}} <- fetch_widget(widget_id),
          {:ok, %{integration: integration, runtime_ref: runtime_ref}} <-
            delivery_config(widget_id),
-         {:ok, session} <- Protocol.authenticate(integration, proof, runtime_ref),
+         {:ok, session} <-
+           Protocol.authenticate(integration, proof, runtime_ref, page_id, expected_sender),
          {:ok, _config} <- session_config(session) do
       {:ok, session}
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, :unauthorized}
     end
   end
+
+  @doc "Replaces authorization for the same process, verified page, widget and sender."
+  def renew(%Session{} = current, proof) do
+    with true <- is_binary(current.page_id) and is_map(current.binding_claims),
+         :ok <- BindingStore.available?(),
+         {:ok, _} <- session_config(current),
+         {:ok, replacement} <-
+           authenticate_with_sender(current.widget_id, proof, current.page_id, current.sender_id),
+         true <-
+           replacement.sender_id == current.sender_id and
+             replacement.channel_config_id == current.channel_config_id and
+             replacement.runtime_ref == current.runtime_ref and
+             replacement.page_id == current.page_id do
+      {:ok,
+       %{
+         current
+         | expires_at: replacement.expires_at,
+           binding_claims: replacement.binding_claims
+       }}
+    else
+      {:error, :unavailable} -> {:error, :store_unavailable}
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
+      _ -> {:error, :unauthorized}
+    end
+  end
+
+  def renew(_, _), do: {:error, :unauthorized}
 
   @doc "Dispatches an internal request using a verified, process-bound session."
   def dispatch(event, session) do

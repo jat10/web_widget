@@ -10,7 +10,7 @@ defmodule WebWidget.Integration.Protocol do
   alias WebWidget.Integration.{InitClaims, Session}
 
   @enforce_keys [:hooks, :pubsub_server, :identity_verifier]
-  defstruct @enforce_keys
+  defstruct @enforce_keys ++ [control_key: nil, control_issuer: nil, control_audience: nil]
 
   @constructors [message: 1, command: 1, context: 2, delivery: 1, response: 1]
   @events %{
@@ -47,7 +47,10 @@ defmodule WebWidget.Integration.Protocol do
        %__MODULE__{
          hooks: Map.take(hooks, [:widget_id, :sink_mfa | Keyword.keys(@constructors)]),
          pubsub_server: server,
-         identity_verifier: verifier
+         identity_verifier: verifier,
+         control_key: Keyword.get(opts, :control_key),
+         control_issuer: Keyword.get(opts, :control_issuer),
+         control_audience: Keyword.get(opts, :control_audience)
        }}
     else
       _ -> {:error, :invalid_integration_config}
@@ -57,16 +60,25 @@ defmodule WebWidget.Integration.Protocol do
   def new(_, _), do: {:error, :invalid_integration_config}
 
   @doc false
-  def authenticate(integration, proof, runtime_ref) do
+  def authenticate(integration, proof, runtime_ref, page_id \\ nil) do
+    authenticate(integration, proof, runtime_ref, page_id, nil)
+  end
+
+  def authenticate(integration, proof, runtime_ref, page_id, expected_sender) do
     id = integration.hooks.widget_id
-    scope = %{widget_id: Integer.to_string(id), channel_config_id: id}
+    scope = %{widget_id: Integer.to_string(id), channel_config_id: id, page_id: page_id}
+
+    verify_scope =
+      if is_binary(expected_sender),
+        do: Map.put(scope, :expected_sender, expected_sender),
+        else: scope
 
     with {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
-           invoke(integration.identity_verifier, [proof, scope]),
+           invoke(integration.identity_verifier, [proof, verify_scope]),
          true <- identifier?(sender),
+         true <- expected_sender in [nil, sender],
          true <- is_integer(expiry) and expiry > System.system_time(:second),
-         {:ok, init} <-
-           InitClaims.normalize(Map.get(verified, :init, %{user_id: String.trim(sender)})),
+         {:ok, init} <- InitClaims.normalize(%{user_id: String.trim(sender)}),
          true <- init.user_id == String.trim(sender) do
       {:ok,
        struct!(
@@ -75,14 +87,16 @@ defmodule WebWidget.Integration.Protocol do
            sender_id: String.trim(sender),
            expires_at: expiry,
            init: init,
+           binding_claims: Map.get(verified, :binding_claims),
+           page_id: Map.get(verified, :page_id),
            runtime_ref: runtime_ref,
            owner: self(),
-           topic:
-             "web_widget:session:" <>
-               Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+           topic: session_topic(Map.get(verified, :page_id))
          })
        )}
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, :unauthorized}
     end
   rescue
@@ -90,6 +104,14 @@ defmodule WebWidget.Integration.Protocol do
   catch
     _, _ -> {:error, :unauthorized}
   end
+
+  defp session_topic(page_id) when is_binary(page_id) and byte_size(page_id) > 0,
+    do: "web_widget:session:" <> page_id
+
+  defp session_topic(_),
+    do:
+      "web_widget:session:" <>
+        Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
   @doc false
   def dispatch(integration, event, session) do

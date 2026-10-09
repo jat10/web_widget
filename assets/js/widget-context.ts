@@ -1,5 +1,9 @@
 import { ViewHook } from "phoenix_live_view";
-import { stylesheetURL } from "./widget-stylesheet";
+import {
+  acceptConversationId, acceptIdentityToken, currentConversationId, postToParent, registerWidgetHandler, setPublicReady,
+  unregisterWidgetHandler, waitForStylesheet,
+} from "./widget-bootstrap";
+import { connectionLost, connectionReady, connectionRevoked } from "./widget-connection";
 
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
@@ -9,15 +13,15 @@ const nonblank = (value: unknown): value is string => typeof value === "string" 
 
 export class WidgetContext extends ViewHook {
   private accepted = false;
-  private ready = false;
+  private connected = true;
+  private connectionGeneration = 0;
   private contextTimer?: number;
   private allowedDomains: string[] = [];
   private queue = Promise.resolve();
-  private parentOrigin?: string;
 
   private reportError(reason: string) {
     if (this.el.dataset.authenticated === "true") {
-      console.error(`[WebWidget] ${reason} Obtain a fresh identity_token from your authenticated backend and call zaq.widget.init. Never send the connector key to the browser.`);
+      console.error(`[WebWidget] ${reason} Obtain a fresh identity_token from your authenticated backend and call zaq.widget.connect. Never send the connector key to the browser.`);
       return;
     }
     console.error(`[WebWidget] ${reason} The chat requires a valid user_id. In the parent page, listen for "zaq.widget.ready", verify event.source === iframe.contentWindow and event.origin === the widget origin, then call iframe.contentWindow.postMessage({ type: "zaq.widget.init", user_id: "user_123", prompt_context: "Current page: /billing", conversation_id: null }, widgetOrigin). prompt_context must be a string or null. Use the exact widget origin; the parent origin must be listed in the widget’s allowed_domains.`);
@@ -25,44 +29,40 @@ export class WidgetContext extends ViewHook {
 
   private receiveContext = (event: MessageEvent) => {
     if (window.parent === window || event.source !== window.parent || !this.allowedDomains.includes(event.origin)) return;
-    if (event.data?.type === "zaq.widget.stylesheet") {
-      try {
-        const url = event.data.url === null ? null : stylesheetURL(event.data.url);
-        const existing = document.getElementById("zaq-widget-stylesheet") as HTMLLinkElement | null;
-        if (url === null) { existing?.remove(); return; }
-        if (existing?.href === url) return;
-        const link = existing || document.createElement("link");
-        link.id = "zaq-widget-stylesheet";
-        link.rel = "stylesheet";
-        link.href = url;
-        if (!existing) document.head.append(link);
-      } catch (error) {
-        console.error("[WebWidget] Invalid stylesheet-url.", error);
-      }
-      return;
-    }
-    if (event.data?.type === "zaq.widget.ready.request") {
-      if (this.ready) window.parent.postMessage({ type: "zaq.widget.ready" }, event.origin);
-      return;
-    }
-    if (!["zaq.widget.init", "zaq.widget.settings.update", "zaq.widget.settings.get"].includes(event.data?.type)) return;
+    if (!["zaq.widget.connect", "zaq.widget.init", "zaq.widget.context.update", "zaq.widget.settings.update", "zaq.widget.settings.get", "zaq.widget.auth.status"].includes(event.data?.type)) return;
     this.queue = this.queue.then(() => this.receive(event));
   };
 
   private async receive(event: MessageEvent) {
     const data = event.data;
+    let failureReason: string | undefined;
     try {
       let reply: any;
-      if (data.type === "zaq.widget.init") {
+      if (data.type === "zaq.widget.auth.status") {
+        this.respond(event, await this.dispatch("widget.auth.status", {}));
+        return;
+      }
+      if (data.type === "zaq.widget.context.update") {
+        if (Object.keys(data).some(key => !["type", "request_id", "conversation_id", "prompt_context"].includes(key))) {
+          throw new Error("Unsupported context field.");
+        }
+        const reply = await this.dispatch("widget.context.update", {
+          conversation_id: data.conversation_id ?? null,
+          prompt_context: data.prompt_context ?? null,
+        });
+        this.respond(event, reply);
+        return;
+      }
+      if (data.type === "zaq.widget.connect" || data.type === "zaq.widget.init") {
         const authenticated = this.el.dataset.authenticated === "true";
-        if (authenticated && !nonblank(data.identity_token)) throw new Error("Missing identity_token in zaq.widget.init.");
+        if (authenticated && !nonblank(data.identity_token)) throw new Error("Missing identity_token in zaq.widget.connect.");
         if (!authenticated && !nonblank(data.user_id)) throw new Error("Missing or invalid user_id in zaq.widget.init.");
         const allowed = authenticated
           ? ["type", "request_id", "identity_token"]
           : ["type", "request_id", "user_id", "conversation_id", "prompt_context"];
         if (Object.keys(data).some(key => !allowed.includes(key))) throw new Error("Unsupported init field. Sign initialization context in the token; use updateSettings for presentation.");
         if (authenticated) {
-          reply = await this.dispatch("widget.context", { identity_token: data.identity_token });
+          reply = await this.dispatch(this.accepted ? "widget.auth.renew" : "widget.context", { identity_token: data.identity_token });
         } else {
           const conversation_id = data.conversation_id ?? null;
           const prompt_context = data.prompt_context ?? null;
@@ -71,27 +71,45 @@ export class WidgetContext extends ViewHook {
           reply = await this.dispatch("widget.context", { user_id: data.user_id, conversation_id, prompt_context });
         }
         if (reply.ok) {
+          if (authenticated) acceptIdentityToken(data.identity_token);
           this.accepted = true;
-          this.parentOrigin = event.origin;
           window.clearTimeout(this.contextTimer);
         }
       } else {
         reply = await this.dispatch(data.type === "zaq.widget.settings.get" ? "widget.settings.get" : "widget.settings.update", { settings: data.settings });
       }
-      if (!reply.ok) throw new Error(reply.error);
-      sessionSettings = reply.settings;
-      hasSettings = true;
-      await this.applyDocumentSettings();
-      this.respond(event, { ok: true, settings: sessionSettings });
+      if (!reply.ok) {
+        failureReason = reply.reason;
+        throw new Error(reply.error || reply.reason || "Widget request rejected.");
+      }
+      if (reply.settings) {
+        sessionSettings = reply.settings;
+        hasSettings = true;
+        await this.applyDocumentSettings();
+      }
+      if (reply.expires_at) {
+        postToParent("zaq.widget.authenticated", this.metadata(reply));
+        void this.restoreAndAnnounce();
+      }
+      this.respond(event, { ok: true, settings: sessionSettings, ...this.metadata(reply) });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Widget request failed.";
-      this.respond(event, { ok: false, error: message });
-      if (data.type === "zaq.widget.init") this.reportError(message);
+      this.respond(event, { ok: false, error: message, reason: failureReason });
+      if (data.type === "zaq.widget.init" || data.type === "zaq.widget.connect") this.reportError(message);
     }
   }
 
   private respond(event: MessageEvent, reply: object) {
     if (nonblank(event.data.request_id)) window.parent.postMessage({ type: "zaq.widget.result", request_id: event.data.request_id, ...reply }, event.origin);
+  }
+
+  private metadata(reply: any) {
+    return {
+      expires_at: reply.expires_at,
+      refresh_at: reply.refresh_at,
+      server_time: reply.server_time,
+      credential_id: reply.credential_id,
+    };
   }
 
   private dispatch(name: string, params: object): Promise<any> {
@@ -114,7 +132,9 @@ export class WidgetContext extends ViewHook {
     await new Promise<void>((resolve, reject) => {
       const matches = () => {
         const root = document.querySelector<HTMLElement>(".zaq-widget");
-        return root?.dataset.language === sessionSettings.language && root?.dataset.theme === sessionSettings.theme;
+        const conversation = currentConversationId();
+        return root?.dataset.language === sessionSettings.language && root?.dataset.theme === sessionSettings.theme &&
+          (!conversation || this.el.dataset.authenticated !== "true" || root.dataset.conversationId === conversation);
       };
       if (matches()) return resolve();
       const observer = new MutationObserver(() => {
@@ -127,23 +147,61 @@ export class WidgetContext extends ViewHook {
 
   mounted() {
     this.allowedDomains = JSON.parse(this.el.dataset.allowedDomains || "[]");
+    this.accepted = this.el.dataset.authorized === "true";
     this.handleEvent("widget.conversation", data => {
-      if (this.parentOrigin) window.parent.postMessage({ type: "zaq.widget.conversation", ...data }, this.parentOrigin);
+      if (this.el.dataset.authenticated === "true" && nonblank(data.conversation_id)) {
+        acceptConversationId(data.conversation_id);
+      }
+      postToParent("zaq.widget.conversation", data);
     });
-    this.handleEvent("widget.authentication.required", () => {
+    this.handleEvent("widget.authentication.accepted", data => {
+      this.accepted = true;
+      postToParent("zaq.widget.authenticated", this.metadata(data));
+      void this.restoreAndAnnounce();
+    });
+    this.handleEvent("widget.authentication.required", data => {
       this.accepted = false;
-      if (this.parentOrigin) window.parent.postMessage({ type: "zaq.widget.authentication.required" }, this.parentOrigin);
+      setPublicReady(false);
+      postToParent("zaq.widget.authentication.required", { reason: data.reason || "expired" });
+      if (data.reason === "backend_revoked") {
+        connectionRevoked();
+        const alert = document.createElement("div");
+        alert.id = "widget-backend-revoked";
+        alert.setAttribute("role", "alert");
+        alert.textContent = "Refresh the page to reconnect.";
+        alert.style.cssText = "position:fixed;inset:0;z-index:2147483647;display:grid;place-items:center;background:#fff;color:#111;font:16px system-ui;text-align:center;padding:24px";
+        document.body.append(alert);
+        window.setTimeout(() => (window as any).liveSocket?.disconnect(), 0);
+      }
     });
-    window.addEventListener("message", this.receiveContext);
+    registerWidgetHandler(this.receiveContext);
+    if (this.accepted) {
+      const expires_at = Number(this.el.dataset.authExpiresAt);
+      const refresh_at = Number(this.el.dataset.authRefreshAt);
+      const server_time = Number(this.el.dataset.authServerTime);
+      if (Number.isFinite(expires_at) && expires_at > 0) {
+        postToParent("zaq.widget.authenticated", {
+          expires_at, refresh_at, server_time,
+          credential_id: this.el.dataset.authCredentialId,
+        });
+      }
+    }
     void this.restoreAndAnnounce();
   }
 
   disconnected() {
-    this.ready = false;
-    for (const origin of this.allowedDomains) window.parent.postMessage({ type: "zaq.widget.disconnected" }, origin);
+    this.connected = false;
+    this.connectionGeneration++;
+    if (this.el.dataset.authenticated === "true") this.accepted = false;
+    connectionLost();
+    setPublicReady(false);
+    postToParent("zaq.widget.disconnected", { reason: "network" });
   }
 
   reconnected() {
+    this.connected = true;
+    if (this.el.dataset.authenticated === "true") this.accepted = this.el.dataset.authorized === "true";
+    postToParent("zaq.widget.bootstrap.ready");
     void this.restoreAndAnnounce();
   }
 
@@ -157,19 +215,30 @@ export class WidgetContext extends ViewHook {
   }
 
   destroyed() {
-    this.ready = false;
+    this.connected = false;
+    this.connectionGeneration++;
     window.clearTimeout(this.contextTimer);
-    window.removeEventListener("message", this.receiveContext);
+    unregisterWidgetHandler(this.receiveContext);
   }
 
-  private announceReady() {
-    this.ready = true;
+  private async announceReady() {
+    const generation = this.connectionGeneration;
+    if (!this.connected) return;
+    if (this.el.dataset.authenticated === "true" && !this.accepted) return;
+    await waitForStylesheet();
+    if (this.el.dataset.authenticated === "true") {
+      try { await this.applyDocumentSettings(); }
+      catch { return; }
+    }
+    if (!this.connected || generation !== this.connectionGeneration ||
+        (this.el.dataset.authenticated === "true" && !this.accepted)) return;
     window.clearTimeout(this.contextTimer);
     if (window.parent === window) {
       this.reportError("No embedding parent found. Open /widget-demo or embed /widget in an iframe.");
       return;
     }
     if (!this.accepted) this.contextTimer = window.setTimeout(() => this.reportError("No valid user_id received within 5 seconds of zaq.widget.ready; the chat remains hidden. Send valid context to continue."), 5000);
-    for (const origin of this.allowedDomains) window.parent.postMessage({ type: "zaq.widget.ready" }, origin);
+    connectionReady();
+    setPublicReady(true);
   }
 }

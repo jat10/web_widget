@@ -2,12 +2,22 @@ defmodule WebWidget.Integration.Chat do
   @moduledoc false
   alias WebWidget.{Adapter, Runtime}
   alias WebWidget.Conversation.State
-  alias WebWidget.Integration.{Diagnostics, Response}
+  alias WebWidget.Integration.{Diagnostics, InitClaims, Response}
 
-  def open(widget_id, %{"identity_token" => proof} = params) when map_size(params) == 1 do
-    with {:ok, session} <- Runtime.authenticate(widget_id, proof),
+  def open(widget_id, params, page_id \\ nil, requested_id \\ nil, expected_sender \\ nil)
+
+  def open(
+        widget_id,
+        %{"identity_token" => proof} = params,
+        page_id,
+        requested_id,
+        expected_sender
+      )
+      when map_size(params) == 1 do
+    with {:ok, session} <- Runtime.authenticate(widget_id, proof, page_id),
+         true <- expected_sender in [nil, session.sender_id],
          {:ok, monitor} <- Runtime.monitor(session) do
-      case subscribe_and_initialize(session, session.init.conversation_id, id(), session.init) do
+      case subscribe_and_initialize(session, requested_id, id(), session.init) do
         {:ok, chat} ->
           {:ok, Map.put(chat, :monitor, monitor)}
 
@@ -16,58 +26,162 @@ defmodule WebWidget.Integration.Chat do
           error
       end
     else
+      {:error, :store_unavailable} -> {:error, :store_unavailable}
+      {:error, :backend_revoked} -> {:error, :backend_revoked}
       _ -> {:error, "Unable to authenticate this widget session."}
     end
   end
 
-  def open(_, _), do: {:error, "Initialization accepts only identity_token."}
+  def open(_, _, _, _, _), do: {:error, "Initialization accepts only identity_token."}
 
   defp subscribe_and_initialize(session, requested, request, params) do
     with {:ok, subscription} <- Runtime.subscribe(session) do
-      response =
-        Runtime.dispatch(
-          %{
-            type: "widget.init",
-            request_id: request,
-            conversation_id: requested,
-            params: %{}
-          },
-          session
-        )
+      case Runtime.subscribe_revocation(session) do
+        {:ok, revocation} ->
+          initialize_subscribed(session, requested, request, params, subscription, revocation)
 
-      with true <- Response.correlated?(response, request),
-           %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
-             response,
-           true <- Runtime.authorized?(session),
-           {:ok, state, positions} <- history(session, requested),
-           true <- Runtime.authorized?(session) do
-        timer =
-          Process.send_after(
-            self(),
-            {:widget_session_expired, session.topic},
-            max(0, session.expires_at * 1000 - System.system_time(:millisecond))
-          )
-
-        {:ok,
-         %{
-           session: session,
-           subscription: subscription,
-           timer: timer,
-           conversation_id: requested,
-           active: nil,
-           state: state,
-           positions: positions,
-           persisted_refs: %{},
-           outcome: nil,
-           prompt_context: params.prompt_context,
-           blocked: false
-         }}
-      else
         _ ->
           Adapter.unsubscribe(subscription)
-          {:error, "Unable to initialize or restore this conversation."}
+          {:error, "Unable to subscribe to widget revocation."}
       end
     end
+  end
+
+  defp initialize_subscribed(session, requested, request, params, subscription, revocation) do
+    response =
+      Runtime.dispatch(
+        %{
+          type: "widget.init",
+          request_id: request,
+          conversation_id: requested,
+          params: %{}
+        },
+        session
+      )
+
+    with true <- Response.correlated?(response, request),
+         %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
+           response,
+         true <- Runtime.authorized?(session),
+         {:ok, state, positions} <- history(session, requested),
+         true <- Runtime.authorized?(session) do
+      generation = make_ref()
+      timer = expiration_timer(session, generation)
+
+      {:ok,
+       %{
+         session: session,
+         subscription: subscription,
+         revocation_subscription: revocation,
+         timer: timer,
+         auth_generation: generation,
+         conversation_id: requested,
+         active: nil,
+         restore_on_terminal: not is_nil(requested),
+         state: state,
+         positions: positions,
+         persisted_refs: %{},
+         outcome: nil,
+         prompt_context: params.prompt_context,
+         blocked: false
+       }}
+    else
+      _ ->
+        Adapter.unsubscribe(subscription)
+        Adapter.unsubscribe(revocation)
+        {:error, "Unable to initialize or restore this conversation."}
+    end
+  end
+
+  def renew(chat, proof) do
+    with {:ok, session} <- Runtime.renew(chat.session, proof) do
+      generation = make_ref()
+      timer = expiration_timer(session, generation)
+      Process.cancel_timer(chat.timer)
+      {:ok, %{chat | session: session, timer: timer, auth_generation: generation}}
+    end
+  end
+
+  def update_context(chat, attrs) when is_map(attrs) do
+    with {:ok, context} <-
+           InitClaims.normalize(Map.put(attrs, :user_id, chat.session.sender_id)),
+         true <- is_nil(chat.active),
+         true <- Runtime.authorized?(chat.session) do
+      requested = context.conversation_id
+
+      cond do
+        is_nil(requested) and is_nil(chat.conversation_id) and not chat.blocked ->
+          {:ok, %{chat | prompt_context: context.prompt_context}}
+
+        is_binary(requested) and requested == chat.conversation_id and not chat.blocked ->
+          {:ok, chat}
+
+        is_binary(requested) ->
+          resume(chat, requested)
+
+        true ->
+          {:error, :invalid_context}
+      end
+    else
+      _ -> {:error, :invalid_context}
+    end
+  end
+
+  def update_context(_, _), do: {:error, :invalid_context}
+
+  defp resume(chat, requested) do
+    request = id()
+
+    response =
+      Runtime.dispatch(
+        %{type: "widget.init", request_id: request, conversation_id: requested, params: %{}},
+        chat.session
+      )
+
+    with true <- Response.correlated?(response, request),
+         %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
+           response,
+         true <- Runtime.authorized?(chat.session),
+         {:ok, state, positions} <- history(chat.session, requested),
+         true <- Runtime.authorized?(chat.session) do
+      {:ok,
+       %{
+         chat
+         | conversation_id: requested,
+           state: state,
+           positions: positions,
+           prompt_context: nil,
+           blocked: false,
+           outcome: nil,
+           persisted_refs: %{}
+       }}
+    else
+      _ -> {:error, :invalid_context}
+    end
+  end
+
+  def authorization_metadata(chat) do
+    expiry = chat.session.expires_at
+
+    lead =
+      :web_widget
+      |> Application.get_env(:authentication, [])
+      |> Keyword.get(:refresh_lead_seconds, 300)
+
+    %{
+      expires_at: expiry,
+      refresh_at: expiry - lead,
+      server_time: System.system_time(:second),
+      credential_id: chat.session.binding_claims && chat.session.binding_claims.jti
+    }
+  end
+
+  defp expiration_timer(session, generation) do
+    Process.send_after(
+      self(),
+      {:widget_session_expired, session.topic, generation},
+      max(0, session.expires_at * 1000 - System.system_time(:millisecond))
+    )
   end
 
   def submit(%{active: nil, blocked: false} = chat, text) do
@@ -111,6 +225,7 @@ defmodule WebWidget.Integration.Chat do
          | conversation_id: conversation,
            prompt_context: nil,
            active: %{request_id: request, message_id: transport, created: false},
+           restore_on_terminal: false,
            state: State.submit(chat.state, message)
        }}
     else
@@ -151,6 +266,22 @@ defmodule WebWidget.Integration.Chat do
     end
   end
 
+  def receive_response(
+        %{active: nil, restore_on_terminal: true, conversation_id: conversation} = chat,
+        event,
+        %{protocol_version: 1, type: :message_complete, conversation_id: conversation} = response
+      ) do
+    with true <- Runtime.authorized?(chat.session),
+         true <- identifier?(response.request_id) and identifier?(response.message_id),
+         {:ok, _} <- Response.encode(event, response, chat.session.widget_id),
+         {:ok, state, positions} <- history(chat.session, conversation),
+         true <- Runtime.authorized?(chat.session) do
+      %{chat | state: state, positions: positions, restore_on_terminal: false}
+    else
+      _ -> chat
+    end
+  end
+
   def receive_response(chat, _, response) do
     Diagnostics.log(:ignored_no_active_request, response)
     chat
@@ -163,6 +294,7 @@ defmodule WebWidget.Integration.Chat do
 
   def close(chat) do
     Adapter.unsubscribe(chat.subscription)
+    Adapter.unsubscribe(chat.revocation_subscription)
     Process.demonitor(chat.monitor, [:flush])
     Process.cancel_timer(chat.timer)
     :ok

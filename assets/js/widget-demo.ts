@@ -8,7 +8,7 @@ if (installation) {
   let initialized = false;
   const params = new URLSearchParams(window.location.search);
   const initialize = () => {
-    if (initialized || !window.zaq?.widget || !document.querySelector("#zaq-widget")) return;
+    if (initialized || !window.zaq?.widget?.isReady() || !document.querySelector("#zaq-widget")) return;
     initialized = true;
     installation.removeEventListener("load", initialize);
     void window.zaq.widget.init({
@@ -21,5 +21,12 @@ if (installation) {
     })).catch(error => console.error("Could not initialize demo widget", error));
   };
   installation.addEventListener("load", initialize, { once: true });
+  window.addEventListener("message", event => {
+    const frame = document.querySelector<HTMLIFrameElement>("#zaq-widget");
+    if (event.data?.type === "zaq.widget.ready" &&
+        event.source === frame?.contentWindow && event.origin === new URL(frame.src).origin) {
+      queueMicrotask(initialize);
+    }
+  });
   initialize();
 }

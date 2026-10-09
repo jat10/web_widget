@@ -1,5 +1,26 @@
-import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings } from "./widget-client";
+import { createWidgetClient, type WidgetInit, type DemoWidgetInit, type WidgetSettings, type WidgetContextUpdate, type TokenProvider } from "./widget-client";
 import { stylesheetURL } from "./widget-stylesheet";
+
+function endpointProvider(path: string): TokenProvider {
+  const url = new URL(path, document.baseURI);
+  if (url.origin !== window.location.origin || !["https:", "http:"].includes(url.protocol) ||
+      url.username || url.password) throw new Error("data-token-url must be a parent same-origin HTTP(S) URL.");
+  return async signal => {
+    const response = await fetch(url, {
+      method: "GET", credentials: "same-origin", cache: "no-store", signal,
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) throw new Error("Widget token endpoint failed.");
+    if (!response.headers.get("cache-control")?.toLowerCase().includes("no-store")) {
+      throw new Error("Widget token endpoint must return Cache-Control: no-store.");
+    }
+    const body = await response.json();
+    if (typeof body?.identity_token !== "string" || !body.identity_token.trim()) {
+      throw new Error("Widget token endpoint did not return identity_token.");
+    }
+    return body.identity_token;
+  };
+}
 
 function createEmbed() {
   let client: ReturnType<typeof createWidgetClient> | undefined;
@@ -8,12 +29,14 @@ function createEmbed() {
   let mountedFrame: HTMLIFrameElement | undefined;
   let container: HTMLDivElement | undefined;
   let stylesheet: string | null = null;
+  let tokenProvider: TokenProvider | undefined;
+  let initialAbort: AbortController | undefined;
 
   function connect() {
     if (client) return client;
     const iframe = mountedFrame || document.getElementById("zaq-widget");
     if (!(iframe instanceof HTMLIFrameElement) || !iframe.getAttribute("src")) {
-      throw new Error('Add an iframe with id="zaq-widget" and a widget src before calling zaq.widget.init().');
+      throw new Error('Add an iframe with id="zaq-widget" and a widget src before calling zaq.widget.connect().');
     }
     const origin = new URL(iframe.src).origin;
     const originalStyle = iframe.getAttribute("style");
@@ -35,7 +58,7 @@ function createEmbed() {
     const resize = (event: MessageEvent) => {
       if (event.source !== iframe.contentWindow || event.origin !== origin) return;
       const data = event.data;
-      if (data?.type === "zaq.widget.ready") {
+      if (data?.type === "zaq.widget.bootstrap.ready") {
         iframe.contentWindow?.postMessage({ type: "zaq.widget.stylesheet", url: stylesheet }, origin);
         return;
       }
@@ -68,7 +91,10 @@ function createEmbed() {
       else iframe.setAttribute("title", originalTitle);
     };
     try {
-      client = createWidgetClient(iframe, iframe.src);
+      const initialToken = new URL(iframe.src).hash
+        ? new URLSearchParams(new URL(iframe.src).hash.slice(1)).get("identity_token") || undefined
+        : undefined;
+      client = createWidgetClient(iframe, iframe.src, { tokenProvider, initialToken });
     } catch (error) {
       cleanup();
       cleanup = undefined;
@@ -78,8 +104,9 @@ function createEmbed() {
   }
 
   return {
-    mount(url: string, selector?: string, stylesheetUrl?: string) {
+    mount(url: string, selector?: string, stylesheetUrl?: string, initialToken?: string) {
       const target = new URL(url);
+      if (initialToken) target.hash = new URLSearchParams({ identity_token: initialToken }).toString();
       const nextStylesheet = stylesheetUrl === undefined ? null : stylesheetURL(stylesheetUrl, document.baseURI);
       if (!["https:", "http:"].includes(target.protocol)) throw new Error("Widget URL must use HTTP(S).");
       let destination: HTMLDivElement | undefined;
@@ -97,7 +124,9 @@ function createEmbed() {
       }
       const frameId = destination?.id === "zaq-widget" ? "zaq-widget-frame" : "zaq-widget";
       const existing = mountedFrame || document.getElementById(frameId);
-      if (existing && (!(existing instanceof HTMLIFrameElement) || existing.src !== target.href)) {
+      const sameFrame = existing instanceof HTMLIFrameElement &&
+        new URL(existing.src).origin + new URL(existing.src).pathname === target.origin + target.pathname;
+      if (existing && !sameFrame) {
         throw new Error(`A different widget already uses #${frameId}.`);
       }
       if (existing && destination && existing.parentElement !== destination) {
@@ -115,10 +144,28 @@ function createEmbed() {
       connect();
       mountedFrame?.contentWindow?.postMessage({ type: "zaq.widget.ready.request" }, target.origin);
     },
+    async mountAuthenticated(url: string, selector?: string, stylesheetUrl?: string) {
+      if (!tokenProvider) throw new Error("Set a token provider before authenticated mounting.");
+      initialAbort?.abort();
+      const controller = new AbortController();
+      initialAbort = controller;
+      const token = await tokenProvider(controller.signal);
+      if (controller.signal.aborted) return;
+      this.mount(url, selector, stylesheetUrl, token);
+    },
+    setTokenProvider(provider: TokenProvider) {
+      tokenProvider = provider;
+      client?.setTokenProvider(provider);
+    },
+    isReady() { return client?.isReady() || false; },
+    async connect(context?: WidgetInit) { return connect().connect(context); },
     async init(context: WidgetInit | DemoWidgetInit) { return connect().init(context); },
     async updateSettings(settings: Partial<WidgetSettings>) { return connect().updateSettings(settings); },
+    async updateContext(context: WidgetContextUpdate) { return connect().updateContext(context); },
     async getSettings() { return connect().getSettings(); },
     dispose() {
+      initialAbort?.abort();
+      initialAbort = undefined;
       client?.dispose();
       cleanup?.();
       ownedFrame?.remove();
@@ -151,7 +198,14 @@ if (script instanceof HTMLScriptElement && script.hasAttribute("data-widget-id")
   const url = new URL(`/widget/${widgetId}`, script.src).href;
   const selector = script.getAttribute("iframe-location-id") ?? undefined;
   const stylesheet = script.getAttribute("stylesheet-url") ?? undefined;
-  const mount = () => window.zaq.widget.mount(url, selector, stylesheet);
+  const tokenUrl = script.getAttribute("data-token-url");
+  if (tokenUrl) window.zaq.widget.setTokenProvider(endpointProvider(tokenUrl));
+  const mount = () => {
+    if (tokenUrl) void window.zaq.widget.mountAuthenticated(url, selector, stylesheet).catch(error => {
+      console.error("[WebWidget] Authenticated mount failed.", error);
+    });
+    else window.zaq.widget.mount(url, selector, stylesheet);
+  };
   if (document.body && (selector === undefined || document.readyState !== "loading")) mount();
   else document.addEventListener("DOMContentLoaded", mount, { once: true });
 }

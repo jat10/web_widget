@@ -9,12 +9,12 @@ ZAQ's [installation handoff](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/do
 and published constructors own the host protocol. This document owns the widget's
 integration decisions and presentation mapping, not a second shared schema.
 
-The package now implements the milestone 1 runtime builder and server-side
-session/ingress boundary. LiveView still uses the plain-map mock callback, eager
-conversation initialization and conversation-topic delivery; those remain
-migration gaps, summarized under [implemented delivery boundary](#implemented-delivery-boundary).
-The [wiring plan](exec-plans/wiring-widget.md) tracks implementation and acceptance.
-Do not infer deployed support from the target contract below.
+The package implements the milestone 2 authenticated chat path and the issue #14
+authentication and cluster decisions below. Host deployment still requires the
+matching token endpoint, router macro, and Mnesia membership configuration.
+The historical [implemented delivery boundary](#implemented-delivery-boundary)
+records earlier migration evidence. The [wiring plan](exec-plans/wiring-widget.md)
+tracks its original acceptance work.
 
 ## Responsibilities and boundary
 
@@ -96,8 +96,8 @@ the supplied base URL; otherwise the deployment must proxy `/widget`,
 `/web_widget/assets` and `/live` at the ZAQ base origin to the package endpoint.
 Only root HTTP(S) origins are supported. The loader creates a single iframe at
 `/widget/<id>` on its own origin and applies the existing layout/client behavior.
-It never invents identity or embeds credentials. Manual iframe initialization
-remains supported. See [host integration](host-integration.md).
+The authenticated loader obtains a fresh backend JWT and delivers it in the
+iframe fragment; manual mounting remains supported through the connect API. See [host integration](host-integration.md).
 
 The optional script attribute `iframe-location-id` is a CSS selector for an
 existing div. Targeted embeds fill that div (the parent supplies its height),
@@ -110,94 +110,161 @@ Manual callers may use `zaq.widget.mount(url, selector)` with the same behavior.
 
 ## Identity, embedding and parent bootstrap
 
-JWT decision: signed initialization uses compact JWT with HS256 only, verified
-by JOSE with an explicit algorithm allowlist. The HMAC key is the exact UTF-8
-connector key shown by ZAQ BO, without Base64 decoding or salt. Header `typ` is
-`JWT`. Required claims are `widget_id` (positive integer), `user_id`, nullable
-`conversation_id` and `prompt_context`, `iss`, `aud`, integer Unix-second `iat`
-and `exp`, and random `jti` (16–255 characters). Lifetime is at most 300 seconds;
-future issuance/expiry violations fail closed. Optional `nbf` is enforced.
-Unknown claims/header extensions and non-HS256 algorithms are rejected. Existing
-Phoenix.Token proofs are not accepted. Issuer/audience/replay/session revocation
-rules remain unchanged.
+The authenticated credential is a compact HS256 JWT signed by the parent
+backend with the exact UTF-8 connector key. JOSE verifies an explicit HS256
+allowlist and JWT type; unsupported headers, algorithms and claims fail closed.
+Required claims are positive integer `widget_id`, nonblank `user_id`, `iss`,
+`aud`, integer Unix-second `iat` and `exp`, and a random 16–255 character
+`jti`. Optional `nbf` is enforced. `conversation_id` and `prompt_context`
+are not identity claims. A token has a configurable lifetime, seven days by
+default, and `exp` must be after `iat`. Configuration must make the lifetime
+longer than the renewal lead (five minutes by default). Tests may use shorter
+configured intervals. The signing key never enters browser code. A browser JWT
+cannot authorize a backend control operation.
 
-Updated initialization decision: the authenticated browser API accepts only
-`init({identity_token})`. The signed token contains `user_id`, `conversation_id`
-and `prompt_context` (the latter two may be nil), alongside widget scope,
-issuer/audience, expiry and nonce. The server derives all initialization context
-from verified claims; unsigned overrides, settings, params and unknown fields
-are rejected. Every future initialization field must be added to the signed
-claim schema and validator. Settings are excluded from init and changed only
-through the separate settings API. Stylesheet URLs are supplied separately by the embed script attribute, never
-through identity initialization. Standalone mock fixtures
-retain their three-field test bootstrap, without settings or params; they cannot
-initialize an integrated ZAQ runtime.
+Package authentication configuration uses `config :web_widget, :authentication`
+with `token_ttl_seconds: 604_800`, `first_binding_window_seconds: 5`,
+`refresh_lead_seconds: 300`, `control_proof_ttl_seconds: 30`, and an explicit
+`replica_nodes` list for the Mnesia cluster. The first-binding window is a
+deployment constant in production; the time values can be shortened for tests.
+Reject invalid configuration at startup, including a token lifetime no longer
+than the renewal lead, duplicate replica names, or a node outside the configured
+membership. The parent backend signs with matching lifetime and issuer/audience.
 
-Milestone 2 implementation decision: opt in with `identity_verifier: :connector_key`.
-The builder binds the resolved connector token privately to `SignedIdentity`.
-Proofs use HS256 JWT with a five-minute maximum lifetime, explicit
-issuer/audience, widget, sender, issue/expiry times and random token ID.
-`SignedIdentity.sign/4` runs only in the parent backend. The browser sends the
-result as `identity_token`; verified `user_id` becomes the internal sender identity.
-Nonce consumption is atomic and node-local, survives connector replacement, and
-permits reuse only by the same LiveView process. A new LiveView/reload therefore
-requires a fresh proof. Deploy a single widget node until a shared replay store is
-configured/implemented. Never put the connector key in browser code.
-Runtime monitoring and expiry timers revoke subscriptions and prevent late delivery.
-JWT expiry keeps the already displayed chat and composer mounted while the parent
-obtains a fresh proof. Sending and inbound response application are blocked during
-renewal; failed renewal leaves the view read-only. Successful same-sender init
-restores authorized history without remounting React. The runtime monitor remains
-active during renewal, so connector revocation/replacement still clears the view.
-Standalone legacy demo fixtures remain isolated from integrated runtimes; shared
-protocol fixtures exercise the production LiveView path without ZAQ dependencies.
+The parent script accepts `data-token-url` and optional `iframe-location-id`
+and `stylesheet-url`. The default token provider sends an authenticated,
+non-cacheable same-origin `GET` request with `credentials: same-origin` and expects
+a JSON object with one
+`identity_token` string. The endpoint must issue a fresh JWT per request and
+set `Cache-Control: no-store`; application-specific headers or CSRF behavior
+may use a custom token-provider callback. The SDK places the initial token in
+the iframe URL fragment. The iframe reads and removes that fragment before
+starting its LiveView connection, retaining the token only in document memory.
+It supplies the token through LiveView connect params; the parent never puts it
+in a query string, cookie, history entry, prompt context or host command.
+A cold-loading iframe can request a fresh token through the bootstrap listener
+if its fragment token has aged out. Retry is bounded and does not reload the
+page in a loop.
 
-An allowed origin and a nonblank browser `user_id` do not authenticate a sender.
-The adapter must verify parent-app identity/session server-side before constructing
-Context, accepting protected operations or subscribing. Keep only the verified
-external sender, scope and expiry in trusted session state. It is not a ZAQ Person
-ID or People bearer. ZAQ separately authorizes the sender against connector and
-conversation ownership on every operation.
+Integrated widgets authenticate during connected mount. Phoenix has already
+verified the signed root LiveView page session before mount; the server binds
+the JWT to that root `socket.id`. The unsigned initial render performs no
+protected host work. Before host dispatch, subscription or history, the server
+verifies signature, scope, times, and a cluster binding transaction. New JWT
+binding requires `0 <= now - iat < 5` seconds, `iat` strictly later than
+the cluster reset and user revocation cutoffs, and `now < exp`. An already
+bound JWT may reconnect on the same verified page after the five-second window
+until expiry, subject to revocation and runtime generation checks. It cannot
+bind another page. An iframe reload creates a new verified page identity and
+obtains a newly issued JWT. The browser cannot supply a binding ID. Each
+connected mount creates a fresh process-owned Session; runtime replacement,
+process ownership and expiry checks still apply. ZAQ separately authorizes the
+selected conversation and every operation.
 
-The parent owns its authenticated session and supplies proof through the widget
-bootstrap through `init({identity_token})`; no `init({user_id})` example alone
-establishes this security property. Signing/key enrollment
-is host configuration, not a shared `widget.authenticate` command. Never retain
-credentials in prompt context, history or canonical routing metadata.
+Binding records are keyed by issuer, audience, widget ID and JTI and retain
+page ID, user ID, `iat` and `exp`. User cutoffs are keyed by issuer, widget ID
+and user ID. A cluster reset cutoff records the earliest permitted issuance
+after complete loss of RAM state. These are package-owned, replicated Mnesia
+`ram_copies`, with majority-protected transactional reads/writes and bounded
+expiry cleanup. Explicitly configured replica membership must establish a
+quorum before initial creation or recovery; an isolated node must not create
+an independent replacement store. A joining or restarting node loads surviving
+state. Unavailable/minority authority fails closed. Complete RAM loss starts
+a new cutoff only when a configured quorum can establish a new cluster. With
+integer-second JWT times, a token issued in the cutoff second requires retry
+with a token from a later second. No host Repo or SQL migration is needed.
 
-The implemented server entry point is `Runtime.authenticate(widget_id, proof)`.
-The configured verifier receives `args ++ [proof, scope]`, where scope contains
-the string widget ID and integer channel configuration ID. It must verify proof
-against that scope and return `{:ok, %{sender_id: external_id, expires_at: unix_seconds,
-init: %{user_id: external_id, conversation_id: id_or_nil, prompt_context: text_or_nil}}}`.
-For custom identity-only verifiers, omitted `init` defaults to the verified sender
-and nil optional fields; no browser data can fill them. To support resume/context,
-custom verifiers must validate and return those signed claims.
-Missing/invalid/expired verification fails closed. The package retains no proof.
-The resulting server-only Session is bound to the calling process and current
-runtime generation. Never construct it from browser maps. `Runtime.dispatch/2`
-and `Runtime.subscribe/1` reject expired, foreign-process and replaced-runtime
-sessions. The shared Chat/LiveView path monitors runtime replacement, schedules
-expiry and unsubscribes on revocation; standalone callers own cleanup.
+A successful mount returns server-authoritative `expires_at`, `refresh_at`
+and `server_time`. Renewal starts five minutes before expiry, configurable
+with the lifetime constraint. The public parent API is
+`zaq.widget.connect`; a temporary deprecated `init` alias may use the same
+path. A new JWT is bound to the same verified page, widget and user, then
+authorization expiry and generation-tagged timers change in place. Renewal
+must preserve the subscription, active request, selected conversation,
+streaming deltas, messages, React component, draft and presentation settings.
+The old binding remains usable by its page until its original expiry, so a
+lost acknowledgement cannot strand a still-authorized session. Failed
+renewal leaves the current session operational until actual expiry. At
+expiry, protected sends and response application stop, and authorized history
+recovery follows reconnection. The five-minute message-submission timeout
+is independent from authentication renewal. A message with unknown outcome
+is never automatically resent.
 
-Both sides check postMessage source and exact origin. Use the iframe origin as
-`targetOrigin`. The ready/ready-request handshake means the hook is listening,
-not that the sender is authenticated. Reject missing, expired or foreign proof;
-reject claimed-user disagreement and browser-selected topics/configuration IDs.
-Reverify on reconnect, enforce expiry while connected and remove subscriptions
-when authorization ends. Renewal must not silently change the session's sender.
+Recovery retires the old Chat's process/topic registrations, runtime monitor,
+and expiry timer before opening its replacement on the same page-stable topics.
+Phoenix PubSub registrations are not reference-counted Chat handles: closing an
+old Chat after subscribing its replacement would remove the replacement too.
+Successful recovery reauthorizes the selected conversation and loads history
+before enabling sends. Initialization/history failure cleans up the replacement
+and leaves protected operations blocked. Proactive renewal continues to update
+the existing Chat in place.
 
-`allowed_domains` denies embedding when absent/empty, including same-origin
-embedding. Enforce CSP `frame-ancestors` and the parent source/origin checks; remove
-conflicting X-Frame-Options only on the widget route. Preserve other CSP directives.
-HTTP framing policy changes require iframe reload. Runtime/identity revocation
-must also block existing sessions from new sends/history/response delivery.
+The bootstrap listener remains available outside the mounted LiveView hook,
+including authentication failure, disconnect and forced revocation. It checks
+the parent window and exact allowed origin. Internal bootstrap readiness means
+the listener can receive presentation settings and authentication; public
+`zaq.widget.ready` follows authentication and React/presentation setup.
+A failed custom stylesheet may fall back to bundled styling. Normal network
+reconnect uses the existing bound JWT without asking the provider for another.
+The SDK deduplicates renewal triggers, retries transient provider failures with
+bounded backoff, discards stale acknowledgements, suspends automatic issuer retries
+while disconnected, and reschedules after
+visibility or network restoration. It replaces its retained credential only
+after server acceptance. A store reset requires a token issued after the
+reset cutoff; temporary store unavailability retries availability without
+repeatedly minting tokens. Revocation is terminal for that session: show
+“Refresh the page to reconnect.” and suppress automatic token requests. SDK
+lifecycle events include a reason, using the existing validated
+`postMessage` result/event convention and exact source/origin checks.
+A correctly signed and scoped credential covered by a user cutoff remains
+`backend_revoked` after expiry. Signature, header, scope, claim shape and timestamp
+consistency are validated before consulting that cutoff. Expired credentials are
+never bound or authorized; an unavailable store reports `store_unavailable`, and
+an expired credential without revocation remains recoverable. Terminal revocation
+requires a parent-page refresh to create a new client, subject to backend approval.
+The browser continues to use the existing LiveView WebSocket.
 
-Verified token claims include `user_id`, `conversation_id` and `prompt_context`.
-Validate their raw values before calling shared constructors:
-invalid optional identifiers can normalize to nil. Reject malformed supplied IDs
-rather than silently treating them as a new conversation. Parent context is ordinary
-user input, never permission, agent selection or privileged prompting.
+The iframe retains its latest selected conversation ID across connected mounts.
+LiveView retains the requested ID even when mount authentication fails, separately
+from a successfully authenticated Chat. It is untrusted context until the host
+accepts it; recovery must not substitute a new conversation when restoration is
+denied. Parent context replay follows newer server-confirmed selections.
+
+The selected conversation ID accompanies message and history requests; ZAQ
+authorizes resume and selection for the verified sender. Validated parent
+prompt context accompanies the first question of a new conversation only and
+remains ordinary input. A small parent context-update API may update that
+input, but cannot change user identity, widget scope, routing authority or
+authentication state. The package retains no credential in durable
+conversation metadata. Standalone demo fixtures remain separate from the
+integrated ZAQ runtime.
+
+A separate `web_widget_api("/widget-api")` router macro mounts package-owned,
+stateless backend controls outside the browser route pipeline. Its disconnect
+operation is `POST /widget-api/:widget_id/disconnect`. A backend proof is an
+HS256 JWT in the `Authorization: Bearer` header, signed with that widget
+connector's configured key. It has a strict claim set: `iss`, control-only
+`aud`, `op: "disconnect"`, `widget_id`, `user_id`, integer `iat` and `exp`, and
+random `jti`. The control audience is `identity_audience <> ":control"`,
+distinct from the browser JWT audience;
+validity is at most 30 seconds by default. The path widget ID and JSON body
+user ID must match the signed claims. Runtime connector lookup supplies the key
+and issuer for that scope. Other operations, unknown claims and ordinary browser
+JWTs are rejected. The request nonce has a replicated idempotency result, so
+retrying the same operation returns the same cutoff rather than advancing it.
+Within one transaction, revocation commits the user cutoff before a scoped
+broadcast. Matching sessions and subscriptions are invalidated, browsers
+notified and widget transports closed. A user JWT issued in the cutoff's
+integer second may need retry in the next second. Host backends must migrate
+their JWT schema and provide the token endpoint before switching to the new
+bootstrap API. Mnesia quorum, reset and recovery requirements are deployment
+configuration, not browser responsibilities.
+
+`allowed_domains` denies embedding when absent or empty, even on the same
+origin. CSP `frame-ancestors`, exact parent source/origin checks and
+HTTP(S)-only stylesheet URL validation remain required. Settings remain
+separate from identity, and neither settings nor parent context can select a
+host topic, connector or internal agent.
 
 ## Inbound communication: web_widget -> ZAQ
 
@@ -286,9 +353,12 @@ bound. If dispatch moves to another process, explicitly buffer this race.
 ## Outbound communication: ZAQ -> web_widget
 
 Subscribe on the configured host PubSub server before the first question using
-a server-generated unpredictable destination authorized for the verified iframe
-session. It must exist without a conversation ID. Keep it stable for that session;
-reconnect creates/reestablishes an authorized subscription after verification.
+a server-derived destination scoped to the verified root `socket.id`. It must
+exist without a conversation ID. Renewal and ordinary reconnect reuse that
+page's destination after verification; an iframe reload receives a new root
+socket ID and destination. The topic is not an authorization credential: verify
+the session and correlate every response before applying it. Integrations
+without a verified page ID retain a fresh random destination per session.
 
 ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
 single ingress and encode once into widget UI events; do not republish into the
@@ -299,6 +369,10 @@ Check protocol version, trusted event mapping, request ID, accepted conversation
 and transport message ID before applying events. Widget ID and sender come from
 the session. Reject stale/foreign responses; unsolicited events cannot switch
 conversations. UI output retains the `response.*` namespace.
+After a connected remount, the accepted request IDs from the former LiveView are
+gone. A valid terminal event for the already authorized conversation may trigger
+a fresh authorized history request; its payload is never applied as a stream
+event without the original request correlation.
 
 ## Outbound payloads
 
@@ -390,19 +464,18 @@ there is no theme-selection CSS variable. ZAQ owns its response language.
 
 The parent may load `/web_widget/assets/embed.js` to expose `zaq.widget` for a
 single iframe (`#zaq-widget`, or `#zaq-widget-frame` when its container owns that ID).
-This wrapper owns outer iframe defaults, validated
-resize handling, and parent scroll locking; it delegates identity and settings
-to the existing client. It requires explicit `init({user_id})` and generates no
-identity. The lower-level module remains available for independent widget instances.
-An allowed parent can send `zaq.widget.ready.request`; a ready hook replies with
-`zaq.widget.ready`. This handshake supports clients attaching after iframe load
-without navigating the iframe again. Source and origin checks apply to the probe.
-
-
-The current explicit `init({user_id})` API above describes presentation/bootstrap
-behavior, not sufficient identity proof for ZAQ v1. Verified bootstrap preserves
-the settings ownership boundary. Browser initialization no longer accepts stylesheet
-params. The embed script supplies optional custom CSS; bundled defaults remain available.
+This wrapper owns outer iframe defaults, validated resize handling and parent
+scroll locking. The authenticated script obtains a backend-issued JWT, while
+`zaq.widget.connect` handles replacement credentials in place. The lower-level
+client remains available for independent widget instances. The internal
+bootstrap-ready handshake supports clients attaching after iframe load without
+navigating it again; public readiness follows authentication and presentation.
+Source and origin checks apply to both stages. The embed script supplies optional
+custom CSS; bundled defaults remain available. Duplicate stylesheet decisions
+retain the active loading promise and link. Replacement or removal settles obsolete
+waiters; readiness follows the current load, error, or three-second fallback.
+Events from a removed link cannot settle its replacement. Authentication proceeds
+independently, and background renewal does not create another public-ready transition.
 
 ## Implemented delivery boundary
 
@@ -434,5 +507,5 @@ Integrated runtimes use only the verified shared path in WidgetLive. A shared ho
 fixture and browser smoke exercise that path, including responses queued before
 acceptance. Legacy standalone demo callbacks remain supported for existing
 consumers, but cannot dispatch to integrated runtimes. See
-[authenticated chat](authenticated-chat.md) for configuration and current
-single-node replay/50-message history limits.
+[authenticated chat](authenticated-chat.md) for the current configuration and
+single-node replay behavior, which issue #14 replaces.

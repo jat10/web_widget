@@ -44,4 +44,13 @@ defmodule WebWidget.Router do
       end
     end
   end
+
+  @doc "Mounts signed backend controls in a separate API pipeline."
+  defmacro web_widget_api(prefix \\ "/widget-api") do
+    quote do
+      scope unquote(prefix), alias: false do
+        post "/:widget_id/disconnect", WebWidget.Integration.ControlAPI, :disconnect
+      end
+    end
+  end
 end

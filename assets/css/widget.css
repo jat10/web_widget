@@ -69,6 +69,10 @@ body.zaq-widget-page { margin: 0; overflow: hidden; }
 .zaq-composer-send { flex-shrink: 0; min-height: 44px; padding: 10px 18px; border: 0; border-radius: calc(var(--zaq-widget-radius) - 7px); background: var(--zaq-widget-primary); color: var(--zaq-widget-on-primary); font: inherit; font-size: 14px; cursor: pointer; transition: opacity 150ms; }
 .zaq-composer-send:hover { opacity: .85; }
 .zaq-composer-send:disabled { opacity: .45; cursor: default; }
+.zaq-connection { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; padding: 10px 12px; border: 1px solid light-dark(#e9ce92, #66512c); border-radius: 10px; background: light-dark(#fff8e8, #241e12); color: light-dark(#75500e, #efc778); font-size: 13px; line-height: 1.5; }
+.zaq-connection p { display: flex; align-items: center; gap: 8px; margin: 0; }
+.zaq-connection-dot { flex: 0 0 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.zaq-widget[data-reconnecting="true"] .zaq-working { display: none; }
 .zaq-composer-send:focus-visible, .zaq-scroll-bottom:focus-visible { outline: 2px solid var(--zaq-widget-primary); outline-offset: 3px; }
 .zaq-scroll-bottom { align-self: center; border: 1px solid currentColor; border-radius: 999px; font-size: 12px; padding: 6px 12px; cursor: pointer; }
 .zaq-scroll-bottom:disabled { display: none; }

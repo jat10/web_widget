@@ -9,7 +9,7 @@ defmodule WebWidget.Integration.RuntimeBuilder do
   The verifier is invoked with its configured arguments followed by proof and
   `%{widget_id: string_id, channel_config_id: integer_id}`. It must verify proof
   and scope and return `{:ok, %{sender_id: external_id, expires_at: unix_seconds,
-  init: %{user_id: external_id, conversation_id: id_or_nil, prompt_context: text_or_nil}}}`.
+  init: %{user_id: external_id}}}`.
   Missing configuration fails closed. No endpoint or PubSub server is started.
   """
 
@@ -61,11 +61,11 @@ defmodule WebWidget.Integration.RuntimeBuilder do
       if SignedIdentity.valid_key?(key) and
            is_binary(issuer) and issuer != "" and is_binary(audience) and audience != "" do
         {:ok,
-         Keyword.put(
-           opts,
-           :identity_verifier,
-           {SignedIdentity, :verify, [key, issuer, audience]}
-         )}
+         opts
+         |> Keyword.put(:identity_verifier, {SignedIdentity, :verify, [key, issuer, audience]})
+         |> Keyword.put(:control_key, key)
+         |> Keyword.put(:control_issuer, issuer)
+         |> Keyword.put(:control_audience, audience <> ":control")}
       else
         {:error, :invalid_identity_config}
       end

@@ -1,36 +1,34 @@
 defmodule WebWidget.Integration.SignedIdentity do
   @moduledoc """
-  Short-lived HS256 JWT parent-backend identity assertions. Never expose the signing key.
+  HS256 JWT parent-backend identity assertions. Never expose the signing key.
 
   Configure `identity_verifier: :connector_key`, `identity_issuer` and
   `identity_audience` in the integration options. Mint a fresh proof for each
   iframe connection using `sign/4` on the authenticated parent backend.
-  The third argument is a map containing `:user_id` and optional
-  `:conversation_id` and `:prompt_context` (default nil). No other init fields
-  are accepted. Standard JWT claims bind issuer, audience, issue/expiry times
+  The third argument is a map containing only `:user_id`.
+  Standard JWT claims bind issuer, audience, issue/expiry times
   and a random token ID. Use the raw connector key as the HMAC secret, without
   salt or Base64 decoding. Signed tokens provide integrity, not confidentiality.
   """
-  alias WebWidget.Integration.{InitClaims, ReplayGuard}
+  alias WebWidget.Integration.{BindingStore, InitClaims}
 
-  @claim_keys ~w(widget_id user_id conversation_id prompt_context iss aud iat exp jti nbf)
-  @max_age 300
+  @claim_keys ~w(widget_id user_id iss aud iat exp jti nbf)
+  @default_age 604_800
   @max_proof_bytes 200_000
 
   def sign(key, widget_id, init, opts) do
     now = System.system_time(:second)
-    ttl = Keyword.get(opts, :ttl, @max_age)
+    ttl = Keyword.get(opts, :ttl, configured_max_age())
 
-    with {:ok, init} <- InitClaims.normalize(init),
+    with true <- is_map(init) and Map.keys(init) == [:user_id],
+         {:ok, init} <- InitClaims.normalize(init),
          true <-
            valid_key?(key) and is_integer(widget_id) and widget_id > 0 and
-             is_integer(ttl) and ttl in 1..@max_age and
+             is_integer(ttl) and ttl in 1..configured_max_age() and
              identifier?(opts[:issuer]) and identifier?(opts[:audience]) do
       claims = %{
         "widget_id" => widget_id,
         "user_id" => init.user_id,
-        "conversation_id" => init.conversation_id,
-        "prompt_context" => init.prompt_context,
         "iss" => opts[:issuer],
         "aud" => opts[:audience],
         "iat" => now,
@@ -61,8 +59,6 @@ defmodule WebWidget.Integration.SignedIdentity do
          %{
            "widget_id" => id,
            "user_id" => sender,
-           "conversation_id" => conversation,
-           "prompt_context" => prompt,
            "iss" => ^issuer,
            "aud" => ^audience,
            "iat" => issued,
@@ -71,16 +67,25 @@ defmodule WebWidget.Integration.SignedIdentity do
          } <- claims,
          true <- Enum.all?(Map.keys(claims), &(&1 in @claim_keys)),
          {:ok, init} <-
-           InitClaims.normalize(%{
-             user_id: sender,
-             conversation_id: conversation,
-             prompt_context: prompt
-           }),
+           InitClaims.normalize(%{user_id: sender}),
+         true <- Map.get(scope, :expected_sender) in [nil, init.user_id],
          true <- is_integer(id) and id > 0 and id == scope.channel_config_id,
          true <- valid_times?(issued, expiry, Map.get(claims, "nbf", issued), now),
          true <- identifier?(nonce) and byte_size(nonce) >= 16,
-         :ok <- ReplayGuard.claim({id, nonce}, expiry, self()) do
-      {:ok, %{sender_id: sender, expires_at: expiry, init: init}}
+         true <- identifier?(Map.get(scope, :page_id)) do
+      binding = %{
+        issuer: issuer,
+        audience: audience,
+        widget_id: id,
+        user_id: sender,
+        jti: nonce,
+        iat: issued,
+        exp: expiry
+      }
+
+      if expiry > now,
+        do: claim_binding(binding, scope.page_id, now, sender, expiry, init),
+        else: revoked_error(binding)
     else
       _ -> {:error, :unauthorized}
     end
@@ -90,10 +95,47 @@ defmodule WebWidget.Integration.SignedIdentity do
 
   def verify(_, _, _, _, _), do: {:error, :unauthorized}
 
+  defp claim_binding(binding, page_id, now, sender, expiry, init) do
+    case BindingStore.claim(binding, page_id, now) do
+      :ok ->
+        {:ok,
+         %{
+           sender_id: sender,
+           expires_at: expiry,
+           init: init,
+           binding_claims: binding,
+           page_id: page_id
+         }}
+
+      {:error, :stale_or_revoked} ->
+        revoked_error(binding)
+
+      {:error, :unavailable_or_invalid} ->
+        {:error, :store_unavailable}
+
+      _ ->
+        {:error, :unauthorized}
+    end
+  end
+
+  defp revoked_error(binding) do
+    case BindingStore.revoked?(binding) do
+      true -> {:error, :backend_revoked}
+      false -> {:error, :unauthorized}
+      _ -> {:error, :store_unavailable}
+    end
+  end
+
   defp valid_times?(issued, expiry, not_before, now) do
     is_integer(issued) and is_integer(expiry) and is_integer(not_before) and
-      issued <= now and not_before <= now and expiry > now and
-      expiry > issued and expiry - issued <= @max_age
+      issued <= now and not_before <= now and not_before < expiry and
+      expiry > issued and expiry - issued <= configured_max_age()
+  end
+
+  defp configured_max_age do
+    :web_widget
+    |> Application.get_env(:authentication, [])
+    |> Keyword.get(:token_ttl_seconds, @default_age)
   end
 
   def valid_key?(key) when is_binary(key),
