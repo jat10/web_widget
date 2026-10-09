@@ -10,12 +10,6 @@ msgstr "انقطع الاتصال. جارٍ إعادة الاتصال…"
 msgid "Reconnecting to recover the response…"
 msgstr "جارٍ إعادة الاتصال لاستعادة الرد…"
 
-msgid "Connected"
-msgstr "متصل"
-
-msgid "Retry connection"
-msgstr "إعادة محاولة الاتصال"
-
 msgid "Ask a question…"
 msgstr "اطرح سؤالًا…"
 

@@ -10,12 +10,6 @@ msgstr "Connection lost. Reconnecting…"
 msgid "Reconnecting to recover the response…"
 msgstr "Reconnecting to recover the response…"
 
-msgid "Connected"
-msgstr "Connected"
-
-msgid "Retry connection"
-msgstr "Retry connection"
-
 msgid "Ask a question…"
 msgstr "Ask a question…"
 

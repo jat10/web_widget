@@ -12,7 +12,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import "../css/widget.css";
-import { connectionSnapshot, retryConnection, subscribeConnection } from "../js/widget-connection";
+import { connectionSnapshot, subscribeConnection } from "../js/widget-connection";
 
 type Mode = "launcher" | "conversation";
 type Step = {
@@ -236,10 +236,9 @@ function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { m
       {connection.banner && <div className="zaq-connection" data-state={connection.banner}>
         <p role="status" aria-live="polite" aria-atomic="true">
           <span className="zaq-connection-dot" aria-hidden="true" />
-          {t[connection.banner === "connected" ? "Connected" : recoveringResponse
+          {t[recoveringResponse
             ? "Reconnecting to recover the response…" : "Connection lost. Reconnecting…"]}
         </p>
-        {connection.canRetry && <button type="button" onClick={retryConnection}>{t["Retry connection"]}</button>}
       </div>}
       {error && <p className="zaq-widget-error" role="alert">{error}</p>}
       <ComposerPrimitive.Root className="zaq-composer">

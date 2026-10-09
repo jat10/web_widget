@@ -29,7 +29,6 @@ import "../css/app.css"
 import "./widget-demo"
 import {WidgetContext} from "./widget-context"
 import {currentConversationId, currentIdentityToken} from "./widget-bootstrap"
-import {configureConnectionRetry} from "./widget-connection"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 class WidgetTransportSocket extends Socket {
@@ -54,7 +53,6 @@ window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
 // connect if there are any LiveViews on the page
-configureConnectionRetry(() => liveSocket.disconnect(() => liveSocket.connect()))
 liveSocket.connect()
 
 // expose liveSocket on window for web console debug logs and latency simulation:

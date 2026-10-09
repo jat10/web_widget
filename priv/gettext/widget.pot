@@ -348,11 +348,6 @@ msgstr ""
 msgid "Your conversations"
 msgstr ""
 
-#: lib/web_widget_web/localization.ex:17
-#, elixir-autogen, elixir-format
-msgid "Connected"
-msgstr ""
-
 #: lib/web_widget_web/localization.ex:14
 #, elixir-autogen, elixir-format
 msgid "Connection lost. Reconnecting…"
@@ -361,9 +356,4 @@ msgstr ""
 #: lib/web_widget_web/localization.ex:16
 #, elixir-autogen, elixir-format
 msgid "Reconnecting to recover the response…"
-msgstr ""
-
-#: lib/web_widget_web/localization.ex:18
-#, elixir-autogen, elixir-format
-msgid "Retry connection"
 msgstr ""

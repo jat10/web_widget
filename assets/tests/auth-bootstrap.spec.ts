@@ -379,7 +379,7 @@ for (const responsePhase of ["completed", "running"] as const) {
     await expect.poll(() => page.evaluate(() => (window as any).reconnectReadyCount)).toBe(1);
     await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
     await expect(widget.locator(".zaq-answer-content strong")).toHaveText(responsePhase === "completed" ? "Finished" : "Partial");
-    await expect(widget.locator(".zaq-connection")).toHaveText("Connected");
+    await expect(widget.locator(".zaq-connection")).toHaveCount(0);
     await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
     await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
     expect(tokens).toBe(1);
@@ -665,7 +665,7 @@ test("WebSocket reconnect replaces the LiveView process and preserves host messa
   const send = widget.getByRole("button", { name: "Send message", exact: true });
   await input.fill(secondMessage);
   await expect(send).toBeEnabled();
-  // Inspector pauses must not consume the banner's grace or display periods.
+  // Inspector pauses must not consume the banner's grace period.
   await page.clock.pauseAt(clockStart + 60 * 60 * 1000);
   await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
   await page.clock.runFor(300);
@@ -679,11 +679,11 @@ test("WebSocket reconnect replaces the LiveView process and preserves host messa
   await expect(input).toHaveValue(secondMessage);
   expect((await hostRequests()).filter(r => r.content)).toHaveLength(1);
 
-  const retry = widget.getByRole("button", { name: "Retry connection", exact: true });
-  await expect(retry).toHaveCount(0);
+  await expect(banner.getByRole("button")).toHaveCount(0);
   await page.clock.runFor(13000);
-  await expect(retry).toBeVisible();
-  await retry.click();
+  await expect(banner).toHaveText("Connection lost. Reconnecting…");
+  await expect(banner.getByRole("button")).toHaveCount(0);
+  await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
   await page.clock.runFor(300);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   await expect.poll(sessions).toHaveLength(1);
@@ -691,7 +691,7 @@ test("WebSocket reconnect replaces the LiveView process and preserves host messa
   expect(after.pid).not.toBe(before.pid);
   expect(after.topic).toBe(before.topic);
   expect(after.conversation_id).toBe(before.conversation_id);
-  await expect(banner).toHaveText("Connected");
+  await expect(banner).toHaveCount(0);
   await expect(input).toHaveValue(secondMessage);
   await expect(send).toBeEnabled();
   await expect(widget.getByText(firstMessage, { exact: true })).toBeVisible();
@@ -743,16 +743,15 @@ test("connection status follows French and Arabic presentation settings", async 
   const widget = page.frameLocator("#zaq-widget");
   await expect(widget.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
 
-  for (const [language, direction, reconnecting, connected] of [
-    ["fr", "ltr", "Connexion perdue. Reconnexion en cours…", "Connecté"],
-    ["ar", "rtl", "انقطع الاتصال. جارٍ إعادة الاتصال…", "متصل"],
+  for (const [language, direction, reconnecting] of [
+    ["fr", "ltr", "Connexion perdue. Reconnexion en cours…"],
+    ["ar", "rtl", "انقطع الاتصال. جارٍ إعادة الاتصال…"],
   ] as const) {
     await page.evaluate(language => window.zaq.widget.updateSettings({ language }), language);
     await expect(widget.locator("html")).toHaveAttribute("dir", direction);
     await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
     await expect(widget.locator(".zaq-connection")).toHaveText(reconnecting);
     await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
-    await expect(widget.locator(".zaq-connection")).toHaveText(connected);
     await expect(widget.locator(".zaq-connection")).toHaveCount(0);
   }
 });

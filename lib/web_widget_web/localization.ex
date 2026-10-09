@@ -14,8 +14,6 @@ defmodule WebWidgetWeb.Localization do
         "Connection lost. Reconnecting…" => dgettext("widget", "Connection lost. Reconnecting…"),
         "Reconnecting to recover the response…" =>
           dgettext("widget", "Reconnecting to recover the response…"),
-        "Connected" => dgettext("widget", "Connected"),
-        "Retry connection" => dgettext("widget", "Retry connection"),
         "Working…" => dgettext("widget", "Working…"),
         "Send" => dgettext("widget", "Send"),
         "Open conversation" => dgettext("widget", "Open conversation"),
