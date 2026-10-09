@@ -6,9 +6,15 @@
   "description": "New browser regression assets/tests/pending-renewal.spec.ts reproduces: JWT expires after 3 seconds, parent obtains fresh token and init succeeds, host publishes answer 5 seconds after submission, answer never appears. Expiry unsubscribes original topic and clears pending_reply; Protocol.authenticate generates a fresh topic and Chat.open replaces request state on renewal. Host job still holds the original delivery context. A temporary no-renewal control with identical delayed mock passes. Keep sender/runtime authorization and response correlation intact when fixing. Test is intentionally unskipped and expects answer visibility.",
   "id": "ww-fmu",
   "labels": [],
+  "comments": [
+    {
+      "text": "At user request, removed the failing renewal browser test and its five-second answer mock from the working tree. Retained passing delayed-error coverage in assets/tests/delayed-error.spec.ts. Bug remains open; original reproduction is in commit 0147c98. Chromium retained error and existing shared-widget tests: 3 passed.",
+      "timestamp": "2026-10-09T07:54:28Z"
+    }
+  ],
   "priority": 1,
   "status": "open",
   "title": "Preserve in-flight reply delivery across JWT renewal",
   "type": "bug",
-  "updated_at": "2026-10-09T07:31:42Z"
+  "updated_at": "2026-10-09T07:54:28Z"
 }
