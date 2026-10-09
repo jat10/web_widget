@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T11:01:14Z",
   "created": "2026-10-09T10:54:19Z",
   "description": "Fetch current main, preserve authentication branch changes while resolving rebase conflicts, validate resolution and push rebased branch using an explicit lease.",
   "id": "ww-92d",
@@ -13,7 +14,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Rebase authentication branch onto latest main",
   "type": "task",
   "updated_at": "2026-10-09T11:01:14Z"
