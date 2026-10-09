@@ -1,8 +1,9 @@
 import { ViewHook } from "phoenix_live_view";
 import {
-  acceptConversationId, acceptIdentityToken, postToParent, registerWidgetHandler, setPublicReady,
+  acceptConversationId, acceptIdentityToken, currentConversationId, postToParent, registerWidgetHandler, setPublicReady,
   unregisterWidgetHandler, waitForStylesheet,
 } from "./widget-bootstrap";
+import { connectionLost, connectionReady, connectionRevoked } from "./widget-connection";
 
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
@@ -12,6 +13,8 @@ const nonblank = (value: unknown): value is string => typeof value === "string" 
 
 export class WidgetContext extends ViewHook {
   private accepted = false;
+  private connected = true;
+  private connectionGeneration = 0;
   private contextTimer?: number;
   private allowedDomains: string[] = [];
   private queue = Promise.resolve();
@@ -129,7 +132,9 @@ export class WidgetContext extends ViewHook {
     await new Promise<void>((resolve, reject) => {
       const matches = () => {
         const root = document.querySelector<HTMLElement>(".zaq-widget");
-        return root?.dataset.language === sessionSettings.language && root?.dataset.theme === sessionSettings.theme;
+        const conversation = currentConversationId();
+        return root?.dataset.language === sessionSettings.language && root?.dataset.theme === sessionSettings.theme &&
+          (!conversation || this.el.dataset.authenticated !== "true" || root.dataset.conversationId === conversation);
       };
       if (matches()) return resolve();
       const observer = new MutationObserver(() => {
@@ -159,6 +164,7 @@ export class WidgetContext extends ViewHook {
       setPublicReady(false);
       postToParent("zaq.widget.authentication.required", { reason: data.reason || "expired" });
       if (data.reason === "backend_revoked") {
+        connectionRevoked();
         const alert = document.createElement("div");
         alert.id = "widget-backend-revoked";
         alert.setAttribute("role", "alert");
@@ -184,11 +190,17 @@ export class WidgetContext extends ViewHook {
   }
 
   disconnected() {
+    this.connected = false;
+    this.connectionGeneration++;
+    if (this.el.dataset.authenticated === "true") this.accepted = false;
+    connectionLost();
     setPublicReady(false);
     postToParent("zaq.widget.disconnected", { reason: "network" });
   }
 
   reconnected() {
+    this.connected = true;
+    if (this.el.dataset.authenticated === "true") this.accepted = this.el.dataset.authorized === "true";
     postToParent("zaq.widget.bootstrap.ready");
     void this.restoreAndAnnounce();
   }
@@ -203,23 +215,30 @@ export class WidgetContext extends ViewHook {
   }
 
   destroyed() {
+    this.connected = false;
+    this.connectionGeneration++;
     window.clearTimeout(this.contextTimer);
     unregisterWidgetHandler(this.receiveContext);
   }
 
   private async announceReady() {
+    const generation = this.connectionGeneration;
+    if (!this.connected) return;
     if (this.el.dataset.authenticated === "true" && !this.accepted) return;
     await waitForStylesheet();
     if (this.el.dataset.authenticated === "true") {
       try { await this.applyDocumentSettings(); }
       catch { return; }
     }
+    if (!this.connected || generation !== this.connectionGeneration ||
+        (this.el.dataset.authenticated === "true" && !this.accepted)) return;
     window.clearTimeout(this.contextTimer);
     if (window.parent === window) {
       this.reportError("No embedding parent found. Open /widget-demo or embed /widget in an iframe.");
       return;
     }
     if (!this.accepted) this.contextTimer = window.setTimeout(() => this.reportError("No valid user_id received within 5 seconds of zaq.widget.ready; the chat remains hidden. Send valid context to continue."), 5000);
+    connectionReady();
     setPublicReady(true);
   }
 }

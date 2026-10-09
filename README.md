@@ -110,6 +110,8 @@ The demo uses a mock host, not a live ZAQ agent. Enable its conversation sidebar
 
 Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets. Commit the generated files in `priv/static/assets` with frontend changes. The release workflow runs `npm --prefix assets ci` and `npm --prefix assets run build`, verifies that the tracked output matches, and attaches the bundle to the GitHub Release. Release Please updates `mix.exs`, `CHANGELOG.md`, tags, and releases from conventional commits. Git dependency installs use the assets committed in the release tag; they do not download release attachments.
 
+During a connection interruption, the widget keeps messages and the draft visible and pauses sending. After two seconds it shows a reconnecting banner; after fifteen seconds it offers **Retry connection**. A brief **Connected** notice appears after authentication and conversation restoration. Interrupted responses are recovered without automatically resending the question.
+
 ZAQ can depend on a released tag with `{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}` and mount `web_widget("/widget")` in its browser router. The macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`. ZAQ needs no asset copy, frontend build, static-path allowlist entry, or endpoint `WebWidget.Static` plug. See [host integration](docs/host-integration.md#routes-and-assets).
 
 ## Contributing

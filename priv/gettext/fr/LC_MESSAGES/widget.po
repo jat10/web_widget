@@ -4,6 +4,18 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
 
+msgid "Connection lost. Reconnecting…"
+msgstr "Connexion perdue. Reconnexion en cours…"
+
+msgid "Reconnecting to recover the response…"
+msgstr "Reconnexion pour récupérer la réponse…"
+
+msgid "Connected"
+msgstr "Connecté"
+
+msgid "Retry connection"
+msgstr "Réessayer la connexion"
+
 msgid "Ask a question…"
 msgstr "Posez une question…"
 

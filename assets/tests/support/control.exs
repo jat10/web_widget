@@ -9,7 +9,7 @@ defmodule WebWidget.E2EControl do
   get "/identity" do
     conn = fetch_query_params(conn)
     ttl = case Integer.parse(conn.query_params["ttl"] || "") do
-      {value, ""} when value in 1..60 -> value
+      {value, ""} when value in 1..600 -> value
       _ -> if(conn.query_params["short"] == "true", do: 3, else: 604_800)
     end
     conn

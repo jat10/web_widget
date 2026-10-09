@@ -365,6 +365,10 @@ for (const responsePhase of ["completed", "running"] as const) {
     const complete = () => request.post(`http://127.0.0.1:4021/held-stream/${user}/complete`);
     expect(await submitted()).toBe(1);
     await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+    await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeDisabled();
+    await expect(widget.locator(".zaq-connection")).toHaveText("Reconnecting to recover the response…");
+    await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
+    await expect(widget.locator(".zaq-working")).toBeHidden();
     if (responsePhase === "completed") {
       expect((await complete()).status()).toBe(204);
       await expect.poll(status).toBe("finished");
@@ -375,6 +379,7 @@ for (const responsePhase of ["completed", "running"] as const) {
     await expect.poll(() => page.evaluate(() => (window as any).reconnectReadyCount)).toBe(1);
     await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
     await expect(widget.locator(".zaq-answer-content strong")).toHaveText(responsePhase === "completed" ? "Finished" : "Partial");
+    await expect(widget.locator(".zaq-connection")).toHaveText("Connected");
     await expect(widget.getByText("held stream", { exact: true })).toHaveCount(1);
     await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
     expect(tokens).toBe(1);
@@ -388,6 +393,113 @@ for (const responsePhase of ["completed", "running"] as const) {
       await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
       expect(tokens).toBe(1);
       expect(await submitted()).toBe(1);
+    }
+  });
+}
+
+for (const answerTiming of ["during", "after"] as const) {
+  test(`automatic renewal with five minutes remaining preserves the original answer ${answerTiming} renewal`, async ({ page, request }) => {
+    test.setTimeout(45_000);
+    const user = `early-renewal-${answerTiming}-${crypto.randomUUID()}`;
+    const control = "http://127.0.0.1:4021";
+    let tokenRequests = 0;
+    let releaseReplacement!: () => void;
+    const replacementGate = new Promise<void>(resolve => { releaseReplacement = resolve; });
+    const credentials: Array<{ jti: string; exp: number }> = [];
+    await page.route("**/api/widget-token", async route => {
+      const attempt = ++tokenRequests;
+      if (attempt > 1) await replacementGate;
+      const issued = await request.get(`${control}/identity`, {
+        params: { user_id: user, ...(attempt === 1 ? { ttl: "315" } : {}) },
+      });
+      const { identity_token } = await issued.json();
+      credentials.push(JSON.parse(Buffer.from(identity_token.split(".")[1], "base64url").toString()));
+      await route.fulfill({ headers: { "cache-control": "no-store" }, json: { identity_token } });
+    });
+    const session = async () => {
+      const { sessions } = await (await request.get(`${control}/liveview-sessions/${user}`)).json();
+      expect(sessions).toHaveLength(1);
+      return sessions[0];
+    };
+    const submissions = async () => (await (await request.get(`${control}/request-count`, {
+      params: { user_id: user, content: "held stream" },
+    })).json()).count;
+    try {
+      await installTokenWidget(page);
+      const iframe = page.locator("#zaq-widget");
+      const widget = page.frameLocator("#zaq-widget");
+      const auth = widget.locator("#widget-context");
+      await expect(auth).toHaveAttribute("data-authorized", "true");
+      await iframe.evaluate(element => {
+        (window as any).earlyRenewalFrame = element;
+        (window as any).authenticationRequired = [];
+        element.addEventListener("zaq:authentication-required", (event: Event) => {
+          (window as any).authenticationRequired.push((event as CustomEvent).detail);
+        });
+      });
+      await widget.locator("body").evaluate(() => { (window as any).earlyRenewalDocument = document; });
+      const initial = await session();
+      expect(initial.expires_at - initial.server_time).toBeGreaterThan(300);
+      expect(Number(await auth.getAttribute("data-auth-refresh-at"))).toBe(initial.expires_at - 300);
+      const input = widget.getByRole("textbox", { name: "Message", exact: true });
+      await input.fill("held stream");
+      await input.press("Enter");
+      await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
+      const original = await (await request.get(`${control}/held-stream/${user}`)).json();
+      expect((await session()).active.request_id).toBe(original.request_id);
+      expect(tokenRequests).toBe(1);
+
+      // Real scheduled renewal: no manual connect, synthetic event, or clock jump.
+      await expect.poll(() => tokenRequests, { timeout: 20_000 }).toBe(2);
+      const pending = await session();
+      expect(pending.expires_at - pending.server_time).toBeGreaterThanOrEqual(295);
+      expect(pending.expires_at - pending.server_time).toBeLessThanOrEqual(300);
+      expect(pending.credential_id).toBe(credentials[0].jti);
+      expect(pending.binding_authorized).toBe(true);
+      expect(pending.authentication_pending).toBe(false);
+      expect(pending.response_subscribed).toBe(true);
+      expect(pending.pid).toBe(initial.pid);
+
+      if (answerTiming === "during") {
+        expect((await request.post(`${control}/held-stream/${user}/complete`)).status()).toBe(204);
+        await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
+        expect(credentials).toHaveLength(1);
+        expect((await session()).credential_id).toBe(initial.credential_id);
+        await input.fill("Draft during renewal");
+        await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+      }
+
+      releaseReplacement();
+      await expect.poll(async () => (await session()).credential_id).not.toBe(initial.credential_id);
+      const renewed = await session();
+      expect(credentials).toHaveLength(2);
+      expect(renewed.credential_id).toBe(credentials[1].jti);
+      expect(renewed.server_time).toBeLessThan(initial.expires_at);
+      expect(renewed.pid).toBe(initial.pid);
+      expect(renewed.page_id).toBe(initial.page_id);
+      expect(renewed.conversation_id).toBe(original.conversation_id);
+      expect(renewed.topic).toBe(original.topic);
+      expect(renewed.binding_authorized).toBe(true);
+      expect(renewed.authentication_pending).toBe(false);
+      expect(renewed.response_subscribed).toBe(true);
+      if (answerTiming === "after") {
+        expect(renewed.active.request_id).toBe(original.request_id);
+        expect((await request.post(`${control}/held-stream/${user}/complete`)).status()).toBe(204);
+      }
+      await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
+      await expect(widget.locator('[data-role="user"]')).toHaveCount(1);
+      await expect(widget.locator('[data-role="assistant"]')).toHaveCount(1);
+      expect(await submissions()).toBe(1);
+      expect(tokenRequests).toBe(2);
+      expect(await page.evaluate(() => (window as any).authenticationRequired)).toEqual([]);
+      expect(await iframe.evaluate(element => element === (window as any).earlyRenewalFrame)).toBe(true);
+      expect(await widget.locator("body").evaluate(() => document === (window as any).earlyRenewalDocument)).toBe(true);
+      await input.fill("instant");
+      await expect(widget.getByRole("button", { name: "Send message", exact: true })).toBeEnabled();
+      await input.press("Enter");
+      await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
+    } finally {
+      releaseReplacement();
     }
   });
 }
@@ -509,7 +621,9 @@ test("actual JWT expiry during a held response restores the final answer after a
   }
 });
 
-test("WebSocket reconnect replaces the LiveView process but keeps its page topic", async ({ page, request }) => {
+test("WebSocket reconnect replaces the LiveView process and preserves host message delivery", async ({ page, request }) => {
+  const clockStart = Date.now();
+  await page.clock.install({ time: clockStart });
   const user = `socket-${crypto.randomUUID()}`;
   await page.route("**/api/widget-token", async route => {
     const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
@@ -526,20 +640,121 @@ test("WebSocket reconnect replaces the LiveView process but keeps its page topic
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   const sessions = async () => {
     const response = await request.get(`http://127.0.0.1:4021/liveview-sessions/${user}`);
-    return (await response.json()).sessions as Array<{ pid: string; topic: string }>;
+    expect(response.ok()).toBe(true);
+    return (await response.json()).sessions as Array<{ pid: string; topic: string; conversation_id: string | null }>;
   };
+  const hostRequests = async () => {
+    const response = await request.get(`http://127.0.0.1:4021/requests/${user}`);
+    expect(response.ok()).toBe(true);
+    return await response.json() as Array<{ type: string; content?: string; conversation_id: string | null }>;
+  };
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  const firstMessage = `reconnect before ${user}`;
+  const secondMessage = `reconnect after ${user}`;
+  await input.fill(firstMessage);
+  await input.press("Enter");
+  await expect(widget.getByText(`Answer to ${firstMessage}`, { exact: true })).toBeVisible();
   await expect.poll(sessions).toHaveLength(1);
   const [before] = await sessions();
+  expect(before.conversation_id).toMatch(/^e2e-/);
+  expect((await hostRequests()).filter(r => r.content)).toEqual([
+    expect.objectContaining({ content: firstMessage, conversation_id: null }),
+  ]);
 
+  const banner = widget.locator(".zaq-connection");
+  const send = widget.getByRole("button", { name: "Send message", exact: true });
+  await input.fill(secondMessage);
+  await expect(send).toBeEnabled();
+  // Inspector pauses must not consume the banner's grace or display periods.
+  await page.clock.pauseAt(clockStart + 60 * 60 * 1000);
   await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+  await page.clock.runFor(300);
+  await expect(send).toBeDisabled();
+  await expect(banner).toHaveCount(0);
   await expect.poll(sessions).toEqual([]);
+  await page.clock.runFor(2000);
+  await expect(banner).toHaveText("Connection lost. Reconnecting…");
+  await expect(widget.getByText(`Answer to ${firstMessage}`, { exact: true })).toBeVisible();
+  await input.press("Enter");
+  await expect(input).toHaveValue(secondMessage);
+  expect((await hostRequests()).filter(r => r.content)).toHaveLength(1);
 
-  await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+  const retry = widget.getByRole("button", { name: "Retry connection", exact: true });
+  await expect(retry).toHaveCount(0);
+  await page.clock.runFor(13000);
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await page.clock.runFor(300);
   await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
   await expect.poll(sessions).toHaveLength(1);
   const [after] = await sessions();
   expect(after.pid).not.toBe(before.pid);
   expect(after.topic).toBe(before.topic);
+  expect(after.conversation_id).toBe(before.conversation_id);
+  await expect(banner).toHaveText("Connected");
+  await expect(input).toHaveValue(secondMessage);
+  await expect(send).toBeEnabled();
+  await expect(widget.getByText(firstMessage, { exact: true })).toBeVisible();
+  await expect(widget.getByText(`Answer to ${firstMessage}`, { exact: true })).toBeVisible();
+
+  const restored = await hostRequests();
+  expect(restored).toEqual(expect.arrayContaining([
+    expect.objectContaining({ type: "conversation_init", conversation_id: before.conversation_id }),
+    expect.objectContaining({ type: "conversation_history", conversation_id: before.conversation_id }),
+  ]));
+  expect(restored.filter(r => r.content)).toHaveLength(1);
+
+  await input.press("Enter");
+  await expect.poll(async () => (await hostRequests()).filter(r => r.content)).toEqual([
+    expect.objectContaining({ content: firstMessage, conversation_id: null }),
+    expect.objectContaining({ content: secondMessage, conversation_id: before.conversation_id }),
+  ]);
+  await expect(widget.getByText(`Answer to ${secondMessage}`, { exact: true })).toBeVisible();
+  for (const message of [firstMessage, secondMessage]) {
+    await expect(widget.getByText(message, { exact: true })).toHaveCount(1);
+    await expect(widget.getByText(`Answer to ${message}`, { exact: true })).toHaveCount(1);
+  }
+  await expect(widget.locator('[data-role="assistant"]')).toHaveCount(2);
+  expect((await hostRequests()).filter(r => r.content)).toHaveLength(2);
+  expect((await sessions())[0].conversation_id).toBe(before.conversation_id);
+  await page.clock.runFor(2000);
+  await expect(banner).toHaveCount(0);
+
+  await input.fill("Draft after a brief interruption");
+  await widget.locator("body").evaluate(() => {
+    (window as any).liveSocket.disconnect();
+    (window as any).liveSocket.connect();
+  });
+  await page.clock.runFor(300);
+  await expect.poll(async () => (await sessions())[0]?.pid).not.toBe(after.pid);
+  await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-reconnecting", "false");
+  await expect(banner).toHaveCount(0);
+  await expect(input).toHaveValue("Draft after a brief interruption");
+  expect((await hostRequests()).filter(r => r.content)).toHaveLength(2);
+});
+
+test("connection status follows French and Arabic presentation settings", async ({ page, request }) => {
+  const user = `connection-locale-${crypto.randomUUID()}`;
+  await page.route("**/api/widget-token", async route => {
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    await route.fulfill({ headers: { "cache-control": "no-store" }, json: await issued.json() });
+  });
+  await installTokenWidget(page);
+  const widget = page.frameLocator("#zaq-widget");
+  await expect(widget.getByRole("textbox", { name: "Message", exact: true })).toBeVisible();
+
+  for (const [language, direction, reconnecting, connected] of [
+    ["fr", "ltr", "Connexion perdue. Reconnexion en cours…", "Connecté"],
+    ["ar", "rtl", "انقطع الاتصال. جارٍ إعادة الاتصال…", "متصل"],
+  ] as const) {
+    await page.evaluate(language => window.zaq.widget.updateSettings({ language }), language);
+    await expect(widget.locator("html")).toHaveAttribute("dir", direction);
+    await widget.locator("body").evaluate(() => (window as any).liveSocket.disconnect());
+    await expect(widget.locator(".zaq-connection")).toHaveText(reconnecting);
+    await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
+    await expect(widget.locator(".zaq-connection")).toHaveText(connected);
+    await expect(widget.locator(".zaq-connection")).toHaveCount(0);
+  }
 });
 
 test("delayed and lost renewal acknowledgements leave the active chat usable", async ({ page, request }) => {
@@ -923,6 +1138,7 @@ for (const failure of ["expiry", "store", "reset"] as const) {
       }
       await widget.locator("body").evaluate(() => (window as any).liveSocket.connect());
       await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "false");
+      await expect(widget.locator('.zaq-connection[data-state="connected"]')).toHaveCount(0);
       expect(await requests()).toEqual(initial);
       if (failure === "store") expect((await request.post(`${control}/auth-store/restore`)).status()).toBe(204);
       if (failure === "reset") {
@@ -931,6 +1147,7 @@ for (const failure of ["expiry", "store", "reset"] as const) {
       }
       offline = false;
       await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true", { timeout: 10_000 });
+      await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-reconnecting", "false");
       await expect(widget.getByText("Answer to reconnect first", { exact: true })).toBeVisible();
       await input.fill("reconnect second");
       await input.press("Enter");
