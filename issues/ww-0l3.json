@@ -14,11 +14,15 @@
     {
       "text": "Implemented iframe-local connection presentation store driven by WidgetContext lifecycle; async readiness guarded against stale disconnect callbacks and matches restored conversation DOM. React consumes status with useSyncExternalStore; sends disabled immediately, banner after 2s, retry after 15s, connected for 2s. Existing composer preserves drafts across normal reconnect, verified by browser rather than adding duplicate draft state. Added EN/FR/AR strings and template, streaming status hides stale typing. Chromium targeted recovery tests and mix precommit (179 tests) pass; cross-browser validation in progress.",
       "timestamp": "2026-10-09T10:10:05Z"
+    },
+    {
+      "text": "Complete. Asset build/TypeScript passed. mix precommit passed formatting, strict Credo, warnings-as-errors compilation and 179 Elixir tests. 21 reconnect/status/localization browser checks plus 15 existing renewal/revocation/settings checks passed across Chromium, Firefox, WebKit (36 total). Verified screenshots in light theme and Arabic RTL dark theme; banner remains above composer with visible history and editable preserved draft. Test proves Retry connection creates new PID, restores same conversation, sends next message once to ZAQ mock and displays its reply. Generated gettext template updated; unrelated generated default.pot removed. All implementation/test changes left uncommitted in current working tree.",
+      "timestamp": "2026-10-09T10:13:05Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Show reconnect status and preserve draft during connection recovery",
   "type": "task",
-  "updated_at": "2026-10-09T10:10:05Z"
+  "updated_at": "2026-10-09T10:13:05Z"
 }
