@@ -6,9 +6,15 @@
   "description": "Read-only trace of token expiration, parent notifications, fresh-token initialization, and existing coverage.",
   "id": "ww-ate",
   "labels": [],
+  "comments": [
+    {
+      "text": "Confirmed server schedules expiration at JWT exp (maximum lifetime 300s); expiry unsubscribes, blocks sends/inbound events, retains UI, emits widget.authentication.required. Hook forwards zaq.widget.authentication.required postMessage; parent SDK emits zaq:authentication-required on iframe. Parent integration must fetch fresh signed token and call init; no built-in token fetch/retry. Documented example docs/authenticated-chat.md:145. Focused signed_identity and integrated_widget_live suites: 18 tests, 0 failures. No source changes.",
+      "timestamp": "2026-10-09T07:24:09Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Check JWT expiry and parent token renewal flow",
   "type": "task",
-  "updated_at": "2026-10-09T07:23:27Z"
+  "updated_at": "2026-10-09T07:24:09Z"
 }
