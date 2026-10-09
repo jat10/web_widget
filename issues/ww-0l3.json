@@ -1,5 +1,5 @@
 {
-  "assignee": "",
+  "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
   "created": "2026-10-09T10:02:09Z",
@@ -7,8 +7,8 @@
   "id": "ww-0l3",
   "labels": [],
   "priority": 2,
-  "status": "open",
+  "status": "in_progress",
   "title": "Show reconnect status and preserve draft during connection recovery",
   "type": "task",
-  "updated_at": "2026-10-09T10:02:09Z"
+  "updated_at": "2026-10-09T10:02:24Z"
 }
