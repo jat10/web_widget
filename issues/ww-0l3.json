@@ -6,9 +6,15 @@
   "description": "Add delayed reconnect banner, disabled sending with draft preservation, restored indicator after auth/history readiness, prolonged retry and streaming recovery copy. Extend browser reconnect tests and localized UI strings.",
   "id": "ww-0l3",
   "labels": [],
+  "comments": [
+    {
+      "text": "Module-context findings: WebWidget adapts LiveView-owned messages to assistant-ui; WidgetContext owns parent handshake and readiness; app.js owns the single transport. Flow: hook disconnect -\u003e browser status store -\u003e React banner/send guard; auth/history mount -\u003e readiness -\u003e restored status. Dependencies: LiveView hooks and live_react UI, no new host transport. State: messages/session server-owned; draft React-owned; connection presentation iframe document lifetime. Contracts: preserve response.* and parent readiness; never resend on reconnect. Risks: stale async ready callbacks, React remount during failed auth, terminal revocation. Coverage: existing reconnect test proves mock admission/reply and history; new assertions will cover offline draft/disabled send/status/retry, streaming banner and failed-auth readiness. Unknown: whether live_react remount clears drafts on failed authentication; verify in browser before deciding preservation changes.",
+      "timestamp": "2026-10-09T10:03:43Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Show reconnect status and preserve draft during connection recovery",
   "type": "task",
-  "updated_at": "2026-10-09T10:02:24Z"
+  "updated_at": "2026-10-09T10:03:43Z"
 }
