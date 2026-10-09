@@ -6,9 +6,15 @@
   "description": "Debug stepping lets real browser timers fire before transient-state assertions. Control browser time for grace period, retry threshold and restored notice; retain end-to-end host delivery checks and reproduce slow stepping.",
   "id": "ww-9am",
   "labels": [],
+  "comments": [
+    {
+      "text": "Diagnosis: failure is test line 561 expecting no banner after real-time disconnect and separate awaited steps. Widget contract intentionally shows banner after 2000ms. Inspector pauses allow timer to fire; expected zero is stale. Same risk at transient Connected assertion. Owner is test timing, not reconnect UI. Installed Playwright clock before navigation and pause after load; explicitly advance grace/retry/restored periods while preserving actual WebSocket/server/mock traffic. Normal Chromium run passed. Validating delayed stepping across browsers next.",
+      "timestamp": "2026-10-09T10:20:39Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Make reconnect UI timing assertions deterministic in debug mode",
   "type": "task",
-  "updated_at": "2026-10-09T10:18:59Z"
+  "updated_at": "2026-10-09T10:20:39Z"
 }
