@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T10:21:39Z",
   "created": "2026-10-09T10:18:33Z",
   "description": "Debug stepping lets real browser timers fire before transient-state assertions. Control browser time for grace period, retry threshold and restored notice; retain end-to-end host delivery checks and reproduce slow stepping.",
   "id": "ww-9am",
@@ -17,7 +18,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Make reconnect UI timing assertions deterministic in debug mode",
   "type": "task",
   "updated_at": "2026-10-09T10:21:39Z"
