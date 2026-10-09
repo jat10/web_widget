@@ -6,9 +6,15 @@
   "description": "Follow-up to ww-ozf: remove connected flash and update recovery and localization regressions.",
   "id": "ww-0m5",
   "labels": [],
+  "comments": [
+    {
+      "text": "Removed connected flash and timer; recovery now clears banner immediately. Updated recovery and locale assertions; removed unused connected styles/translations; rebuilt assets. mix precommit passed with 179 tests. Browser validation underway.",
+      "timestamp": "2026-10-09T15:19:49Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Hide connection banner immediately after recovery",
   "type": "task",
-  "updated_at": "2026-10-09T15:18:38Z"
+  "updated_at": "2026-10-09T15:19:49Z"
 }
