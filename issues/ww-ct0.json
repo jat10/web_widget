@@ -6,9 +6,15 @@
   "description": "Strengthen existing browser test to prove requests reach ZAQ mock after reconnect, replies render, and conversation/history survive without duplicate submissions.",
   "id": "ww-ct0",
   "labels": [],
+  "comments": [
+    {
+      "text": "Strengthened existing reconnect browser test: sends unique question before disconnect, checks recorded mock request, verifies new PID/same topic and conversation after reconnect, confirms host init/history requests and restored messages, sends second unique question, verifies mock receives it under original conversation and response renders once. Exactly two submitted messages and two assistant rows. Targeted Playwright run passed Chromium, Firefox, WebKit (3/3). Production code unchanged; test edit left in working tree.",
+      "timestamp": "2026-10-09T09:55:58Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Verify end-to-end message delivery after LiveView reconnect",
   "type": "task",
-  "updated_at": "2026-10-09T09:55:12Z"
+  "updated_at": "2026-10-09T09:55:58Z"
 }
