@@ -6,9 +6,15 @@
   "description": "Add browser regression tests with a 3-second JWT renewed before a 5-second mock answer, plus a 3-second delayed mock error; validate actual widget rendering.",
   "id": "ww-1wu",
   "labels": [],
+  "comments": [
+    {
+      "text": "Added two real-browser regressions and test-only asynchronous delayed host replies. Chromium: renewal scenario fails only at answer visibility after successful parent renewal; 3-second error scenario passes. Temporary 5-second reply control without renewal passes; removed control file. Existing shared-widget Chromium tests pass. mix assets.build passes; mix precommit passes (157 tests). No production changes. Tests intentionally retain expected success assertion to expose delivery bug.",
+      "timestamp": "2026-10-09T07:31:42Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Test delayed responses across JWT renewal and delayed errors",
   "type": "task",
-  "updated_at": "2026-10-09T07:29:09Z"
+  "updated_at": "2026-10-09T07:31:42Z"
 }
