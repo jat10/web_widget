@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T10:13:05Z",
   "created": "2026-10-09T10:02:09Z",
   "description": "Add delayed reconnect banner, disabled sending with draft preservation, restored indicator after auth/history readiness, prolonged retry and streaming recovery copy. Extend browser reconnect tests and localized UI strings.",
   "id": "ww-0l3",
@@ -21,7 +22,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Show reconnect status and preserve draft during connection recovery",
   "type": "task",
   "updated_at": "2026-10-09T10:13:05Z"
