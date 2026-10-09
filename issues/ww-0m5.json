@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T15:19:57Z",
   "created": "2026-10-09T15:18:23Z",
   "description": "Follow-up to ww-ozf: remove connected flash and update recovery and localization regressions.",
   "id": "ww-0m5",
@@ -17,7 +18,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Hide connection banner immediately after recovery",
   "type": "task",
   "updated_at": "2026-10-09T15:19:57Z"
