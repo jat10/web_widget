@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T07:47:32Z",
+  "description": "Run the documented local setup in the existing authentication worktree, including Mix dependencies, development database setup, npm installation and asset build; verify outcomes.",
+  "id": "ww-p0s",
+  "labels": [],
+  "priority": 2,
+  "status": "open",
+  "title": "Set up authentication worktree dependencies and assets",
+  "type": "task",
+  "updated_at": "2026-10-09T07:47:32Z"
+}
