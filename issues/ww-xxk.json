@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T10:33:32Z",
+  "description": "Run full asset build, Elixir precommit and browser suite across all configured browsers; fix failures before committing and pushing current authentication branch changes.",
+  "id": "ww-xxk",
+  "labels": [],
+  "priority": 2,
+  "status": "open",
+  "title": "Validate full test suites and publish reconnect changes",
+  "type": "task",
+  "updated_at": "2026-10-09T10:33:32Z"
+}
