@@ -10,11 +10,15 @@
     {
       "text": "Full validation underway before any commit/push. Fresh mix assets.build and mix precommit passed (179 tests, strict Credo/format/warnings checks). Three-node Mnesia integration check passed. Added automatic renewal cases both passed in Chromium. Full Playwright suite has 330 tests across Chromium, Firefox and WebKit and is running; logs /tmp/ww-full-e2e.log. User explicitly requires all tests pass before push.",
       "timestamp": "2026-10-09T10:35:02Z"
+    },
+    {
+      "text": "User stopped Firefox/WebKit. Final full-run report: 218 passed, 2 failed (same watchdog test in Chromium and Firefox), 110 WebKit tests not run. Earlier progress updates incorrectly inferred no failures from tail snippets; corrected user explicitly. Root cause: watchdog test drops widget.submit frame; Phoenix PUSH_TIMEOUT=30000 invokes reloadWithJitter and disconnects before app 300000 timeout. New connection UI correctly disables send. Test now installs clock before load and extends only its held-submit transport deadline to isolate five-minute application watchdog, preserving prior assertions plus connected-state assertion. Targeted Chromium test passed. Running full Chromium only before commit/push.",
+      "timestamp": "2026-10-09T10:50:55Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Validate full test suites and publish reconnect changes",
   "type": "task",
-  "updated_at": "2026-10-09T10:35:02Z"
+  "updated_at": "2026-10-09T10:50:55Z"
 }
