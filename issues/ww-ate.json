@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T07:24:09Z",
   "created": "2026-10-09T07:23:20Z",
   "description": "Read-only trace of token expiration, parent notifications, fresh-token initialization, and existing coverage.",
   "id": "ww-ate",
@@ -13,7 +14,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Check JWT expiry and parent token renewal flow",
   "type": "task",
   "updated_at": "2026-10-09T07:24:09Z"
