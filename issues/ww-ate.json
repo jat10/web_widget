@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T07:23:20Z",
+  "description": "Read-only trace of token expiration, parent notifications, fresh-token initialization, and existing coverage.",
+  "id": "ww-ate",
+  "labels": [],
+  "priority": 2,
+  "status": "open",
+  "title": "Check JWT expiry and parent token renewal flow",
+  "type": "task",
+  "updated_at": "2026-10-09T07:23:20Z"
+}
