@@ -21,9 +21,6 @@ defmodule WebWidget.E2ESharedHost do
     result = WebWidget.TestIntegration.ChatHost.receive_request(test, request, context: context)
 
     case {request, result} do
-      {%{content: "delayed answer"}, {:ok, receipt}} ->
-        schedule_response(context, receipt, 5_000, :message_complete, "Answer after five seconds")
-
       {%{content: "delayed error"}, {:ok, receipt}} ->
         schedule_response(context, receipt, 3_000, :message_failed, "The mock failed after three seconds")
 
