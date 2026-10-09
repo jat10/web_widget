@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T07:28:43Z",
+  "description": "Add browser regression tests with a 3-second JWT renewed before a 5-second mock answer, plus a 3-second delayed mock error; validate actual widget rendering.",
+  "id": "ww-1wu",
+  "labels": [],
+  "priority": 2,
+  "status": "open",
+  "title": "Test delayed responses across JWT renewal and delayed errors",
+  "type": "task",
+  "updated_at": "2026-10-09T07:28:43Z"
+}
