@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T09:55:58Z",
   "created": "2026-10-09T09:55:06Z",
   "description": "Strengthen existing browser test to prove requests reach ZAQ mock after reconnect, replies render, and conversation/history survive without duplicate submissions.",
   "id": "ww-ct0",
@@ -13,7 +14,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Verify end-to-end message delivery after LiveView reconnect",
   "type": "task",
   "updated_at": "2026-10-09T09:55:58Z"
