@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T15:15:25Z",
+  "description": "Remove the retry button and unused retry wiring; update the reconnect browser regression and validate on the current PR branch.",
+  "id": "ww-ozf",
+  "labels": [],
+  "priority": 2,
+  "status": "open",
+  "title": "Make widget connection indicator status-only",
+  "type": "task",
+  "updated_at": "2026-10-09T15:15:25Z"
+}
