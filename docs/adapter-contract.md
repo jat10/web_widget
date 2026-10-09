@@ -77,11 +77,11 @@ Theme and language remain parent-owned. Start with `multiple_conversations: fals
 ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
 The local ZAQ install mounts the package router on its existing endpoint.
-The library exposes `mix web_widget.assets.install`, run from the host, to copy its built
-bundle into the host's `priv/static/web_widget/assets`. The host's existing
-static plug serves that directory with `web_widget` in its static-path allowlist;
-ZAQ does not need `WebWidget.Static` or a host-owned install task. Its `/live`
-socket serves the iframe; BO authentication does not apply to the widget mount.
+Released Git tags contain the built bundle in `web_widget/priv/static/assets`.
+The `web_widget/1` router macro serves those files at `/web_widget/assets/*path`
+from the dependency itself. ZAQ does not copy or build assets, change its static
+path allowlist, or add `WebWidget.Static` to its endpoint. Its `/live` socket
+serves the iframe; BO authentication does not apply to the widget mount.
 This supersedes the earlier configuration-only choice for this installation.
 
 For hosts retaining configuration-only installation, opt in to

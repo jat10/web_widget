@@ -1,0 +1,60 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: googleapis/release-please-action@v4
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - uses: actions/checkout@v7
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          ref: ${{ steps.release.outputs.sha }}
+
+      - uses: erlef/setup-beam@v1
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          otp-version: '28.1'
+          elixir-version: '1.19.5'
+
+      - uses: actions/setup-node@v7
+        if: ${{ steps.release.outputs.release_created }}
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: assets/package-lock.json
+
+      - name: Rebuild and verify the tagged bundle
+        if: ${{ steps.release.outputs.release_created }}
+        run: |
+          mix deps.get
+          npm --prefix assets ci
+          npm --prefix assets run build
+          test -z "$(git status --porcelain -- priv/static/assets)"
+          for file in embed.js app.js app.css web-widget.js web-widget.css widget-client.js; do
+            test -s "priv/static/assets/$file"
+          done
+
+      - name: Attach compiled assets
+        if: ${{ steps.release.outputs.release_created }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          tar -czf "web_widget-assets-${RELEASE_TAG}.tar.gz" -C priv/static assets
+          gh release upload "$RELEASE_TAG" "web_widget-assets-${RELEASE_TAG}.tar.gz" --clobber

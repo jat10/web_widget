@@ -106,13 +106,9 @@ Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` inst
 
 The demo uses a mock host, not a live ZAQ agent. Enable its conversation sidebar with `WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server`. To embed the local demo on another origin, set `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` to a comma-separated list of exact allowed origins and restart the server.
 
-Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets.
+Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets. Commit the generated files in `priv/static/assets` with frontend changes. The release workflow runs `npm --prefix assets ci` and `npm --prefix assets run build`, verifies that the tracked output matches, and attaches the bundle to the GitHub Release. Release Please updates `mix.exs`, `CHANGELOG.md`, tags, and releases from conventional commits. Git dependency installs use the assets committed in the release tag; they do not download release attachments.
 
-The library provides `mix web_widget.assets.install`: run it from a host such as ZAQ to copy
-the built bundle into that host's `priv/static/web_widget/assets`. Add `web_widget`
-to the host's static-path allowlist to serve it through the existing static plug,
-without `WebWidget.Static`. Reinstall after each widget rebuild and before the
-host's production asset digest. See [host asset installation](docs/host-integration.md#install-assets-into-the-host).
+ZAQ can depend on a released tag with `{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}` and mount `web_widget("/widget")` in its browser router. The macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`. ZAQ needs no asset copy, frontend build, static-path allowlist entry, or endpoint `WebWidget.Static` plug. See [host integration](docs/host-integration.md#generic-phoenix-host-mounting).
 
 ## Contributing
 
@@ -132,6 +128,7 @@ Contributions to behavior, accessibility, translations, documentation, and tests
 | `assets/react-components/` | React and assistant-ui presentation. |
 | `assets/js/` | Parent embed client and iframe messaging. |
 | `assets/css/` | Widget and demo styles. |
+| `priv/static/assets/` | Tracked production bundle included in Git tags. |
 | `priv/gettext/` | UI translation catalogs for English, French, and Arabic. |
 | `test/` | Elixir tests. |
 | `assets/tests/` | Playwright browser tests and mock host fixtures. |
@@ -145,7 +142,7 @@ mix assets.build
 mix precommit
 ```
 
-The asset build checks TypeScript and produces widget, client, and embed bundles. `mix precommit` checks formatting, runs strict Credo, compiles with warnings as errors, and runs the Elixir tests.
+The asset build checks TypeScript and produces widget, client, and embed bundles. Check `git status --short priv/static/assets` and commit any changed output. `mix precommit` checks formatting, runs strict Credo, compiles with warnings as errors, and runs the Elixir tests.
 
 For browser changes, install Playwright's browsers once and run the relevant tests:
 

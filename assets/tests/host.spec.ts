@@ -10,6 +10,9 @@ for (const prefix of ["/widget", "/support/chat"]) {
       if (response.url().includes("/web_widget/assets/") && response.ok()) assets.push(response.url());
     });
     page.on("websocket", socket => sockets.push(socket.url()));
+    const embed = await page.request.get("http://127.0.0.1:4020/web_widget/assets/embed.js");
+    expect(embed.ok()).toBe(true);
+    expect(embed.headers()["content-type"]).toContain("javascript");
     await page.goto("http://127.0.0.1:4020/widget/missing");
     await page.evaluate((prefix) => {
       const frame = document.createElement("iframe");
