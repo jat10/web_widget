@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-09T10:53:38Z",
   "created": "2026-10-09T10:33:32Z",
   "description": "Run full asset build, Elixir precommit and browser suite across all configured browsers; fix failures before committing and pushing current authentication branch changes.",
   "id": "ww-xxk",
@@ -21,7 +22,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Validate full test suites and publish reconnect changes",
   "type": "task",
   "updated_at": "2026-10-09T10:53:38Z"
