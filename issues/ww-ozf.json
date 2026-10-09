@@ -6,9 +6,15 @@
   "description": "Remove the retry button and unused retry wiring; update the reconnect browser regression and validate on the current PR branch.",
   "id": "ww-ozf",
   "labels": [],
+  "comments": [
+    {
+      "text": "Removed retry UI, timer, callback, CSS and translations; rebuilt tracked assets. Updated reconnect regression to assert no banner buttons after prolonged disconnection and reconnect via test-controlled socket. Validation: assets build passed; Chromium reconnect test passed; mix precommit passed with 179 tests. Changes left in current PR working tree.",
+      "timestamp": "2026-10-09T15:17:25Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Make widget connection indicator status-only",
   "type": "task",
-  "updated_at": "2026-10-09T15:15:46Z"
+  "updated_at": "2026-10-09T15:17:25Z"
 }
