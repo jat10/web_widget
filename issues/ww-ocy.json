@@ -14,11 +14,15 @@
     {
       "text": "Adding focused browser coverage for automatic renewal at the 300-second lead while the original response completes during pending token acquisition; verify same LiveView PID and no duplicate submission.",
       "timestamp": "2026-10-09T10:22:41Z"
+    },
+    {
+      "text": "Added two browser cases for automatic renewal at exp minus 300 seconds with original answer during pending token acquisition or after JWT B. Same LiveView PID and no duplicate submission verified. Chromium 2 passed; build passed; mix precommit 179 tests, zero failures. Production code unchanged.",
+      "timestamp": "2026-10-09T10:27:01Z"
     }
   ],
   "priority": 1,
   "status": "in_progress",
   "title": "Complete PR 15 authentication integration tests",
   "type": "task",
-  "updated_at": "2026-10-09T10:22:41Z"
+  "updated_at": "2026-10-09T10:27:01Z"
 }
