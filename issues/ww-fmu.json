@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-09T07:31:42Z",
+  "description": "New browser regression assets/tests/pending-renewal.spec.ts reproduces: JWT expires after 3 seconds, parent obtains fresh token and init succeeds, host publishes answer 5 seconds after submission, answer never appears. Expiry unsubscribes original topic and clears pending_reply; Protocol.authenticate generates a fresh topic and Chat.open replaces request state on renewal. Host job still holds the original delivery context. A temporary no-renewal control with identical delayed mock passes. Keep sender/runtime authorization and response correlation intact when fixing. Test is intentionally unskipped and expects answer visibility.",
+  "id": "ww-fmu",
+  "labels": [],
+  "priority": 1,
+  "status": "open",
+  "title": "Preserve in-flight reply delivery across JWT renewal",
+  "type": "bug",
+  "updated_at": "2026-10-09T07:31:42Z"
+}
