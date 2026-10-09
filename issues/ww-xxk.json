@@ -14,11 +14,15 @@
     {
       "text": "User stopped Firefox/WebKit. Final full-run report: 218 passed, 2 failed (same watchdog test in Chromium and Firefox), 110 WebKit tests not run. Earlier progress updates incorrectly inferred no failures from tail snippets; corrected user explicitly. Root cause: watchdog test drops widget.submit frame; Phoenix PUSH_TIMEOUT=30000 invokes reloadWithJitter and disconnects before app 300000 timeout. New connection UI correctly disables send. Test now installs clock before load and extends only its held-submit transport deadline to isolate five-minute application watchdog, preserving prior assertions plus connected-state assertion. Targeted Chromium test passed. Running full Chromium only before commit/push.",
       "timestamp": "2026-10-09T10:50:55Z"
+    },
+    {
+      "text": "User explicitly instructed to stop all tests and commit/push, superseding full-suite completion. Stopped Chromium runner with SIGINT: 27 passed, 1 interrupted, 82 did not run; no runner remains. Earlier fresh asset build, precommit (179 tests) and distributed Mnesia checks passed. Fixed isolated watchdog test passed in Chromium. Committed all current changes as 9664c3f (feat(widget): show reconnect status and validate recovery) and pushed to origin/fix/authentication. Working tree clean. Full final browser suite was intentionally not completed.",
+      "timestamp": "2026-10-09T10:53:38Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Validate full test suites and publish reconnect changes",
   "type": "task",
-  "updated_at": "2026-10-09T10:50:55Z"
+  "updated_at": "2026-10-09T10:53:38Z"
 }
