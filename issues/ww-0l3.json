@@ -10,11 +10,15 @@
     {
       "text": "Module-context findings: WebWidget adapts LiveView-owned messages to assistant-ui; WidgetContext owns parent handshake and readiness; app.js owns the single transport. Flow: hook disconnect -\u003e browser status store -\u003e React banner/send guard; auth/history mount -\u003e readiness -\u003e restored status. Dependencies: LiveView hooks and live_react UI, no new host transport. State: messages/session server-owned; draft React-owned; connection presentation iframe document lifetime. Contracts: preserve response.* and parent readiness; never resend on reconnect. Risks: stale async ready callbacks, React remount during failed auth, terminal revocation. Coverage: existing reconnect test proves mock admission/reply and history; new assertions will cover offline draft/disabled send/status/retry, streaming banner and failed-auth readiness. Unknown: whether live_react remount clears drafts on failed authentication; verify in browser before deciding preservation changes.",
       "timestamp": "2026-10-09T10:03:43Z"
+    },
+    {
+      "text": "Implemented iframe-local connection presentation store driven by WidgetContext lifecycle; async readiness guarded against stale disconnect callbacks and matches restored conversation DOM. React consumes status with useSyncExternalStore; sends disabled immediately, banner after 2s, retry after 15s, connected for 2s. Existing composer preserves drafts across normal reconnect, verified by browser rather than adding duplicate draft state. Added EN/FR/AR strings and template, streaming status hides stale typing. Chromium targeted recovery tests and mix precommit (179 tests) pass; cross-browser validation in progress.",
+      "timestamp": "2026-10-09T10:10:05Z"
     }
   ],
   "priority": 2,
   "status": "in_progress",
   "title": "Show reconnect status and preserve draft during connection recovery",
   "type": "task",
-  "updated_at": "2026-10-09T10:03:43Z"
+  "updated_at": "2026-10-09T10:10:05Z"
 }
