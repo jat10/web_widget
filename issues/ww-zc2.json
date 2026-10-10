@@ -6,9 +6,15 @@
   "description": "Read-only review of scoped session implementation, contract gaps, and validation evidence; report findings in chat without production edits.",
   "id": "ww-zc2",
   "labels": [],
+  "comments": [
+    {
+      "text": "Reviewed PR 19 head ab812240 against base cc192ffe and issue 12. Focused session/runtime/installation tests: 21 passed in isolated /tmp archive. Five adversarial assertions failed: duplicate cookie HTTP 200 and WebSocket accepted; tampered cookie replaced with HTTP 200; cross-widget cookie replaced with HTTP 200; missing endpoint fallback resolves Lax; HTTPS Lax with secure:false emits insecure cookie. Node VM probe of unchanged app.js recovery callbacks: 10 open/error cycles invoked bootstrap 11 times without unavailable state. No production changes. Remaining integration gaps: issue 16 effective readiness, actual ZAQ endpoint/router migration and legacy fallback, Lax-to-None withheld-cookie browser test, actual longpoll/BO reconnect and proxy/migration rollout evidence. Findings delivered in chat only.",
+      "timestamp": "2026-10-10T08:30:48Z"
+    }
+  ],
   "priority": 2,
   "status": "in_progress",
   "title": "Review PR 19 against issue 12 acceptance criteria",
   "type": "task",
-  "updated_at": "2026-10-10T08:27:45Z"
+  "updated_at": "2026-10-10T08:30:48Z"
 }
