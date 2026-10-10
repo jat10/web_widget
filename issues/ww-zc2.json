@@ -2,6 +2,7 @@
   "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
+  "closed_at": "2026-10-10T08:30:48Z",
   "created": "2026-10-10T08:27:40Z",
   "description": "Read-only review of scoped session implementation, contract gaps, and validation evidence; report findings in chat without production edits.",
   "id": "ww-zc2",
@@ -13,7 +14,7 @@
     }
   ],
   "priority": 2,
-  "status": "in_progress",
+  "status": "closed",
   "title": "Review PR 19 against issue 12 acceptance criteria",
   "type": "task",
   "updated_at": "2026-10-10T08:30:48Z"
