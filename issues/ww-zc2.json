@@ -1,5 +1,5 @@
 {
-  "assignee": "",
+  "assignee": "Jad",
   "blocked_by": [],
   "blocks": [],
   "created": "2026-10-10T08:27:40Z",
@@ -7,8 +7,8 @@
   "id": "ww-zc2",
   "labels": [],
   "priority": 2,
-  "status": "open",
+  "status": "in_progress",
   "title": "Review PR 19 against issue 12 acceptance criteria",
   "type": "task",
-  "updated_at": "2026-10-10T08:27:40Z"
+  "updated_at": "2026-10-10T08:27:45Z"
 }
