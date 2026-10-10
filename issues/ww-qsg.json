@@ -1,0 +1,14 @@
+{
+  "assignee": "",
+  "blocked_by": [],
+  "blocks": [],
+  "created": "2026-10-10T08:16:23Z",
+  "description": "Implement GitHub issue #12: https://github.com/www-zaq-ai/web_widget/issues/12\nReview plan: implementation_plan.md at repository root. GitHub issue includes Delivery order and bounded cookie recovery decisions.\nDeliver isolated widget HTTP/LiveView sessions with ZAQ-owned per-connector same_site, separate from BO cookies and authorization. Prove the parameterized socket/path-scoped cookie design before production changes. Preserve CSRF, origin checks, host JWT authentication, missing legacy policy semantics, and one LiveView connection per widget.\nNo unconditional renewal: unchanged valid policy does not emit Set-Cookie solely for renewal. Missing cookies permit one bootstrap per page load; no automatic reload/cookie-setting loops. Policy edits apply on explicit iframe reload after runtime refresh. Metadata is optional and cannot prove browser acceptance.\nIncludes package implementation, ZAQ integration handoff, real browser acceptance, and coordinated release/rollback. Creation of this epic is planning only; implementation has not started.",
+  "id": "ww-qsg",
+  "labels": [],
+  "priority": 1,
+  "status": "open",
+  "title": "Isolate widget sessions and implement per-connector SameSite (#12)",
+  "type": "epic",
+  "updated_at": "2026-10-10T08:16:23Z"
+}
