@@ -1,6 +1,7 @@
 # Run with: MIX_ENV=test mix run --no-start test/support/integration/binding_store_cluster.exs
 defmodule WebWidget.Integration.BindingStoreClusterCheck do
-  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector
+  alias WebWidget.Integration.{BindingStore, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -123,7 +124,7 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
     pre_reset = claims(System.system_time(:second))
     :ok = BindingStore.claim(pre_reset, "page-before-reset", pre_reset.iat)
 
-    {config, hooks, options} = Host.fixture()
+    {config, hooks, _options} = Host.fixture()
     key = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
     config =
@@ -136,14 +137,10 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
         }
       })
 
-    options =
-      Keyword.merge(options,
-        pubsub_server: WebWidget.PubSub,
-        identity_verifier: :connector_key
-      )
+    {:ok, _} =
+      Supervisor.start_child(WebWidget.TestClusterHost, {Connector, config: config, hooks: hooks})
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
-    {:ok, _} = Supervisor.start_child(WebWidget.TestClusterHost, spec)
+    Host.await_runtime(config.id)
 
     {:ok, current_proof} =
       SignedIdentity.sign(key, config.id, %{user_id: "renewing-user"},

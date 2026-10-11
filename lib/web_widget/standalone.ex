@@ -15,7 +15,6 @@ defmodule WebWidget.Standalone do
     infrastructure =
       Keyword.get(opts, :infrastructure, [])
       |> Keyword.put_new(:pubsub_server, WebWidget.PubSub)
-      |> Keyword.put_new(:transport, endpoint: WebWidgetWeb.Endpoint)
 
     children = [{Phoenix.PubSub, name: WebWidget.PubSub}, {WebWidget, infrastructure}]
     children = children ++ standalone_children(opts) ++ [WebWidgetWeb.Endpoint]

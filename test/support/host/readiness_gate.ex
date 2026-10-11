@@ -33,6 +33,8 @@ defmodule WebWidget.TestHost.ReadinessGate do
   defp fault(conn, :session_path), do: corrupt_meta(conn, "web-widget-session", "/other/session")
   defp fault(conn, :page_csrf), do: corrupt_meta(conn, "csrf-token", "forged-page-token")
 
+  defp fault(conn, {:force_ssl, host}), do: Plug.SSL.call(conn, Plug.SSL.init(host: host))
+
   defp fault(conn, fault) do
     cond do
       gate?(conn, :verification) -> verification_fault(conn, fault)

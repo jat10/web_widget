@@ -114,6 +114,15 @@ During a connection interruption, the widget keeps messages and the draft visibl
 
 ZAQ can depend on a released tag with `{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}` and mount `web_widget("/widget")` outside its BO browser pipeline, plus `WebWidget.Endpoint.web_widget_socket("/widget")` in its endpoint. The widget uses an isolated cookie and its single `/widget/:id/live` connection; BO sessions remain unchanged. Generated installation scripts include the widget page URL, including a configured custom mount prefix. The macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`. ZAQ needs no asset copy, frontend build, static-path allowlist entry, or endpoint `WebWidget.Static` plug. See [host integration](docs/host-integration.md#routes-and-assets).
 
+Hosts start `{WebWidget, pubsub_server: Host.PubSub, authentication: [...]}` once
+and supervise each connector with `{WebWidget.Connector, config: config, hooks: hooks}`.
+Connectors recover automatically from infrastructure restarts; hosts replace or
+remove connector children to change configuration. Readiness discovers the actual
+serving widget endpoint/listener, with explicit overrides for ambiguity. Trusted
+proxy HTTPS -> host HTTP is supported without a dedicated widget TLS listener;
+readiness v2 distinguishes local checks from external HTTPS verification. See
+[host integration](docs/host-integration.md).
+
 ## Contributing
 
 Contributions to behavior, accessibility, translations, documentation, and tests are welcome.

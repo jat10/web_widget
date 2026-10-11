@@ -75,6 +75,13 @@ defmodule WebWidget.Configuration do
     end
   end
 
+  @doc false
+  def live?(config) do
+    Process.whereis(__MODULE__) == config.owner and
+      is_pid(Process.whereis(WebWidget.RuntimeRegistry)) and
+      current?(config.generation)
+  end
+
   def authentication(key) do
     case fetch() do
       {:ok, config} -> Keyword.fetch!(config.authentication, key)
@@ -126,17 +133,17 @@ defmodule WebWidget.Configuration do
   defp transport(opts) do
     with :ok <- keywords(opts, [:endpoint, :widget_path, :scheme, :tls_options], :transport),
          :ok <- endpoint(opts[:endpoint]),
-         true <- Keyword.get(opts, :scheme, :http) in [:http, :https],
+         true <- Keyword.get(opts, :scheme, :auto) in [:auto, :http, :https],
          :ok <- tls(Keyword.get(opts, :tls_options, [])) do
       {:ok,
        %{
          endpoint: opts[:endpoint],
          prefix: Keyword.get(opts, :widget_path, "/widget"),
-         scheme: Keyword.get(opts, :scheme, :http),
+         scheme: Keyword.get(opts, :scheme, :auto),
          tls_options: Keyword.get(opts, :tls_options, [])
        }}
     else
-      false -> invalid(:scheme, "must be :http or :https")
+      false -> invalid(:scheme, "must be :auto, :http or :https")
       error -> error
     end
   end
@@ -210,4 +217,8 @@ defmodule WebWidget.Configuration do
   end
 
   defp invalid(field, message), do: {:error, {:invalid_widget_configuration, field, message}}
+end
+
+defimpl Inspect, for: WebWidget.Configuration do
+  def inspect(_, _), do: "#WebWidget.Configuration<redacted>"
 end

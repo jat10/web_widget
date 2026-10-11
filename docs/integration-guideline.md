@@ -21,7 +21,7 @@ settings keys are `identity_issuer` and `identity_audience`; new-connector defau
 are `zaq_issuer` and `zaq_audience`. Values must be exact UTF-8 strings of 1–255
 bytes without surrounding whitespace. Both are mandatory, with no adapter default
 or application-option fallback. Upgrade existing connectors atomically. Edits
-require a runtime rebuild and invalidate old sessions and old-claim tokens.
+require connector replacement and invalidate old sessions and old-claim tokens.
 
 The backend control audience is `identity_audience <> ":control"`, here `zaq_audience:control`. Keep the key on the backend. Use its exact UTF-8 bytes for HS256; do not Base64-decode it.
 

@@ -35,12 +35,17 @@ defmodule WebWidget.Runtime do
     }
   end
 
+  def start_link(%WebWidget.Connector.Private{value: config}), do: start_link(config)
+
   def start_link(config) do
     with {:ok, config} <- prepare(config),
          {:ok, infrastructure} <- Configuration.fetch(),
          :ok <- infrastructure_matches(config, infrastructure) do
       config = Map.put_new(config, :pubsub_server, infrastructure.integration[:pubsub_server])
-      GenServer.start_link(__MODULE__, {config, infrastructure})
+
+      GenServer.start_link(__MODULE__, %WebWidget.Connector.Private{
+        value: {config, infrastructure}
+      })
     end
   end
 
@@ -53,6 +58,7 @@ defmodule WebWidget.Runtime do
   def readiness_snapshot(widget_id, timeout)
       when is_binary(widget_id) and is_integer(timeout) and timeout > 0 do
     with {:ok, infrastructure} <- Configuration.fetch(),
+         true <- is_pid(Process.whereis(WebWidget.Integration.BindingStore)),
          [{pid, _}] <- Registry.lookup(WebWidget.RuntimeRegistry, widget_id),
          {:ok, snapshot} <- GenServer.call(pid, {:readiness_snapshot, widget_id}, timeout),
          true <-
@@ -254,7 +260,8 @@ defmodule WebWidget.Runtime do
   end
 
   defp session_config(%Session{} = session) do
-    with {:ok, %{integration: %Protocol{}, runtime_ref: runtime_ref} = config} <-
+    with true <- is_pid(Process.whereis(WebWidget.Integration.BindingStore)),
+         {:ok, %{integration: %Protocol{}, runtime_ref: runtime_ref} = config} <-
            delivery_config(session.widget_id),
          true <- Session.valid?(session, runtime_ref, config.channel_config_id) do
       {:ok, config}
@@ -269,10 +276,11 @@ defmodule WebWidget.Runtime do
 
   defp call_widget(widget_id, request) do
     with {:ok, infrastructure} <- Configuration.fetch(),
+         true <- Configuration.live?(infrastructure),
          [{pid, generation}] <- Registry.lookup(WebWidget.RuntimeRegistry, widget_id),
          true <- generation == infrastructure.generation,
          result <- GenServer.call(pid, request),
-         true <- Configuration.current?(generation) do
+         true <- Configuration.live?(infrastructure) do
       result
     else
       _ -> {:error, :not_found}
@@ -284,7 +292,7 @@ defmodule WebWidget.Runtime do
   end
 
   @impl true
-  def init({config, infrastructure}) do
+  def init(%WebWidget.Connector.Private{value: {config, infrastructure}}) do
     config =
       config
       |> Map.put(:runtime_ref, make_ref())

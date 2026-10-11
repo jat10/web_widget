@@ -99,7 +99,7 @@ were changed.
 | Upstream change | Effect on this package and plan |
 | --- | --- |
 | Dedicated `/bo/channels/retrieval/web_widget` page and Channels card | Use BO to create/edit/enable/archive connectors, select agent routing, and generate/rotate keys. No widget administration page needs building here. |
-| `Runtime.status/2` requires both `build/2` and `embed_script/2` | Our builder has only `build/2`, so BO reports the adapter unavailable even if a runtime started through IEx. Add the callback before testing BO enablement. |
+| Historical adapter availability depended on construction callbacks | Superseded by host-supervised `WebWidget.Connector` children and adapter status/installation callbacks; migrate the host availability check to the current contract. |
 | Enablement requires the global base URL | Configure it through System Configuration. The schema also enforces it during persistence, so the earlier IEx recipe needs this prerequisite. |
 | `embed_script(widget_id, base_url)` is called by ZAQ | Return escaped, secret-free installation markup matching our actual script/bootstrap API and reachable endpoint. The callback receives no connector key. |
 | Connector key is encrypted at rest and delivered as resolved `config.token` | The current builder discards the token and uses a reject-all verifier. Add private per-connector verification and rotation/session revocation before authenticated browser acceptance. Key generation alone does not enable authentication. |
@@ -200,7 +200,7 @@ package can already be connected to ZAQ unchanged.
 
 ### Package changes
 
-- [x] Implement `RuntimeBuilder.build(config, hooks)` returning `{:ok, {state_spec_or_nil, listener_specs}}`. Reuse `WebWidget.Runtime` for registry/lifecycle state and retain hooks as trusted server-only state. Keep the dependency's standalone endpoint and demo runtime disabled.
+- [x] Implement runtime construction from trusted host config/hooks. The historical preconstructed-spec interface is superseded by `WebWidget.Connector` supervision and private generation-aware construction. Keep dependency standalone services disabled.
 - [x] Make the builder's child specs unique per connector and compatible with ZAQ's existing BridgeSupervisor. Validate missing hooks/configuration explicitly; construction errors must fail startup.
 - [x] Add the shared-protocol boundary and an explicit authenticated session context. Do not pass authentication authority through browser-editable event maps.
 - [x] Preserve the config-bound MFA and integer connector ID. The runtime registry can continue to use the string route ID. Invoke the constructors from `hooks`, then invoke the sink with its configured argument prefix.
@@ -227,10 +227,10 @@ Exit: a real runtime starts/stops through ZAQ; a package-owned adapter calls the
 Implemented package-first on 2026-10-05. At that point ZAQ remained unchanged.
 The subsequent configuration-only installation is recorded below.
 
-- `RuntimeBuilder.build/2` reads `config :web_widget, :integration`;
-  `build/3` accepts explicit `pubsub_server` and `identity_verifier` options.
-  Invalid hooks/options/presentation fail construction. The existing Runtime is
-  the sole state child, with a connector-specific child ID and no listeners.
+- Historical construction used application-global providers and preconstructed
+  runtime specs. This interface is removed: current hosts pass infrastructure
+  options to `{WebWidget, opts}` and connector inputs to `WebWidget.Connector`.
+  Invalid inputs fail validation; runtime reconstruction is connector-owned.
 - `Runtime.authenticate/2` invokes the verifier with scoped proof and returns a
   process/runtime-generation-bound Session without retaining proof. It refuses
   empty origin allowlists and missing/expired/invalid verification.

@@ -1,6 +1,7 @@
 defmodule WebWidget.Integration.SignedIdentityTest do
   use ExUnit.Case, async: false
-  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.Integration.{BindingStore, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -25,7 +26,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
       })
 
     WebWidget.TestInfrastructure.setup(options)
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, options)
     start_supervised!(spec)
     reset = await_reset()
     delay = max(0, (reset + 1) * 1_000 - System.system_time(:millisecond))
@@ -201,7 +202,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     {:ok, proof} = sign(ctx)
     stop_supervised!(ctx.spec.id)
     config = %{ctx.config | token: Base.url_encode64(:crypto.strong_rand_bytes(32))}
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, ctx.hooks, ctx.options)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, ctx.hooks, ctx.options)
     start_supervised!(spec)
     assert {:error, :unauthorized} = authenticate(ctx, proof)
     {:ok, public} = Runtime.fetch_widget(ctx.id)
@@ -209,7 +210,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     for key <- [nil, "placeholder", String.duplicate("x", 40)] do
       assert {:error, :invalid_identity_config} =
-               RuntimeBuilder.build(%{config | token: key}, ctx.hooks, ctx.options)
+               RuntimeConfig.prepare(%{config | token: key}, ctx.hooks, ctx.options)
     end
   end
 
@@ -226,7 +227,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
         }
       })
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, ctx.options)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, ctx.options)
     start_supervised!(spec)
 
     for {id, issuer, audience, foreign_issuer, foreign_audience} <- [
@@ -273,7 +274,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
       config = %{ctx.config | settings: Map.put(ctx.config.settings, name, "edited")}
 
       {:ok, {spec, []}} =
-        RuntimeBuilder.build(
+        RuntimeConfig.prepare(
           config,
           ctx.hooks,
           Keyword.put(ctx.options, :pubsub_server, WebWidget.PubSub)

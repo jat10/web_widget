@@ -1,8 +1,8 @@
 defmodule WebWidget.Integration.ReadinessTransport do
   @moduledoc false
 
-  alias WebWidget.Embedding.Session
-  alias WebWidget.Integration.Readiness
+  alias WebWidget.Embedding.{Proxy, Session}
+  alias WebWidget.Integration.{Deployment, Readiness}
 
   @websocket_guid "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
   @max_page_bytes 1_048_576
@@ -11,8 +11,12 @@ defmodule WebWidget.Integration.ReadinessTransport do
     with {:ok, deployment} <- deployment(),
          {:ok, target} <- listener(deployment),
          :ok <- socket_mount(target),
-         {:ok, policy} <- Session.effective(widget, target.endpoint, target.scheme) do
-      probe(widget, target, policy, deadline)
+         {:ok, proxy} <- Proxy.policy(target.endpoint),
+         target <- Map.put(target, :proxy, proxy),
+         {:ok, policy} <- Session.effective(widget, target.endpoint, policy_scheme(target)) do
+      if target.scheme == :http and not is_nil(proxy),
+        do: proxy_probe(widget, target, policy, deadline),
+        else: probe(widget, target, policy, deadline)
     else
       {:error, reason} -> failure(network_reason(reason))
     end
@@ -25,10 +29,10 @@ defmodule WebWidget.Integration.ReadinessTransport do
 
   defp deployment do
     with {:ok, config} <- WebWidget.Configuration.fetch(),
-         true <- not is_nil(config.transport.endpoint) do
-      {:ok, Map.put(config.transport, :generation, config.generation)}
+         {:ok, transport} <- Deployment.resolve(config.transport) do
+      {:ok, Map.put(transport, :generation, config.generation)}
     else
-      _ -> {:error, :transport_unverifiable}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -97,11 +101,52 @@ defmodule WebWidget.Integration.ReadinessTransport do
          :ok <- current_deployment(target),
          :ok <- current_listener(target),
          :ok <- current_policy(widget, target, policy) do
-      {Readiness.check(), Readiness.check(), %{value: policy.same_site, source: policy.source}}
+      {Readiness.check(), Readiness.check(), %{value: policy.same_site, source: policy.source},
+       verification(:verified)}
     else
       {:error, reason} -> failure(network_reason(reason))
     end
   end
+
+  defp proxy_probe(widget, target, policy, deadline) do
+    path = target.prefix <> "/" <> widget.widget_id
+
+    with {:ok, response} <- page(target, path, deadline),
+         :ok <- insecure_rejected(response, target, path),
+         {:ok, response} <- page(target, path <> "/session", deadline),
+         :ok <- insecure_rejected(response, target, path <> "/session"),
+         :ok <- current_deployment(target),
+         :ok <- current_listener(target),
+         :ok <- current_policy(widget, target, policy) do
+      {Readiness.check(), Readiness.check(), %{value: policy.same_site, source: policy.source},
+       verification(:not_checked)}
+    else
+      _ -> failure(:transport_unverifiable)
+    end
+  end
+
+  defp insecure_rejected(%{status: 503, body: "https_required"} = response, _, _) do
+    if widget_cookies(response) == [], do: :ok, else: {:error, :transport_unverifiable}
+  end
+
+  defp insecure_rejected(%{status: status} = response, target, path)
+       when status in [301, 302, 307, 308] do
+    with [] <- widget_cookies(response),
+         [location] <- Req.Response.get_header(response, "location"),
+         uri <- URI.parse(location),
+         true <- uri.scheme == "https" and uri.host == target.proxy.uri.host,
+         true <- uri.port == target.proxy.uri.port and uri.path == path,
+         true <- is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment) do
+      :ok
+    else
+      _ -> {:error, :transport_unverifiable}
+    end
+  end
+
+  defp insecure_rejected(_, _, _), do: {:error, :transport_unverifiable}
+
+  defp policy_scheme(%{proxy: nil, scheme: scheme}), do: scheme
+  defp policy_scheme(_), do: :https
 
   defp current_deployment(target) do
     case deployment() do
@@ -126,10 +171,10 @@ defmodule WebWidget.Integration.ReadinessTransport do
   end
 
   defp current_policy(widget, target, policy) do
-    case Session.effective(widget, target.endpoint, target.scheme) do
-      {:ok, ^policy} -> :ok
-      {:ok, _} -> {:error, :cookie_policy_mismatch}
-      error -> error
+    case {Proxy.policy(target.endpoint),
+          Session.effective(widget, target.endpoint, policy_scheme(target))} do
+      {{:ok, proxy}, {:ok, ^policy}} when proxy == target.proxy -> :ok
+      _ -> {:error, :cookie_policy_mismatch}
     end
   end
 
@@ -336,29 +381,39 @@ defmodule WebWidget.Integration.ReadinessTransport do
   defp failure(reason) do
     cookie_reasons = [:cookie_policy_mismatch, :secure_cookie_required, :https_required]
 
-    cond do
-      reason in cookie_reasons ->
-        {Readiness.check(:unknown, :transport_unverifiable),
-         Readiness.check(:unavailable, reason), Readiness.unresolved()}
+    result =
+      cond do
+        reason in cookie_reasons ->
+          {Readiness.check(:unknown, :transport_unverifiable),
+           Readiness.check(:unavailable, reason), Readiness.unresolved()}
 
-      reason == :transport_not_listening ->
-        {Readiness.check(:unavailable, reason),
-         Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
+        reason == :transport_not_listening ->
+          {Readiness.check(:unavailable, reason),
+           Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
 
-      reason in [:cookie_policy_unsupported, :missing_cookie_policy, :invalid_partitioned_policy] ->
-        {Readiness.check(:unknown, :transport_unverifiable),
-         Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
+        reason in [
+          :cookie_policy_unsupported,
+          :missing_cookie_policy,
+          :invalid_partitioned_policy
+        ] ->
+          {Readiness.check(:unknown, :transport_unverifiable),
+           Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
 
-      true ->
-        {Readiness.check(
-           :unknown,
-           if(reason in [:check_failed, :check_timeout],
-             do: reason,
-             else: :transport_unverifiable
-           )
-         ), Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
-    end
+        true ->
+          {Readiness.check(
+             :unknown,
+             if(reason in [:check_failed, :check_timeout],
+               do: reason,
+               else: :transport_unverifiable
+             )
+           ), Readiness.check(:unknown, :cookie_policy_unsupported), Readiness.unresolved()}
+      end
+
+    Tuple.insert_at(result, 3, verification(:not_checked))
   end
+
+  defp verification(handshake),
+    do: %{scope: :local, session_handshake: handshake, external_https: :not_checked}
 
   defp network_reason(%{reason: :timeout}), do: :check_timeout
   defp network_reason(%{reason: :econnrefused}), do: :transport_not_listening

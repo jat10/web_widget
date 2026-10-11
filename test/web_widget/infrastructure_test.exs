@@ -2,6 +2,7 @@ defmodule WebWidget.InfrastructureTest do
   use ExUnit.Case, async: false
 
   alias WebWidget.Configuration
+  alias WebWidget.Connector.RuntimeConfig
   alias WebWidget.Integration.{BindingStore, Chat, ControlProof, RuntimeBuilder, SignedIdentity}
   alias WebWidget.TestIntegration.Host
 
@@ -40,7 +41,7 @@ defmodule WebWidget.InfrastructureTest do
       )
     )
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks)
+    {:ok, {spec, []}} = Host.runtime_spec(config, hooks)
     start_supervised!(spec)
 
     assert {:ok, session} =
@@ -232,7 +233,7 @@ defmodule WebWidget.InfrastructureTest do
 
   test "compatibility construction cannot install competing provider options" do
     {config, hooks, opts} = Host.fixture()
-    assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    assert {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     assert {:error, {:infrastructure_configuration_mismatch, _}} = start_supervised(spec)
     assert {:error, :not_found} = WebWidget.Runtime.fetch_widget(to_string(config.id))
   end
@@ -263,7 +264,7 @@ defmodule WebWidget.InfrastructureTest do
         }
       })
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks)
+    {:ok, {spec, []}} = Host.runtime_spec(config, hooks)
     runtime = start_supervised!(spec)
     {:ok, old} = Configuration.fetch()
     reset = BindingStore.reset_cutoff_value()
@@ -281,7 +282,7 @@ defmodule WebWidget.InfrastructureTest do
     {:ok, supervisor} = ExUnit.fetch_test_supervisor()
     assert :ok = Supervisor.delete_child(supervisor, spec.id)
     assert {:error, {:infrastructure_configuration_mismatch, _}} = start_supervised(spec)
-    assert {:ok, {replacement, []}} = RuntimeBuilder.build(config, hooks)
+    assert {:ok, {replacement, []}} = Host.runtime_spec(config, hooks)
     start_supervised!(replacement)
     assert {:ok, _} = WebWidget.Runtime.fetch_widget(to_string(config.id))
   end

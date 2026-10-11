@@ -1,8 +1,8 @@
 defmodule WebWidget.Integration.ConfigurationTest do
   use ExUnit.Case, async: false
 
+  alias WebWidget.Connector.RuntimeConfig
   alias WebWidget.Integration.ControlProof
-  alias WebWidget.Integration.RuntimeBuilder
   alias WebWidget.Integration.SignedIdentity
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
@@ -12,18 +12,18 @@ defmodule WebWidget.Integration.ConfigurationTest do
     WebWidget.TestInfrastructure.setup(opts)
   end
 
-  test "build/2 reads supervised configuration and fails closed when infrastructure is absent" do
+  test "internal construction reads supervised configuration and fails closed when infrastructure is absent" do
     {config, hooks, opts} = Host.fixture()
     :ok = Supervisor.terminate_child(WebWidget.Standalone, WebWidget)
-    assert {:error, :infrastructure_not_started} = RuntimeBuilder.build(config, hooks)
+    assert {:error, :infrastructure_not_started} = Host.runtime_spec(config, hooks)
 
     WebWidget.TestInfrastructure.replace(opts)
-    assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks)
-    assert {:ok, {preview, []}} = RuntimeBuilder.build(config, hooks, opts)
+    assert {:ok, {spec, []}} = Host.runtime_spec(config, hooks)
+    assert {:ok, {preview, []}} = RuntimeConfig.prepare(config, hooks, opts)
     assert integration(spec) == integration(preview)
   end
 
-  test "build/2 binds connector settings rather than application identity options" do
+  test "construction binds connector settings rather than application identity options" do
     {config, hooks, opts} = Host.fixture()
     key = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
 
@@ -36,7 +36,7 @@ defmodule WebWidget.Integration.ConfigurationTest do
     config = Map.merge(config, %{token: key, settings: settings})
     opts = Keyword.put(opts, :identity_verifier, :connector_key)
     WebWidget.TestInfrastructure.replace(opts)
-    assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks)
+    assert {:ok, {spec, []}} = Host.runtime_spec(config, hooks)
     integration = integration(spec)
 
     assert integration.identity_verifier ==
@@ -47,7 +47,7 @@ defmodule WebWidget.Integration.ConfigurationTest do
     assert integration.pubsub_server == opts[:pubsub_server]
 
     for invalid <- [Map.delete(config, :settings), %{config | settings: %{}}] do
-      assert {:error, :invalid_identity_config} = RuntimeBuilder.build(invalid, hooks)
+      assert {:error, :invalid_identity_config} = Host.runtime_spec(invalid, hooks)
     end
   end
 
@@ -79,12 +79,12 @@ defmodule WebWidget.Integration.ConfigurationTest do
           %{identity_issuer: "parent", identity_audience: "widget"}
         ] do
       assert {:error, :invalid_identity_config} =
-               RuntimeBuilder.build(%{config | settings: settings}, hooks, opts)
+               RuntimeConfig.prepare(%{config | settings: settings}, hooks, opts)
     end
 
     for name <- ["identity_issuer", "identity_audience"] do
       assert {:error, :invalid_identity_config} =
-               RuntimeBuilder.build(
+               RuntimeConfig.prepare(
                  %{config | settings: Map.delete(config.settings, name)},
                  hooks,
                  opts
@@ -103,7 +103,7 @@ defmodule WebWidget.Integration.ConfigurationTest do
             String.duplicate("é", 128)
           ] do
         assert {:error, :invalid_identity_config} =
-                 RuntimeBuilder.build(
+                 RuntimeConfig.prepare(
                    %{config | settings: Map.put(config.settings, name, value)},
                    hooks,
                    opts
@@ -112,7 +112,7 @@ defmodule WebWidget.Integration.ConfigurationTest do
 
       for value <- ["zaq", String.duplicate("x", 255), String.duplicate("é", 127) <> "x"] do
         assert {:ok, _} =
-                 RuntimeBuilder.build(
+                 RuntimeConfig.prepare(
                    %{config | settings: Map.put(config.settings, name, value)},
                    hooks,
                    opts
@@ -136,7 +136,7 @@ defmodule WebWidget.Integration.ConfigurationTest do
 
       opts = Keyword.put(opts, :pubsub_server, server)
       WebWidget.TestInfrastructure.replace(opts)
-      assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+      assert {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
       start_supervised!(spec)
       assert Runtime.pubsub_server(to_string(config.id)) == {:ok, server}
       assert {:ok, _} = Runtime.authenticate(to_string(config.id), Host.proof(config.id))

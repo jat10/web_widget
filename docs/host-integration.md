@@ -13,13 +13,12 @@ children = [
   {Phoenix.PubSub, name: MyHost.PubSub},
   {WebWidget,
    pubsub_server: MyHost.PubSub,
-   authentication: [replica_nodes: [node()]],
-   transport: [endpoint: MyHostWeb.Endpoint, widget_path: "/widget", scheme: :https]},
-  MyHost.ConnectorSupervisor,
+    authentication: [replica_nodes: [node()]]},
+  {DynamicSupervisor, strategy: :one_for_one, name: MyHost.BridgeSupervisor},
   MyHostWeb.Endpoint
 ]
 
-Supervisor.start_link(children, strategy: :rest_for_one, name: MyHost.Supervisor)
+Supervisor.start_link(children, strategy: :one_for_one, name: MyHost.Supervisor)
 ```
 
 Declare the same intended replica list on every distributed node, including the
@@ -32,15 +31,15 @@ There is one infrastructure instance per BEAM node. Duplicate starts fail with
 `{:already_started, pid}`. Init options are validated before children start and
 invalid input returns `{:invalid_widget_configuration, field, explanation}`.
 Configuration is immutable for that running instance, never copied into global
-application environment. Replace infrastructure to change it, then rebuild
-connector children. Runtimes stop when their configuration owner stops, and
+application environment. Replace infrastructure to change its options; existing
+connector supervisors recover automatically using their retained host inputs.
+Runtimes stop when their configuration owner stops, and
 sessions/readiness are fenced by generation even before monitor delivery.
-Use host supervisor ordering/rebuild logic so connector runtimes restart only
-after infrastructure; do not keep an old `build/2` child spec across replacement.
-A host `:rest_for_one` supervisor orders whole-supervisor replacements. Internal
-infrastructure-child crashes also replace the generation: the host connector
-lifecycle manager must rebuild those stopped runtimes; widget infrastructure does
-not automatically reinstall connectors. To restart a standalone/demo composition
+Keep the host connector supervisor outside the infrastructure restart domain
+(for example, use `:one_for_one` above). Each `WebWidget.Connector` constructs a
+fresh runtime after configuration-owner, registry, binding-store or whole
+infrastructure replacement. The package handles bounded waiting/recovery; hosts
+do not inspect private configuration or poll for recovery. To restart a standalone/demo composition
 including its demo runtime, restart `WebWidget.Standalone`, not just one worker.
 Local shutdown does not stop Mnesia or erase shared authentication state.
 
@@ -53,9 +52,9 @@ Local shutdown does not stop Mnesia or erase shared authentication state.
 | `authentication.first_binding_window_seconds` | `5` |
 | `authentication.control_proof_ttl_seconds` | `30` |
 | `authentication.replica_nodes` | Required on distributed nodes; `[node()]` only when non-distributed |
-| `transport.endpoint` | Unset; readiness remains unverifiable until configured |
+| `transport.endpoint` | Unset; discovers the unique running widget endpoint matching the mount; explicit override disambiguates |
 | `transport.widget_path` | `"/widget"`; must match router/socket mounts |
-| `transport.scheme` | `:http`; selects an actual local listener, not a public proxy scheme |
+| `transport.scheme` | `:auto`; discovers a unique actual listener; `:http` / `:https` disambiguate dual listeners, not the public proxy scheme |
 | `transport.tls_options` | `[]`; only verified `cacertfile` / `cacerts` |
 | `public_url` / `token_url` | Optional public origin / authenticated same-origin token path |
 | `response_diagnostics` | `false`; `true` or `:summary` opt in |
@@ -70,18 +69,21 @@ host endpoint, TLS certificates, routes, cookie policy, connector, or listener.
 - Move `config :web_widget, :authentication` into `authentication:` init options.
 - Move trusted `:integration` values into init options; move nested `readiness:`
   and `widget_path` into `transport:`. Global settings no longer affect consumers.
-- Use `RuntimeBuilder.build/2` and `embed_script/2` against running infrastructure.
-  `build/3` remains an explicit construction-only compatibility bridge; it never
-  changes running options. Installing its child rejects providers that differ from
-  the running infrastructure. It is not a per-connector configuration override.
+- Replace preconstructed runtime specifications with supervised
+  `{WebWidget.Connector, config: config, hooks: hooks}` children. Public builder
+  construction callbacks are removed; hosts migrate immediately. Keep adapter
+  `status/2` and `embed_script/2` callbacks for readiness and installation markup.
+- Update host capability checks to the connector lifecycle API rather than a
+  builder construction callback. Validate readiness protocol version 2 and its
+  verification scope; local ready must not be presented as externally verified HTTPS.
 - Keep ordinary Phoenix endpoint configuration (including `web_widget_session`,
   PubSub for sockets, listener addresses, TLS, and signing secrets) with its owner.
 - For the local demo use `mix demo`, which explicitly starts `WebWidget.Standalone`.
 - For package-endpoint deployments explicitly supervise
   `{WebWidget.Standalone, mode: :package, infrastructure: widget_opts}`. This starts
-  the package endpoint and local socket PubSub, but no Repo or demo. Set
-  `transport: [endpoint: WebWidgetWeb.Endpoint, ...]` in `widget_opts` if overriding
-  transport defaults. Response PubSub may still reference the existing host server.
+  the package endpoint and local socket PubSub, but no Repo or demo. Serving
+  endpoints are discovered even with partial transport options; use an explicit
+  endpoint only to disambiguate. Response PubSub may reference the host server.
 - Standalone without a mock runtime can explicitly supervise
   `{WebWidget.Standalone, infrastructure: widget_opts}`; development/test demos
   add `demo: [allowed_domains: [...], multiple_conversations: false]`.
@@ -134,7 +136,7 @@ reset those limits. Failure shows an unavailable message and requires explicit
 reload; identity renewal and authorized conversation restoration stay separate.
 Backend revocation stops transport recovery without relabeling it as a session failure.
 
-For a nested/custom router mount such as `/support/chat`, register `web_widget_socket("/support/chat")` on the endpoint and set trusted integration `widget_path: "/support/chat"`. The returned `RuntimeBuilder.embed_script/2` snippet includes `data-widget-url="https://PUBLIC-ORIGIN/support/chat/42"`; the loader honors that URL and the iframe renders the corresponding socket URL. All three prefixes must match.
+For a nested/custom router mount such as `/support/chat`, register `web_widget_socket("/support/chat")` on the endpoint and set infrastructure `transport: [widget_path: "/support/chat"]`. The returned `RuntimeBuilder.embed_script/2` snippet includes `data-widget-url="https://PUBLIC-ORIGIN/support/chat/42"`; the loader honors that URL and the iframe renders the corresponding socket URL. All three prefixes must match.
 
 The `web_widget/1` macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`, using `WebWidget.Static` as a route. Released Git tags include the tracked production bundle. The host needs no Node installation, asset copy/build task, static-path allowlist entry, or endpoint static plug. Do not run a second package endpoint when mounting in the host endpoint.
 
@@ -172,8 +174,8 @@ Install the package, endpoint mount, router pipeline, proxy rules and updated ge
 
 ZAQ may invoke the optional configured adapter callback
 `WebWidget.Integration.RuntimeBuilder.status(id, timeout_ms: 2_000)` on the serving
-node through its existing NodeRouter action. Configure the serving endpoint explicitly
-in host-mounted mode, retaining the other integration options:
+node through its existing NodeRouter action. The serving endpoint and actual
+listener are discovered automatically; configure overrides only to disambiguate:
 
 ```elixir
 {WebWidget,
@@ -182,9 +184,9 @@ in host-mounted mode, retaining the other integration options:
   transport: [endpoint: MyHostWeb.Endpoint, widget_path: "/widget", scheme: :https]}
 ```
 
-In explicit package-endpoint composition, the default transport references
-`WebWidgetWeb.Endpoint`. Scheme selects an **actual local listener**, default
-`:http`; use `:https` for direct TLS. Listener address/port come from the configured
+In explicit package-endpoint composition, discovery selects `WebWidgetWeb.Endpoint`
+when it is the sole matching endpoint. Scheme selects an **actual local listener**,
+default `:auto`; choose `:http` or `:https` for dual listeners. Listener address/port come from the serving
 endpoint, not a caller URL. Wildcard addresses are probed through loopback. The
 endpoint's `url: [host: ...]` supplies Host, Origin and the verified TLS hostname;
 normal socket origin checks stay enabled. Private CAs may be supplied through
@@ -196,13 +198,16 @@ for the Mint (already used by Req) HTTP/1.1 WebSocket upgrade, then closes witho
 joining a LiveView or issuing/consuming identity credentials. All steps share the
 original total deadline. No user cookie jar or browser coordination lock is used.
 
-The version-1 response contains five checks and only allowlisted effective settings;
-see [adapter contract](adapter-contract.md#adapter-readiness-version-1). Cookie and
+The version-2 response contains five checks, allowlisted effective settings and
+`verification: %{scope: :local, session_handshake: :verified | :not_checked,
+external_https: :not_checked}`;
+see [adapter contract](adapter-contract.md#adapter-readiness-version-2). Cookie and
 CSRF probe values, signing keys, callbacks, private configuration and raw failures
 never leave the checker. Connector-key identity reports the installed connector
 values. A custom verifier's opaque identity policy stays unresolved. Effective
-SameSite is connector-owned and reported only after verification of the scoped
-bootstrap cookie and socket. Endpoint inheritance is not supported. Partitioned,
+SameSite is connector-owned. Direct-listener mode verifies the scoped bootstrap
+cookie and socket; trusted-proxy mode reports configured enforcement, explicitly
+marking the session handshake `:not_checked`. Endpoint inheritance is not supported. Partitioned,
 Secure, HttpOnly, host-only and path attributes must match the installed policy;
 neither the page nor the verification read may write a widget cookie. HTTP-only
 development endpoints must explicitly configure `web_widget_session: [partitioned: false]`.
@@ -221,12 +226,49 @@ not a guessed starting state. Caller input accepts only a positive integer ID an
 an optional 1–2,000 millisecond total timeout.
 
 Readiness is local evidence, not proof that a public reverse proxy forwards widget
-upgrades or that browsers accept third-party cookies. A TLS-terminating proxy with
-only a local HTTP listener cannot obtain a green partitioned or None/Secure check through an HTTPS
-`public_url` alone. Until its serving HTTPS/session path can be verified, keep that
-deployment non-ready and verify the external proxy path separately; never spoof
-forwarded headers or weaken CSRF/origin/TLS checks to make the probe pass. Preserve
-the HTTPS cross-site connect/reconnect deployment tests alongside local readiness.
+upgrades or that browsers accept third-party cookies. No cached external result is
+reported. A public HTTPS URL alone never changes local scheme or cookie policy.
+
+### HTTPS terminated by a trusted reverse proxy
+
+Browser HTTPS/WSS -> trusted reverse proxy -> host HTTP/WS is supported without
+a dedicated widget TLS listener. Configure the existing host endpoint:
+
+```elixir
+config :my_host, MyHostWeb.Endpoint,
+  url: [scheme: "https", host: "chat.example", port: 443],
+  http: [ip: {10, 0, 0, 2}, port: 4000],
+  check_origin: ["https://chat.example"],
+  web_widget_proxy: [
+    trusted_proxies: [{10, 0, 0, 1}]
+  ]
+```
+
+The endpoint's HTTPS URL supplies the public origin; an optional `public_origin`
+in `web_widget_proxy` overrides it. Proxy peer addresses are exact IPv4/IPv6 tuples,
+not forwarded client addresses.
+Keep the HTTP backend private. The TLS ingress must remove client-supplied
+forwarding headers and overwrite `X-Forwarded-Proto: https`,
+`X-Forwarded-Host: chat.example`, and `X-Forwarded-Port: 443`. Forward cookies,
+Origin, Upgrade and Connection correctly for `/widget/:id/live/*`, and route
+widget pages, session endpoints and assets to the same host. Do not redirect BO
+`/live` to a package listener. Malformed or mismatched trusted forwarding is
+rejected; untrusted peer forwarding is stripped for widget requests.
+
+`web_widget_socket/1` normalizes trusted scheme/host/port before both HTTP and
+socket dispatch. Host/BO cookie handling remains untouched. Secure, HttpOnly,
+Partitioned, SameSite, scoped cookie paths, CSRF and socket origin checks remain
+enforced. Do not add another global forwarding rewrite that bypasses this trust
+boundary for widget requests.
+
+Local readiness verifies the actual HTTP listener, mounted widget socket, rejection
+of insecure page/session requests (503 or a redirect to the exact public HTTPS
+origin/path) and the configured HTTPS cookie policy. It sends
+no forged forwarding headers and marks `session_handshake: :not_checked` and
+`external_https: :not_checked`. A local ready result remains possible if the public
+proxy is down; external deployment verification must independently exercise real
+HTTPS page/bootstrap/cookie verification and WSS upgrade through that proxy.
+Keep browser cross-site connect/reconnect checks alongside that verification.
 
 ## Runtime builder and shared protocol
 
@@ -236,10 +278,15 @@ ZAQ supplies these new-connector defaults; sign tokens with the actual configure
 values. Identifiers must be exact UTF-8 strings of 1–255 bytes without surrounding
 whitespace. Missing or invalid settings fail construction; integration options
 provide no fallback. Upgrade existing connectors atomically before installing this
-version. Editing either identifier requires a host runtime rebuild, invalidates
+version. Editing either identifier requires host connector replacement, invalidates
 old sessions and rejects tokens with old claims.
 
-Register `WebWidget.Integration.RuntimeBuilder` as the `web_widget` channel runtime builder. The host's existing supervisor owns its child lifecycle. One enabled connector corresponds to one package runtime and a positive integer connector ID. The string form is the public widget route ID. The builder reads the host's resolved connector key privately; no key appears in public widget configuration or the installation snippet.
+Use `WebWidget.Integration.RuntimeBuilder` for adapter status/installation callbacks.
+The host's existing supervisor owns connector creation, replacement and removal.
+One enabled connector corresponds to one `WebWidget.Connector` subtree and a
+positive integer connector ID. The string form is the public widget route ID.
+Runtime construction reads the host's resolved connector key privately; no key
+appears in public widget configuration or the installation snippet.
 
 ```elixir
 {WebWidget,
@@ -250,7 +297,40 @@ Register `WebWidget.Integration.RuntimeBuilder` as the `web_widget` channel runt
 
 The package also accepts a trusted custom verifier MFA for browser identity, but the signed backend disconnect route is available only with connector-key verification. The verifier receives `(proof, %{widget_id: string_id, channel_config_id: integer_id, page_id: signed_socket_id})` after any configured prefix arguments and returns `{:ok, %{sender_id: external_id, expires_at: unix_seconds}}` or an error. Conversation and prompt metadata are supplied later through `zaq.widget.updateContext`, never through JWT identity or verifier output.
 
-`RuntimeBuilder.build/2` returns `{:ok, {runtime_child_spec, []}}`. Trusted hooks provide `message`, `command`, `context`, `delivery`, `response`, and `sink_mfa` constructors. The package calls `sink_mfa` in the caller with a constructed payload and server-owned context. The host routes messages, authorizes resume/history, persists conversation state, and publishes `{:web_response, adapter_event_name, shared_response}` to the private delivery topic. The package subscribes before the first question, checks request/conversation/message correlation, and forwards public `response.*` events to its React UI. No second browser WebSocket, SSE, AG-UI, or compile-time host dependency is needed.
+```elixir
+{:ok, connector_pid} = DynamicSupervisor.start_child(
+  MyHost.BridgeSupervisor,
+  {WebWidget.Connector, config: resolved_connector, hooks: host_hooks}
+)
+
+# Replacement: terminate the old subtree, then start with updated host inputs.
+:ok = DynamicSupervisor.terminate_child(MyHost.BridgeSupervisor, connector_pid)
+```
+
+Configuration contains `id`, `provider: :web_widget` (or `"web_widget"`), private
+`token` and canonical string-keyed settings. Identity identifiers and SameSite
+are mandatory even with a verifier override. `display_name` and `allowed_domains`
+may be supplied on config (taking precedence) or trusted presentation hooks.
+Hooks contain the matching `widget_id` plus `message`, `command`, `context`,
+`delivery`, `response`, and config-bound `sink_mfa` constructors. Invalid inputs
+fail before startup with a fixed redacted error. Valid inputs may wait for absent
+infrastructure. Duplicate IDs fail even during recovery; child-spec IDs alone do
+not enforce uniqueness in DynamicSupervisor.
+
+The child specification contains redacted-inspection wrappers around server-only
+host inputs. Package diagnostics redact secrets, but privileged VM debugging
+(`:sys.get_state`, tracing) is not a security boundary. Hosts must likewise avoid
+logging raw config/hooks. Recovery is monitored and uses capped timer backoff,
+not supervisor restart loops. Removal shuts down all recovery work; infrastructure
+retains no connector configuration and cannot recreate a removed connector.
+
+The package calls `sink_mfa` in the caller with a constructed payload and
+server-owned context. The host routes messages, authorizes resume/history,
+persists conversation state, and publishes `{:web_response, adapter_event_name,
+shared_response}` to the private delivery topic. The package subscribes before
+the first question, checks request/conversation/message correlation, and forwards
+public `response.*` events to React. No second browser WebSocket, SSE, AG-UI, or
+compile-time host dependency is needed.
 
 For an integrated connector, the installer emits a public script containing the widget ID and the optional `token_url` attribute from integration configuration. The embedding website supplies that authenticated same-origin endpoint and may use:
 

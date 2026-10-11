@@ -1,5 +1,5 @@
 defmodule WebWidget.Integration.Readiness do
-  @moduledoc "Bounded, secret-free version-1 local readiness for installed widgets."
+  @moduledoc "Bounded, secret-free version-2 local readiness for installed widgets."
 
   alias WebWidget.Integration.{ReadinessTransport, SignedIdentity}
   alias WebWidget.Runtime
@@ -76,7 +76,9 @@ defmodule WebWidget.Integration.Readiness do
   defp inspect_runtime(widget_id, snapshot, deadline) do
     {authentication, identity_settings} = identity(snapshot.identity)
     delivery = delivery(snapshot.pubsub_server, deadline)
-    {transport, cookie_policy, same_site} = ReadinessTransport.check(snapshot.widget, deadline)
+
+    {transport, cookie_policy, same_site, verification} =
+      ReadinessTransport.check(snapshot.widget, deadline)
 
     runtime =
       case Runtime.readiness_snapshot(widget_id, min(remaining(deadline), 300)) do
@@ -93,7 +95,8 @@ defmodule WebWidget.Integration.Readiness do
         authentication: authentication,
         cookie_policy: cookie_policy
       },
-      Map.put(identity_settings, :same_site, same_site)
+      Map.put(identity_settings, :same_site, same_site),
+      verification
     )
   end
 
@@ -174,7 +177,15 @@ defmodule WebWidget.Integration.Readiness do
     end)
   end
 
-  defp result(checks, settings) do
+  defp result(
+         checks,
+         settings,
+         verification \\ %{
+           scope: :local,
+           session_handshake: :not_checked,
+           external_https: :not_checked
+         }
+       ) do
     status =
       Enum.find(@precedence, fn state -> Enum.any?(checks, fn {_, c} -> c.status == state end) end)
 
@@ -182,11 +193,12 @@ defmodule WebWidget.Integration.Readiness do
 
     {:ok,
      %{
-       protocol_version: 1,
+       protocol_version: 2,
        status: status,
        reason: winner.reason,
        checks: checks,
-       effective_settings: settings
+       effective_settings: settings,
+       verification: verification
      }}
   end
 

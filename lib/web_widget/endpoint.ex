@@ -1,6 +1,6 @@
 defmodule WebWidget.Endpoint do
   @moduledoc "Endpoint integration for the widget's single scoped LiveView connection."
-  alias WebWidget.Embedding.{CookieGuard, Session, Socket}
+  alias WebWidget.Embedding.{CookieGuard, Proxy, Session, Socket}
 
   defmacro web_widget_socket(prefix \\ "/widget") do
     quote do
@@ -9,7 +9,12 @@ defmodule WebWidget.Endpoint do
         @before_compile WebWidget.Endpoint
 
         def call(conn, opts) do
-          case CookieGuard.call(conn, __web_widget_prefixes__()) do
+          conn = Proxy.call(conn, __MODULE__, __web_widget_prefixes__())
+
+          guarded =
+            if conn.halted, do: conn, else: CookieGuard.call(conn, __web_widget_prefixes__())
+
+          case guarded do
             %{halted: true} = rejected -> rejected
             conn -> super(conn, opts)
           end

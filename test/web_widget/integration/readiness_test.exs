@@ -1,6 +1,7 @@
 defmodule WebWidget.Integration.ReadinessTest do
   use ExUnit.Case, async: false
 
+  alias WebWidget.Connector.RuntimeConfig
   alias WebWidget.Integration.{Readiness, RuntimeBuilder}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
@@ -31,7 +32,7 @@ defmodule WebWidget.Integration.ReadinessTest do
     {id, _pid} = install()
     warm(id)
     assert {:ok, result} = RuntimeBuilder.status(id, timeout_ms: 2_000)
-    assert result.protocol_version == 1
+    assert result.protocol_version == 2
     assert result.status == :ready
     assert result.reason == nil
     assert Enum.all?(result.checks, fn {_, check} -> check == %{status: :ready, reason: nil} end)
@@ -48,7 +49,14 @@ defmodule WebWidget.Integration.ReadinessTest do
     refute Map.has_key?(result, :pubsub_server)
 
     assert Map.keys(result) |> Enum.sort() ==
-             Enum.sort([:protocol_version, :status, :reason, :checks, :effective_settings])
+             Enum.sort([
+               :protocol_version,
+               :status,
+               :reason,
+               :checks,
+               :effective_settings,
+               :verification
+             ])
   end
 
   test "uses custom widget_path instead of BO /live" do
@@ -61,6 +69,193 @@ defmodule WebWidget.Integration.ReadinessTest do
     assert {:ok, result} = RuntimeBuilder.status(id, [])
     assert result.checks.transport == %{status: :unknown, reason: :transport_unverifiable}
     assert result.status != :ready
+  end
+
+  test "automatically discovers the unique matching endpoint and actual HTTP listener" do
+    {id, _} = install()
+    integration(transport: [widget_path: "/support/chat", tls_options: []])
+    assert {:ok, config} = WebWidget.Configuration.fetch()
+    assert config.transport.endpoint == nil
+    assert config.transport.scheme == :auto
+    assert {:ok, %{status: :ready, verification: verification}} = RuntimeBuilder.status(id, [])
+
+    assert verification == %{
+             scope: :local,
+             session_handshake: :verified,
+             external_https: :not_checked
+           }
+
+    stop_supervised!(@endpoint)
+    assert {:ok, %{checks: %{transport: %{status: :unknown}}}} = RuntimeBuilder.status(id, [])
+    start_supervised!(@endpoint)
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
+  end
+
+  test "multiple matching endpoints are ambiguous until explicitly selected" do
+    {id, _} = install()
+    integration(transport: [])
+
+    assert {:ok, %{checks: %{transport: %{reason: :transport_unverifiable}}}} =
+             RuntimeBuilder.status(id, [])
+
+    integration(transport: [endpoint: @endpoint])
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
+  end
+
+  @tag :tmp_dir
+  test "proxy TLS termination supports Secure cookies and WSS over an HTTP-only backend", %{
+    tmp_dir: dir
+  } do
+    alias WebWidget.TestHost.TLSProxy
+    {:ok, {_, backend_port}} = @endpoint.server_info(:http)
+    {cert, key, ca} = TLSProxy.certificates(dir)
+
+    proxy =
+      start_supervised!({TLSProxy, backend_port: backend_port, certfile: cert, keyfile: key})
+
+    port = TLSProxy.port(proxy)
+    origin = "https://localhost:#{port}"
+
+    endpoint_options(
+      web_widget_session: [],
+      web_widget_proxy: [
+        trusted_proxies: [{127, 0, 0, 1}],
+        public_origin: origin
+      ]
+    )
+
+    {id, _} = install(%{"same_site" => "None"})
+    path = "/widget/#{id}"
+
+    options = [
+      connect_options: [hostname: "localhost", transport_opts: [cacertfile: ca]],
+      headers: [{"host", "localhost:#{port}"}],
+      retry: false
+    ]
+
+    url = "https://127.0.0.1:#{port}"
+
+    assert %{status: 200, body: page} = Req.get!(url <> path, options)
+    assert page =~ "web-widget-socket"
+    headers = [{"origin", origin}, {"accept", "application/json"} | options[:headers]]
+    bootstrap = Req.get!(url <> path <> "/session", Keyword.put(options, :headers, headers))
+    assert bootstrap.status == 200
+    [cookie] = Req.Response.get_header(bootstrap, "set-cookie")
+
+    for attribute <- ["secure", "httponly", "samesite=none", "partitioned", "path=#{path}"] do
+      assert String.downcase(cookie) =~ String.downcase(attribute)
+    end
+
+    cookie = hd(String.split(cookie, ";"))
+
+    verified =
+      Req.get!(
+        url <> path <> "/session?verify=1",
+        Keyword.put(options, :headers, [{"cookie", cookie} | headers])
+      )
+
+    assert verified.status == 200
+    assert Req.Response.get_header(verified, "set-cookie") == []
+    assert_websocket(port, ca, path, cookie, verified.body["csrf_token"], origin)
+    assert_websocket(port, ca, path, cookie, "forged-csrf", origin, 403)
+
+    assert_websocket(
+      port,
+      ca,
+      path,
+      cookie,
+      verified.body["csrf_token"],
+      "https://evil.example",
+      403
+    )
+
+    assert {:error, _} = @endpoint.server_info(:https)
+
+    assert {:ok, %{status: :ready, verification: verification}} = RuntimeBuilder.status(id, [])
+
+    assert verification == %{
+             scope: :local,
+             session_handshake: :not_checked,
+             external_https: :not_checked
+           }
+
+    # TLS reachability remains independently observable, not retained as local green evidence.
+    stop_supervised!(TLSProxy)
+
+    assert {:ok, %{status: :ready, verification: %{external_https: :not_checked}}} =
+             RuntimeBuilder.status(id, [])
+
+    assert %{status: 503, body: "https_required"} =
+             Req.get!("http://127.0.0.1:#{backend_port}#{path}",
+               headers: [host: "localhost"],
+               retry: false
+             )
+  end
+
+  test "trusted proxy local readiness supports host HTTPS redirects without following them" do
+    endpoint_options(
+      web_widget_session: [],
+      web_widget_proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: "https://localhost"],
+      readiness_test_fault: {:force_ssl, "localhost"}
+    )
+
+    {id, _} = install(%{"same_site" => "None"})
+
+    assert {:ok, %{status: :ready, verification: %{session_handshake: :not_checked}}} =
+             RuntimeBuilder.status(id, [])
+
+    endpoint_options(readiness_test_fault: {:force_ssl, "evil.example"})
+
+    assert {:ok, %{checks: %{transport: %{reason: :transport_unverifiable}}}} =
+             RuntimeBuilder.status(id, [])
+  end
+
+  defp assert_websocket(port, cert, path, cookie, csrf, origin, expected_status \\ 101) do
+    {:ok, conn} =
+      Mint.HTTP.connect(:https, {127, 0, 0, 1}, port,
+        mode: :passive,
+        protocols: [:http1],
+        hostname: "localhost",
+        transport_opts: [cacertfile: String.to_charlist(cert)]
+      )
+
+    key = Base.encode64(:crypto.strong_rand_bytes(16))
+    query = URI.encode_query(%{"_csrf_token" => csrf, "vsn" => "2.0.0"})
+
+    headers = [
+      {"host", "localhost:#{port}"},
+      {"connection", "Upgrade"},
+      {"upgrade", "websocket"},
+      {"sec-websocket-version", "13"},
+      {"sec-websocket-key", key},
+      {"cookie", cookie},
+      {"origin", origin}
+    ]
+
+    {:ok, conn, ref} =
+      Mint.HTTP.request(conn, "GET", path <> "/live/websocket?" <> query, headers, nil)
+
+    try do
+      {:ok, _, responses} = Mint.HTTP.recv(conn, 0, 2_000)
+      assert {:status, ref, expected_status} in responses
+
+      if expected_status == 101 do
+        assert Enum.any?(responses, fn
+                 {:headers, ^ref, response_headers} ->
+                   expected =
+                     Base.encode64(
+                       :crypto.hash(:sha, key <> "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+                     )
+
+                   {"sec-websocket-accept", expected} in response_headers
+
+                 _ ->
+                   false
+               end)
+      end
+    after
+      Mint.HTTP.close(conn)
+    end
   end
 
   test "page is cookie-free and bootstrap verification precedes the socket, using only session CSRF" do
@@ -500,12 +695,20 @@ defmodule WebWidget.Integration.ReadinessTest do
              )
 
     assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
+
+    integration(transport: [endpoint: @endpoint, tls_options: [cacertfile: ca]])
+
+    assert {:ok, %{checks: %{transport: %{reason: :transport_unverifiable}}}} =
+             RuntimeBuilder.status(id, [])
+
+    integration(transport: [endpoint: @endpoint, scheme: :https, tls_options: [cacertfile: ca]])
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
   end
 
   test "policy is connector-owned and omission is rejected, not inherited" do
     {config, hooks, opts} = Host.fixture()
     config = %{config | settings: Map.delete(config.settings, "same_site")}
-    assert {:error, :missing_cookie_policy} = RuntimeBuilder.build(config, hooks, opts)
+    assert {:error, :missing_cookie_policy} = RuntimeConfig.prepare(config, hooks, opts)
     {id, _} = install()
     warm(id)
     assert {:ok, result} = RuntimeBuilder.status(id, [])
@@ -522,7 +725,7 @@ defmodule WebWidget.Integration.ReadinessTest do
         [readiness: [endpoint: @endpoint]]
     )
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     start_supervised!(spec)
     warm(config.id)
     assert {:ok, result} = RuntimeBuilder.status(config.id, [])
@@ -570,7 +773,7 @@ defmodule WebWidget.Integration.ReadinessTest do
       Map.merge(config, %{token: String.duplicate("private-readiness-key", 3), settings: settings})
 
     opts = [pubsub_server: @pubsub, identity_verifier: :connector_key]
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     {config.id, start_supervised!(spec)}
   end
 

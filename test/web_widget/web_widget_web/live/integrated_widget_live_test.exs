@@ -1,7 +1,8 @@
 defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
   use WebWidgetWeb.ConnCase
   import Phoenix.LiveViewTest
-  alias WebWidget.Integration.{BindingStore, ControlProof, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.Integration.{BindingStore, ControlProof, SignedIdentity}
   alias WebWidget.TestIntegration.ChatHost
 
   setup %{conn: conn} do
@@ -21,7 +22,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     }
 
     {:ok, {spec, []}} =
-      RuntimeBuilder.build(
+      RuntimeConfig.prepare(
         %{
           id: id,
           provider: "web_widget",

@@ -1,6 +1,8 @@
 defmodule WebWidget.TestIntegration.Host do
   @moduledoc false
 
+  alias WebWidget.Connector.RuntimeConfig
+
   # Recording constructors deliberately avoid implementing another host schema.
   def new(attrs), do: {:ok, %{constructed: attrs}}
   def new(actor, opts), do: {:ok, %{actor: actor, options: Map.new(opts)}}
@@ -37,7 +39,12 @@ defmodule WebWidget.TestIntegration.Host do
     config = %{
       id: id,
       provider: "web_widget",
-      settings: %{"same_site" => "Lax"},
+      token: String.duplicate("private-fixture-key", 3),
+      settings: %{
+        "same_site" => "Lax",
+        "identity_issuer" => "test-issuer",
+        "identity_audience" => "test-audience"
+      },
       reply: Keyword.get(opts, :reply)
     }
 
@@ -63,4 +70,36 @@ defmodule WebWidget.TestIntegration.Host do
 
   def proof(id, sender \\ "verified-parent-user"),
     do: {:signed, id, sender, System.system_time(:second) + 60}
+
+  def runtime_spec(config, hooks) do
+    with {:ok, infrastructure} <- WebWidget.Configuration.fetch(),
+         {:ok, {spec, []}} <-
+           RuntimeConfig.prepare(config, hooks, infrastructure.integration) do
+      {module, function, [runtime]} = spec.start
+      runtime = Map.put(runtime, :infrastructure_generation, infrastructure.generation)
+      {:ok, {%{spec | start: {module, function, [runtime]}}, []}}
+    end
+  end
+
+  def await_runtime(id, previous \\ nil) do
+    await_runtime(id, previous, System.monotonic_time(:millisecond) + 5_000)
+  end
+
+  defp await_runtime(id, previous, deadline) do
+    case WebWidget.Runtime.readiness_snapshot(to_string(id), 100) do
+      {:ok, snapshot} when snapshot.runtime_ref != previous ->
+        snapshot
+
+      _ ->
+        ExUnit.Assertions.assert(
+          System.monotonic_time(:millisecond) < deadline,
+          "connector did not recover"
+        )
+
+        receive do
+        after
+          10 -> await_runtime(id, previous, deadline)
+        end
+    end
+  end
 end

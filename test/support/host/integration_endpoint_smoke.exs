@@ -5,6 +5,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
   use ExUnit.Case
   import Phoenix.ConnTest
 
+  alias WebWidget.Connector
   alias WebWidget.Integration.Installation
   alias WebWidget.Integration.RuntimeBuilder
   alias WebWidget.TestIntegration.Host
@@ -27,6 +28,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
 
     {:ok, _} = Application.ensure_all_started(:web_widget)
     start_supervised!({WebWidget.Standalone, mode: :package})
+    bridge = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
     assert is_pid(Process.whereis(@endpoint))
     assert is_pid(Process.whereis(WebWidget.PubSub))
     assert Process.whereis(WebWidget.Repo) == nil
@@ -44,8 +46,11 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     {config, hooks, opts} = Host.fixture()
     opts = Keyword.put(opts, :pubsub_server, WebWidget.PubSub)
     replace_infrastructure(opts)
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
-    start_supervised!(spec)
+
+    {:ok, connector} =
+      DynamicSupervisor.start_child(bridge, {Connector, config: config, hooks: hooks})
+
+    Host.await_runtime(config.id)
     {:ok, snippet} = Installation.script(config.id, base_url)
 
     [src] =
@@ -56,7 +61,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     assert %{status: 200, body: body} = Req.get!(base_url <> "/widget/#{config.id}")
     assert body =~ "widget-state"
 
-    stop_supervised!({WebWidget.Runtime, config.id})
+    :ok = DynamicSupervisor.terminate_child(bridge, connector)
 
     config =
       Map.merge(config, %{
@@ -70,11 +75,14 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
 
     opts = [pubsub_server: WebWidget.PubSub, identity_verifier: :connector_key]
     replace_infrastructure(opts)
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks)
-    start_supervised!(spec)
+    {:ok, _} = DynamicSupervisor.start_child(bridge, {Connector, config: config, hooks: hooks})
+    before = Host.await_runtime(config.id)
     assert {:ok, %{status: :ready}} = RuntimeBuilder.status(config.id, [])
     assert :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.RuntimeRegistry)
     assert {:ok, %{reason: :runtime_not_registered}} = RuntimeBuilder.status(config.id, [])
+    assert {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.RuntimeRegistry)
+    Host.await_runtime(config.id, before.runtime_ref)
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(config.id, [])
   end
 
   defp replace_infrastructure(opts) do
@@ -84,7 +92,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     {:ok, _} =
       Supervisor.start_child(
         WebWidget.Standalone,
-        {WebWidget, Keyword.put(opts, :transport, endpoint: @endpoint)}
+        {WebWidget, Keyword.put(opts, :transport, tls_options: [])}
       )
   end
 end
