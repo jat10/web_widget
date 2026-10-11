@@ -2,6 +2,18 @@ defmodule WebWidget.DependencyHostTest do
   use ExUnit.Case, async: true
 
   @tag timeout: 60_000
+  test "shared E2E fixture uses the current connector API and waits for runtime readiness" do
+    paths = Enum.flat_map(:code.get_path(), &["-pa", List.to_string(&1)])
+    script = Path.expand("../support/host/e2e_fixture_smoke.exs", __DIR__)
+
+    {output, status} =
+      System.cmd(System.find_executable("elixir"), paths ++ [script], stderr_to_stdout: true)
+
+    assert status == 0, output
+    assert output =~ "1 test, 0 failures"
+  end
+
+  @tag timeout: 60_000
   test "isolated infrastructure lifecycle rolls back failed startup and remains host-owned" do
     paths = Enum.flat_map(:code.get_path(), &["-pa", List.to_string(&1)])
     script = Path.expand("../support/host/infrastructure_smoke.exs", __DIR__)

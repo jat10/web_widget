@@ -15,17 +15,36 @@ defmodule WebWidget.E2ESharedHost do
       allowed_domains: ["http://127.0.0.1:4019"], message: host, command: host,
       response: host, context: host, delivery: host,
       sink_mfa: {__MODULE__, :receive_request, [self()]}}
-    {:ok, {spec, []}} = WebWidget.Integration.RuntimeBuilder.build(
+    {:ok, _} = Supervisor.start_child(WebWidget.Standalone, {WebWidget.Connector, config:
       %{id: 420, provider: "web_widget", token: key(),
-        settings: %{"identity_issuer" => "e2e-parent", "identity_audience" => "e2e-widget", "same_site" => "Lax"}}, hooks,
-      pubsub_server: WebWidget.PubSub, identity_verifier: :connector_key)
-    {:ok, _} = Supervisor.start_child(WebWidget.Standalone, spec)
-    {:ok, {secure_spec, []}} = WebWidget.Integration.RuntimeBuilder.build(
+        settings: %{"identity_issuer" => "e2e-parent", "identity_audience" => "e2e-widget", "same_site" => "Lax"}}, hooks: hooks})
+    {:ok, _} = Supervisor.start_child(WebWidget.Standalone, {WebWidget.Connector, config:
       %{id: 421, provider: "web_widget", token: key(),
         settings: %{"identity_issuer" => "e2e-parent", "identity_audience" => "e2e-widget", "same_site" => "None"}},
-      %{hooks | widget_id: 421, allowed_domains: ["https://localhost:4023", "https://127.0.0.1:4023", "https://127.0.0.1:4022"]},
-      pubsub_server: WebWidget.PubSub, identity_verifier: :connector_key)
-    Supervisor.start_child(WebWidget.Standalone, secure_spec)
+      hooks: %{hooks | widget_id: 421, allowed_domains: ["https://localhost:4023", "https://127.0.0.1:4023", "https://127.0.0.1:4022"]}})
+    await_ready()
+  end
+
+  def ready? do
+    WebWidget.Integration.BindingStore.available?() == :ok and
+      Enum.all?(["420", "421"], fn id ->
+        match?({:ok, _}, WebWidget.Runtime.readiness_snapshot(id, 100))
+      end)
+  end
+
+  def await_ready(timeout \\ 10_000) do
+    await_ready_until(System.monotonic_time(:millisecond) + timeout)
+  end
+
+  defp await_ready_until(deadline) do
+    cond do
+      ready?() -> :ok
+      System.monotonic_time(:millisecond) >= deadline ->
+        raise "E2E connector runtimes 420 and 421 did not become available"
+      true ->
+        Process.sleep(10)
+        await_ready_until(deadline)
+    end
   end
 
   def requests(user), do: Agent.get(@requests, &Map.get(&1, {:requests, user}, []))
@@ -170,4 +189,4 @@ defmodule WebWidget.E2ESharedHost do
   end
 end
 
-{:ok, _} = WebWidget.E2ESharedHost.start()
+:ok = WebWidget.E2ESharedHost.start()

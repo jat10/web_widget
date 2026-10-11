@@ -6,6 +6,12 @@ defmodule WebWidget.E2EControl do
   plug Plug.Parsers, parsers: [:json], json_decoder: Jason
   plug :dispatch
 
+  get "/ready" do
+    if WebWidget.E2ESharedHost.ready?(),
+      do: send_resp(conn, 200, "ready"),
+      else: send_resp(conn, 503, "connector runtimes unavailable")
+  end
+
   get "/identity" do
     conn = fetch_query_params(conn)
     ttl = case Integer.parse(conn.query_params["ttl"] || "") do
@@ -44,10 +50,12 @@ defmodule WebWidget.E2EControl do
         :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
       "restore" ->
         {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+        :ok = WebWidget.E2ESharedHost.await_ready()
       "reset" ->
         :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
         :stopped = :mnesia.stop()
         {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+        :ok = WebWidget.E2ESharedHost.await_ready()
     end
     send_resp(conn, 204, "")
   end
