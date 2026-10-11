@@ -27,7 +27,11 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     )
 
     {:ok, _} = Application.ensure_all_started(:web_widget)
-    start_supervised!({WebWidget.Standalone, mode: :package})
+
+    start_supervised!(
+      {WebWidget.Standalone, mode: :package, infrastructure: [session: [partitioned: false]]}
+    )
+
     bridge = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
     assert is_pid(Process.whereis(@endpoint))
     assert is_pid(Process.whereis(WebWidget.PubSub))
@@ -92,7 +96,10 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     {:ok, _} =
       Supervisor.start_child(
         WebWidget.Standalone,
-        {WebWidget, Keyword.put(opts, :transport, tls_options: [])}
+        {WebWidget,
+         opts
+         |> Keyword.put(:transport, tls_options: [])
+         |> Keyword.put(:session, partitioned: false)}
       )
   end
 end

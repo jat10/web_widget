@@ -2,6 +2,7 @@ defmodule WebWidget.Configuration do
   @moduledoc false
   use GenServer
 
+  alias WebWidget.Embedding.Proxy
   alias WebWidget.Integration.Installation
 
   @authentication [
@@ -15,6 +16,8 @@ defmodule WebWidget.Configuration do
     :identity_verifier,
     :authentication,
     :transport,
+    :proxy,
+    :session,
     :public_url,
     :token_url,
     :response_diagnostics
@@ -26,6 +29,8 @@ defmodule WebWidget.Configuration do
     :authentication,
     :integration,
     :transport,
+    :proxy,
+    :session,
     :response_diagnostics
   ]
 
@@ -35,6 +40,8 @@ defmodule WebWidget.Configuration do
          :ok <- valid_verifier(Keyword.get(opts, :identity_verifier, :connector_key)),
          {:ok, authentication} <- normalize_authentication(Keyword.get(opts, :authentication, [])),
          {:ok, transport} <- transport(Keyword.get(opts, :transport, [])),
+         {:ok, proxy} <- proxy(Keyword.get(opts, :proxy)),
+         {:ok, session} <- session(Keyword.get(opts, :session, [])),
          :ok <- installation(opts, transport.prefix),
          true <- Keyword.get(opts, :response_diagnostics, false) in [false, true, :summary] do
       integration =
@@ -49,6 +56,8 @@ defmodule WebWidget.Configuration do
          authentication: authentication,
          integration: integration,
          transport: transport,
+         proxy: proxy,
+         session: session,
          response_diagnostics: Keyword.get(opts, :response_diagnostics, false)
        }}
     else
@@ -90,6 +99,62 @@ defmodule WebWidget.Configuration do
   end
 
   def authentication_default(key), do: Keyword.fetch!(@authentication, key)
+
+  defp proxy(opts) do
+    case Proxy.normalize_options(opts) do
+      {:ok, policy} ->
+        {:ok, policy}
+
+      _ ->
+        invalid(
+          :proxy,
+          "requires unique trusted IP tuples and an explicit root HTTPS public_origin"
+        )
+    end
+  end
+
+  defp session(opts) do
+    with :ok <- keywords(opts, [:partitioned, :secure, :endpoints], :session),
+         {:ok, policy} <- cookie_policy(Keyword.take(opts, [:partitioned, :secure])),
+         {:ok, endpoints} <- endpoint_sessions(Keyword.get(opts, :endpoints, []), policy) do
+      {:ok, Keyword.put(policy, :endpoints, endpoints)}
+    end
+  end
+
+  defp cookie_policy(opts) do
+    with :ok <- keywords(opts, [:partitioned, :secure], :session) do
+      if Enum.all?(opts, &boolean_option?/1),
+        do: {:ok, Keyword.merge([partitioned: true, secure: false], opts)},
+        else: invalid(:session, "partitioned and secure must be booleans")
+    end
+  end
+
+  defp boolean_option?({_, value}), do: is_boolean(value)
+
+  defp endpoint_sessions(opts, policy) when is_list(opts) do
+    Enum.reduce_while(opts, {:ok, []}, fn
+      {module, overrides}, {:ok, acc} ->
+        with false <- List.keymember?(acc, module, 0),
+             :ok <- endpoint(module),
+             true <- not is_nil(module),
+             {:ok, _} <- cookie_policy(overrides) do
+          {:cont, {:ok, acc ++ [{module, Keyword.merge(policy, overrides)}]}}
+        else
+          _ ->
+            {:halt,
+             invalid(
+               :session,
+               "endpoint selectors and boolean overrides must be valid and unique"
+             )}
+        end
+
+      _, _ ->
+        {:halt, invalid(:session, "endpoints must be a list of endpoint-policy pairs")}
+    end)
+  end
+
+  defp endpoint_sessions(_, _),
+    do: invalid(:session, "endpoints must be a list of endpoint-policy pairs")
 
   @impl true
   def init(config) do

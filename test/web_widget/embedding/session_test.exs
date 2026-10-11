@@ -10,7 +10,18 @@ defmodule WebWidget.Embedding.SessionTest do
   alias WebWidget.Embedding.Socket
   @endpoint WebWidget.TestHost.Endpoint
 
-  defp configure(opts), do: :ets.insert(@endpoint, {:web_widget_session, opts})
+  defp configure(opts) do
+    {:ok, supervisor} = ExUnit.fetch_test_supervisor()
+    id = {WebWidget.Runtime, :cookie_policy_test}
+    {:ok, spec} = :supervisor.get_childspec(supervisor, id)
+    stop_supervised!(id)
+
+    WebWidget.TestInfrastructure.replace(
+      Keyword.put(WebWidget.TestInfrastructure.options(), :session, opts)
+    )
+
+    start_supervised!(spec)
+  end
 
   setup do
     previous = Application.get_env(:web_widget, @endpoint)
@@ -25,6 +36,12 @@ defmodule WebWidget.Embedding.SessionTest do
     )
 
     start_supervised!(@endpoint)
+
+    WebWidget.TestInfrastructure.setup(
+      pubsub_server: WebWidget.PubSub,
+      session: [partitioned: false]
+    )
+
     on_exit(fn -> Application.put_env(:web_widget, @endpoint, previous) end)
 
     start_supervised!(
@@ -116,15 +133,34 @@ defmodule WebWidget.Embedding.SessionTest do
     assert {:ok, %{secure: true, partitioned: true}} =
              Session.effective(%{same_site: "Lax"}, @endpoint, :https)
 
-    configure(partitioned: "true")
+    assert {:error, {:invalid_widget_configuration, :session, _}} =
+             WebWidget.start_link(pubsub_server: WebWidget.PubSub, session: [partitioned: "true"])
 
-    assert response(get(build_conn(), "https://www.example.com/widget/lax/session"), 503) ==
-             "invalid_partitioned_policy"
+    assert response(get(build_conn(), "/widget/lax/session"), 503) == "https_required"
 
     configure(partitioned: false)
     conn = get(build_conn(), "/widget/lax/session")
     refute conn.resp_cookies["_web_widget_session"].secure
     refute Map.has_key?(conn.resp_cookies["_web_widget_session"], :extra)
+  end
+
+  test "technical policy replacement rejects stale transport claims and bootstrap installs the new attributes" do
+    old = get(build_conn(), "https://www.example.com/widget/lax/session")
+    session = get_session(old)
+    assert Session.valid_policy?(session, %{same_site: "Lax"}, @endpoint, :https)
+    configure(partitioned: true)
+    refute Session.valid_policy?(session, %{same_site: "Lax"}, @endpoint, :https)
+
+    refreshed =
+      build_conn()
+      |> Plug.Test.put_req_cookie(
+        "_web_widget_session",
+        old.resp_cookies["_web_widget_session"].value
+      )
+      |> get("https://www.example.com/widget/lax/session")
+
+    assert refreshed.resp_cookies["_web_widget_session"].extra == "Partitioned"
+    assert Session.valid_policy?(get_session(refreshed), %{same_site: "Lax"}, @endpoint, :https)
   end
 
   test "widget pages neither consume nor rewrite the BO cookie" do
@@ -252,6 +288,7 @@ defmodule WebWidget.Embedding.SessionTest do
                  "web_widget_id",
                  "web_widget_path",
                  "web_widget_same_site",
+                 "web_widget_cookie_policy",
                  "_csrf_token"
                ])
 
@@ -338,7 +375,10 @@ defmodule WebWidget.Embedding.SessionTest do
 
     endpoint_policy(secure: "true")
 
-    assert {:error, :secure_cookie_required} =
+    assert {:error, {:invalid_widget_configuration, :session, _}} =
+             WebWidget.start_link(pubsub_server: WebWidget.PubSub, session: [secure: "true"])
+
+    assert {:ok, %{secure: true}} =
              Session.effective(%{same_site: "Lax"}, @endpoint, :https)
   end
 

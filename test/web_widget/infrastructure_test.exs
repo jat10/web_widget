@@ -122,6 +122,34 @@ defmodule WebWidget.InfrastructureTest do
     refute WebWidget.Runtime.authorized?(session)
   end
 
+  test "concurrent ordinary hosts install exactly one infrastructure root without disturbing its owner" do
+    :ok = Supervisor.terminate_child(WebWidget.Standalone, WebWidget)
+
+    hosts =
+      for id <- 1..8 do
+        start_supervised!(%{
+          id: {:concurrent_host, id},
+          start: {DynamicSupervisor, :start_link, [[strategy: :one_for_one]]}
+        })
+      end
+
+    {:ok, [spec]} =
+      WebWidget.HostAdapter.infrastructure_child_specs(pubsub_server: WebWidget.PubSub)
+
+    results =
+      hosts
+      |> Task.async_stream(&DynamicSupervisor.start_child(&1, spec), max_concurrency: 8)
+      |> Enum.map(fn {:ok, result} -> result end)
+
+    assert [{:ok, root}] = Enum.filter(results, &match?({:ok, _}, &1))
+    assert Enum.count(results, &(&1 == {:error, {:already_started, root}})) == 7
+    assert Process.whereis(WebWidget.Supervisor) == root
+    assert {:ok, configuration} = Configuration.fetch()
+    assert configuration.owner == Process.whereis(Configuration)
+    assert :ok = BindingStore.available?()
+    assert Enum.sum(Enum.map(hosts, &DynamicSupervisor.count_children(&1).active)) == 1
+  end
+
   test "invalid init options fail before starting any children and do not leak values" do
     for opts <- [
           [pubsub_server: nil],

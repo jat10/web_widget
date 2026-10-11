@@ -4,6 +4,39 @@
 
 ## Explicit supervision and configuration
 
+### Generic host boundary
+
+Register `WebWidget.HostAdapter` as the provider adapter. The host dynamically
+delegates these four callbacks without constructing widget-specific hooks or
+translating the package readiness protocol:
+
+```elixir
+{:ok, infrastructure} = WebWidget.HostAdapter.infrastructure_child_specs(host_opts)
+{:ok, {connector_spec, listeners}} = WebWidget.HostAdapter.build_runtime_specs(config, hooks)
+{:ok, status} = WebWidget.HostAdapter.ingress_status(config, timeout_ms: 2_000)
+{:ok, snippet} = WebWidget.HostAdapter.installation(config, base_url, [])
+```
+
+`infrastructure` is the shared singleton's OTP spec list; install it once.
+`connector_spec` is an independent supervisor child. Install it with the host's
+ordinary DynamicSupervisor; terminate/replace its returned PID to remove/change it.
+`listeners` is currently empty. Hooks contain exactly `message`, `command`,
+`context`, `delivery`, `response` constructor modules plus a fixed config-bound
+`sink_mfa`. Scope comes from `config.id`, presentation from `config.settings`;
+`display_name` falls back to `config.name`. No host-specific module is referenced
+by this package. Raw `WebWidget` and `WebWidget.Connector` remain public for direct
+compositions, and `RuntimeBuilder.status/2` deliberately retains raw version-2
+observation compatibility.
+
+Ingress returns closed keys `status`, `mode`, `summary`, `reason`, `checks`,
+`effective_settings`, `verification`; statuses are `:ok`, `:pending`, `:error`,
+`:unknown`, `:disabled` and mode is `"websocket"`. The adapter compares desired
+issuer/audience/SameSite with installed evidence and bounds the whole probe to
+1–2,000 milliseconds. No credentials, constructors or raw exceptions escape.
+Installation accepts a positive ID or resolved config and optional `public_url`,
+`token_url`, `widget_path`; `[]` works with running defaults or offline package
+defaults. It generates escaped, secret-free markup, not executable BO content.
+
 The OTP dependency starts required libraries, including Mnesia, but **no widget
 processes or listeners**. Do not disable its dependencies with `runtime: false` or
 `app: false`. Add this child to your host supervisor before connector runtimes:
@@ -56,12 +89,18 @@ Local shutdown does not stop Mnesia or erase shared authentication state.
 | `transport.widget_path` | `"/widget"`; must match router/socket mounts |
 | `transport.scheme` | `:auto`; discovers a unique actual listener; `:http` / `:https` disambiguate dual listeners, not the public proxy scheme |
 | `transport.tls_options` | `[]`; only verified `cacertfile` / `cacerts` |
+| `proxy` | Disabled; optional unique exact `trusted_proxies` IP tuples and explicit root HTTPS `public_origin` |
+| `session.partitioned` / `session.secure` | `true` / `false`; HTTPS always forces Secure |
+| `session.endpoints` | `[]`; optional unique `{EndpointModule, [partitioned: boolean, secure: boolean]}` overrides |
 | `public_url` / `token_url` | Optional public origin / authenticated same-origin token path |
 | `response_diagnostics` | `false`; `true` or `:summary` opt in |
 
 All authentication timings are positive integer seconds. Membership must be
 nonempty, unique node atoms containing the local node. Startup configures no
-host endpoint, TLS certificates, routes, cookie policy, connector, or listener.
+host endpoint, TLS certificates, routes, connector, or listener. Cookie technical
+policy and proxy trust are validated once and remain immutable for the generation.
+Endpoint selectors only choose a process-owned policy; they never read widget
+options from an endpoint.
 
 ### Migration from automatic startup
 
@@ -71,14 +110,20 @@ host endpoint, TLS certificates, routes, cookie policy, connector, or listener.
   and `widget_path` into `transport:`. Global settings no longer affect consumers.
 - Replace preconstructed runtime specifications with supervised
   `{WebWidget.Connector, config: config, hooks: hooks}` children. Public builder
-  construction callbacks are removed; hosts migrate immediately. Keep adapter
-  `status/2` and `embed_script/2` callbacks for readiness and installation markup.
+  construction callbacks are removed; generic hosts migrate to `HostAdapter`
+  rather than constructing package children or translating raw status themselves.
 - Update host capability checks to the connector lifecycle API rather than a
   builder construction callback. Validate readiness protocol version 2 and its
   verification scope; local ready must not be presented as externally verified HTTPS.
-- Keep ordinary Phoenix endpoint configuration (including `web_widget_session`,
-  PubSub for sockets, listener addresses, TLS, and signing secrets) with its owner.
+- Move endpoint `web_widget_session` to process `session:` and `web_widget_proxy`
+  to process `proxy:` (with explicit public origin). Old endpoint widget options
+  are ignored. Keep ordinary Phoenix endpoint URL, socket PubSub, listener
+  addresses, TLS and signing secrets with its owner; no package-env copying.
 - For the local demo use `mix demo`, which explicitly starts `WebWidget.Standalone`.
+- Its optional raw mock runtime is temporary: an internal infrastructure-child
+  crash drops that demo until the composition is restarted, rather than repeatedly
+  restarting it against unavailable services. Real host connectors retain their
+  independent package-owned recovery.
 - For package-endpoint deployments explicitly supervise
   `{WebWidget.Standalone, mode: :package, infrastructure: widget_opts}`. This starts
   the package endpoint and local socket PubSub, but no Repo or demo. Serving
@@ -154,12 +199,11 @@ Populate every legacy connector's setting before upgrading, explicitly preservin
 
 Widget transport cookies carry `Partitioned` by default for all SameSite policies.
 Partitioning forces Secure and requires HTTPS, even if the host specifies `secure: false`.
-This technical option belongs only to the host endpoint, not connector settings:
+This technical option belongs only to validated infrastructure options, not connector settings:
 
 ```elixir
 # HTTP development only; retain normal Secure/SameSite rules when disabled.
-config :my_host, MyHostWeb.Endpoint,
-  web_widget_session: [partitioned: false]
+{WebWidget, pubsub_server: MyHost.PubSub, session: [partitioned: false]}
 ```
 
 Initial widget pages do not write cookies. Before connecting, each iframe uses
@@ -167,13 +211,16 @@ Initial widget pages do not write cookies. Before connecting, each iframe uses
 read-only cookie acceptance check. Multiple instances share one transport cookie
 within a top-level site; different parent sites use separate partitions. JWT/page
 authorization and conversations remain independent. Blocked cookies fail explicitly.
+Signed anonymous transport claims bind SameSite and technical Secure/Partitioned
+policy. Old cookies lacking those technical claims, or cookies from a replaced
+policy, must bootstrap fresh before connecting; the existing loader does this.
 
 Install the package, endpoint mount, router pipeline, proxy rules and updated generated snippet together. Existing iframe documents using `/live` require reload; changing a connector policy requires runtime replacement and page reload. No BO cookie is rewritten by widget routes. Independently scoped widgets cannot overwrite one another's cookie attributes. Partitioned None supports cross-site embedding on supported browsers even when ordinary third-party cookies are blocked; Lax/Strict still do not support normal cross-site iframe sessions.
 
 ### Local readiness
 
-ZAQ may invoke the optional configured adapter callback
-`WebWidget.Integration.RuntimeBuilder.status(id, timeout_ms: 2_000)` on the serving
+Hosts invoke the configured adapter callback
+`WebWidget.HostAdapter.ingress_status(config, timeout_ms: 2_000)` on the serving
 node through its existing NodeRouter action. The serving endpoint and actual
 listener are discovered automatically; configure overrides only to disambiguate:
 
@@ -198,9 +245,9 @@ for the Mint (already used by Req) HTTP/1.1 WebSocket upgrade, then closes witho
 joining a LiveView or issuing/consuming identity credentials. All steps share the
 original total deadline. No user cookie jar or browser coordination lock is used.
 
-The version-2 response contains five checks, allowlisted effective settings and
+The adapter's closed channel status contains five checks, allowlisted effective settings and
 `verification: %{scope: :local, session_handshake: :verified | :not_checked,
-external_https: :not_checked}`;
+external_https: :not_checked}`. Internally it validates the raw version-2 observation;
 see [adapter contract](adapter-contract.md#adapter-readiness-version-2). Cookie and
 CSRF probe values, signing keys, callbacks, private configuration and raw failures
 never leave the checker. Connector-key identity reports the installed connector
@@ -210,7 +257,7 @@ cookie and socket; trusted-proxy mode reports configured enforcement, explicitly
 marking the session handshake `:not_checked`. Endpoint inheritance is not supported. Partitioned,
 Secure, HttpOnly, host-only and path attributes must match the installed policy;
 neither the page nor the verification read may write a widget cookie. HTTP-only
-development endpoints must explicitly configure `web_widget_session: [partitioned: false]`.
+development deployments must explicitly pass process `session: [partitioned: false]`.
 
 Response-delivery checks cover the installed Phoenix PubSub registry, running
 supervision tree and local PG2 membership, without subscribing or broadcasting.
@@ -238,14 +285,15 @@ a dedicated widget TLS listener. Configure the existing host endpoint:
 config :my_host, MyHostWeb.Endpoint,
   url: [scheme: "https", host: "chat.example", port: 443],
   http: [ip: {10, 0, 0, 2}, port: 4000],
-  check_origin: ["https://chat.example"],
-  web_widget_proxy: [
-    trusted_proxies: [{10, 0, 0, 1}]
-  ]
+  check_origin: ["https://chat.example"]
+
+{:ok, infrastructure} = WebWidget.HostAdapter.infrastructure_child_specs(
+  pubsub_server: MyHost.PubSub,
+  proxy: [trusted_proxies: [{10, 0, 0, 1}], public_origin: "https://chat.example"])
 ```
 
-The endpoint's HTTPS URL supplies the public origin; an optional `public_origin`
-in `web_widget_proxy` overrides it. Proxy peer addresses are exact IPv4/IPv6 tuples,
+The process-owned proxy policy supplies its explicit public origin; the endpoint's
+normal URL remains host-owned. Proxy peer addresses are exact IPv4/IPv6 tuples,
 not forwarded client addresses.
 Keep the HTTP backend private. The TLS ingress must remove client-supplied
 forwarding headers and overwrite `X-Forwarded-Proto: https`,
@@ -281,7 +329,8 @@ provide no fallback. Upgrade existing connectors atomically before installing th
 version. Editing either identifier requires host connector replacement, invalidates
 old sessions and rejects tokens with old claims.
 
-Use `WebWidget.Integration.RuntimeBuilder` for adapter status/installation callbacks.
+Use `WebWidget.HostAdapter` for generic adapter callbacks; `RuntimeBuilder`
+status/installation functions remain deliberate raw-package compatibility APIs.
 The host's existing supervisor owns connector creation, replacement and removal.
 One enabled connector corresponds to one `WebWidget.Connector` subtree and a
 positive integer connector ID. The string form is the public widget route ID.

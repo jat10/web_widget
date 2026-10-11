@@ -2,9 +2,9 @@ defmodule WebWidget.Embedding.Proxy do
   @moduledoc """
   Widget-scoped HTTPS normalization for explicitly trusted reverse proxies.
 
-  Configure the serving endpoint with `web_widget_proxy: [trusted_proxies:
-  [ip_tuple, ...]]`. The endpoint's HTTPS URL supplies the public origin;
-  `public_origin: "https://host.example"` may explicitly override it. The private backend
+  Start infrastructure with `proxy: [trusted_proxies: [ip_tuple, ...],
+  public_origin: "https://host.example"]`. These process options exclusively own trust.
+  The private backend
   must be reachable only by trusted ingress. Ingress must overwrite forwarding
   headers. Requests are normalized before both HTTP and socket dispatch.
   """
@@ -13,10 +13,10 @@ defmodule WebWidget.Embedding.Proxy do
 
   @headers ["x-forwarded-proto", "x-forwarded-host", "x-forwarded-port"]
 
-  def policy(endpoint) do
-    case endpoint.config(:web_widget_proxy) do
-      nil -> {:ok, nil}
-      opts -> validate(opts, endpoint)
+  def policy(_endpoint) do
+    case WebWidget.Configuration.fetch() do
+      {:ok, config} -> {:ok, config.proxy}
+      _ -> {:error, :transport_unverifiable}
     end
   end
 
@@ -28,13 +28,18 @@ defmodule WebWidget.Embedding.Proxy do
     end
   end
 
-  defp validate(opts, endpoint) when is_list(opts) do
+  @doc false
+  def normalize_options(nil), do: {:ok, nil}
+
+  def normalize_options(opts) when is_list(opts) do
     with true <- Keyword.keyword?(opts),
          true <- Enum.all?(Keyword.keys(opts), &(&1 in [:public_origin, :trusted_proxies])),
          true <- length(Keyword.keys(opts)) == length(Enum.uniq(Keyword.keys(opts))),
          peers when is_list(peers) and peers != [] <- opts[:trusted_proxies],
          true <- Enum.all?(peers, &valid_ip?/1),
-         {:ok, [origin]} <- Origins.normalize([public_origin(opts, endpoint)]),
+         true <- peers == Enum.uniq(peers),
+         origin when is_binary(origin) and byte_size(origin) <= 2_048 <- opts[:public_origin],
+         {:ok, [origin]} <- Origins.normalize([origin]),
          %URI{scheme: "https"} = uri <- URI.parse(origin) do
       {:ok, %{peers: peers, origin: origin, uri: uri}}
     else
@@ -44,14 +49,7 @@ defmodule WebWidget.Embedding.Proxy do
     _ -> {:error, :transport_unverifiable}
   end
 
-  defp validate(_, _), do: {:error, :transport_unverifiable}
-
-  defp public_origin(opts, endpoint) do
-    case Keyword.fetch(opts, :public_origin) do
-      {:ok, origin} -> origin
-      :error -> endpoint.url()
-    end
-  end
+  def normalize_options(_), do: {:error, :transport_unverifiable}
 
   defp normalize(conn, {:ok, nil}), do: conn
   defp normalize(conn, {:error, _}), do: reject(conn)

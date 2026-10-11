@@ -2,7 +2,7 @@ defmodule WebWidget.Embedding.Session do
   @moduledoc """
   Widget-only session installation and effective cookie policy.
 
-  Every widget explicitly supplies its SameSite policy. Endpoint options control
+  Every widget explicitly supplies its SameSite policy. Infrastructure options control
   partitioning and optional Secure requirements for HTTP development. HTTPS always
   forces Secure. Partitioning is enabled by default and, like None, requires HTTPS.
   """
@@ -12,6 +12,7 @@ defmodule WebWidget.Embedding.Session do
   @scope_id "web_widget_id"
   @scope_path "web_widget_path"
   @policy "web_widget_same_site"
+  @technical_policy "web_widget_cookie_policy"
 
   def options do
     [store: :cookie, key: "_web_widget_session", signing_salt: "web-widget-session-v1"]
@@ -30,7 +31,20 @@ defmodule WebWidget.Embedding.Session do
 
   @doc "Resolves the installed widget pipeline's cookie policy; not a transport readiness probe."
   def effective(widget, endpoint, scheme) do
-    opts = endpoint.config(:web_widget_session, [])
+    case WebWidget.Configuration.fetch() do
+      {:ok, config} -> effective_policy(widget, endpoint_policy(config.session, endpoint), scheme)
+      _ -> {:error, :cookie_policy_unsupported}
+    end
+  end
+
+  defp endpoint_policy(opts, endpoint) do
+    case List.keyfind(opts[:endpoints], endpoint, 0) do
+      {_, policy} -> policy
+      nil -> opts
+    end
+  end
+
+  defp effective_policy(widget, opts, scheme) do
     value = Map.get(widget, :same_site)
     secure = Keyword.get(opts, :secure, false)
     partitioned = Keyword.get(opts, :partitioned, true)
@@ -153,7 +167,7 @@ defmodule WebWidget.Embedding.Session do
 
   defp established?(conn, id, path, policy) do
     get_session(conn, @scope_id) == id and get_session(conn, @scope_path) == path and
-      get_session(conn, @policy) == policy.same_site and
+      policy_matches?(get_session(conn), policy) and
       is_binary(get_session(conn, "_csrf_token"))
   end
 
@@ -166,6 +180,7 @@ defmodule WebWidget.Embedding.Session do
     |> put_session(@scope_id, id)
     |> put_session(@scope_path, path)
     |> put_session(@policy, policy.same_site)
+    |> put_session(@technical_policy, technical_policy(policy))
   end
 
   def valid_scope?(session, id, uri) when is_map(session) and is_struct(uri, URI) do
@@ -179,10 +194,18 @@ defmodule WebWidget.Embedding.Session do
 
   def valid_policy?(session, widget, endpoint, scheme) do
     case effective(widget, endpoint, scheme) do
-      {:ok, policy} -> session[@policy] == policy.same_site
+      {:ok, policy} -> policy_matches?(session, policy)
       _ -> false
     end
   end
+
+  defp policy_matches?(session, policy) do
+    session[@policy] == policy.same_site and
+      session[@technical_policy] == technical_policy(policy)
+  end
+
+  defp technical_policy(policy),
+    do: %{"secure" => policy.secure, "partitioned" => policy.partitioned}
 
   def page_scope?(session, id, %URI{} = uri) do
     session[@scope_id] == id and

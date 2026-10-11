@@ -48,6 +48,31 @@ defmodule WebWidget.Integration.ReadinessTest do
     refute inspect(result) =~ "private-readiness-key"
     refute Map.has_key?(result, :pubsub_server)
 
+    config = %{
+      id: id,
+      provider: :web_widget,
+      settings: %{
+        "identity_issuer" => "test-issuer",
+        "identity_audience" => "test-audience",
+        "same_site" => "Lax"
+      }
+    }
+
+    assert {:ok, %{status: :ok, mode: "websocket"}} = WebWidget.HostAdapter.ingress_status(config)
+
+    for {key, reason} <- [
+          {"identity_issuer", :identity_settings_mismatch},
+          {"identity_audience", :identity_settings_mismatch},
+          {"same_site", :cookie_policy_mismatch}
+        ] do
+      desired = %{config | settings: Map.put(config.settings, key, "Changed")}
+
+      assert {:ok, %{status: :error, reason: ^reason, effective_settings: installed}} =
+               WebWidget.HostAdapter.ingress_status(desired)
+
+      assert installed == result.effective_settings
+    end
+
     assert Map.keys(result) |> Enum.sort() ==
              Enum.sort([
                :protocol_version,
@@ -116,12 +141,13 @@ defmodule WebWidget.Integration.ReadinessTest do
     port = TLSProxy.port(proxy)
     origin = "https://localhost:#{port}"
 
-    endpoint_options(
-      web_widget_session: [],
-      web_widget_proxy: [
+    integration(
+      session: [],
+      proxy: [
         trusted_proxies: [{127, 0, 0, 1}],
         public_origin: origin
-      ]
+      ],
+      transport: [endpoint: @endpoint]
     )
 
     {id, _} = install(%{"same_site" => "None"})
@@ -193,11 +219,13 @@ defmodule WebWidget.Integration.ReadinessTest do
   end
 
   test "trusted proxy local readiness supports host HTTPS redirects without following them" do
-    endpoint_options(
-      web_widget_session: [],
-      web_widget_proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: "https://localhost"],
-      readiness_test_fault: {:force_ssl, "localhost"}
+    integration(
+      session: [],
+      proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: "https://localhost"],
+      transport: [endpoint: @endpoint]
     )
+
+    endpoint_options(readiness_test_fault: {:force_ssl, "localhost"})
 
     {id, _} = install(%{"same_site" => "None"})
 
@@ -205,6 +233,18 @@ defmodule WebWidget.Integration.ReadinessTest do
              RuntimeBuilder.status(id, [])
 
     endpoint_options(readiness_test_fault: {:force_ssl, "evil.example"})
+    assert @endpoint.config(:readiness_test_fault) == {:force_ssl, "evil.example"}
+    {:ok, {_, port}} = @endpoint.server_info(:http)
+
+    direct =
+      Req.get!("http://127.0.0.1:#{port}/widget/#{id}",
+        headers: [host: "localhost"],
+        redirect: false,
+        retry: false
+      )
+
+    assert direct.status == 301
+    assert Req.Response.get_header(direct, "location") == ["https://evil.example/widget/#{id}"]
 
     assert {:ok, %{checks: %{transport: %{reason: :transport_unverifiable}}}} =
              RuntimeBuilder.status(id, [])
@@ -305,12 +345,16 @@ defmodule WebWidget.Integration.ReadinessTest do
     assert result.checks.cookie_policy == %{status: :unavailable, reason: :cookie_policy_mismatch}
   end
 
-  test "invalid partitioning configuration is mapped to the closed readiness reason set" do
+  test "invalid partitioning is rejected at init and endpoint edits cannot change process policy" do
     {id, _} = install()
     endpoint_options(web_widget_session: [partitioned: "invalid"])
+
+    assert {:error, {:invalid_widget_configuration, :session, _}} =
+             WebWidget.start_link(pubsub_server: @pubsub, session: [partitioned: "invalid"])
+
     assert {:ok, result} = RuntimeBuilder.status(id, [])
-    assert result.checks.cookie_policy == %{status: :unknown, reason: :cookie_policy_unsupported}
-    assert result.effective_settings.same_site == Readiness.unresolved()
+    assert result.status == :ready
+    assert result.effective_settings.same_site == %{value: "Lax", source: :connector}
   end
 
   test "session initialization and verification both obey the original total deadline" do
@@ -505,12 +549,7 @@ defmodule WebWidget.Integration.ReadinessTest do
     gate_pages()
     task = Task.async(fn -> RuntimeBuilder.status(id, []) end)
     assert_receive {:readiness_page, page}
-    config = Application.fetch_env!(:web_widget, @endpoint)
-
-    @endpoint.config_change(
-      %{@endpoint => Keyword.put(config, :web_widget_session, partitioned: true)},
-      []
-    )
+    integration(session: [partitioned: true], transport: [endpoint: @endpoint])
 
     send(page, :release_readiness_page)
     assert {:ok, result} = Task.await(task)
@@ -664,7 +703,12 @@ defmodule WebWidget.Integration.ReadinessTest do
 
     start_supervised!(@endpoint)
     {id, _} = install(%{"same_site" => "None"})
-    integration(readiness: [endpoint: @endpoint, scheme: :https, tls_options: [cacertfile: ca]])
+
+    integration(
+      session: [],
+      readiness: [endpoint: @endpoint, scheme: :https, tls_options: [cacertfile: ca]]
+    )
+
     {:ok, {_ip, port}} = @endpoint.server_info(:https)
 
     assert %{status: 200} =
@@ -681,7 +725,11 @@ defmodule WebWidget.Integration.ReadinessTest do
     assert {:ok, result} = RuntimeBuilder.status(id, [])
     assert result.checks.cookie_policy == %{status: :unavailable, reason: :cookie_policy_mismatch}
 
-    endpoint_options(web_widget_session: [partitioned: false])
+    integration(
+      session: [partitioned: false],
+      readiness: [endpoint: @endpoint, scheme: :https, tls_options: [cacertfile: ca]]
+    )
+
     assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
 
     assert {:error, {:invalid_widget_configuration, :tls_options, _}} =

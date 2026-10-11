@@ -50,7 +50,8 @@ defmodule WebWidget.Connector do
   @doc false
   def runtime_supervisor(id), do: {:global, {__MODULE__.RuntimeSupervisor, node(), id}}
 
-  defp validate(opts) when is_list(opts) do
+  @doc false
+  def validate(opts) when is_list(opts) do
     with true <- Keyword.keyword?(opts),
          true <- Enum.sort(Keyword.keys(opts)) == [:config, :hooks],
          %{id: id} = config <- opts[:config],
@@ -70,7 +71,7 @@ defmodule WebWidget.Connector do
     _ -> {:error, :invalid_connector_configuration}
   end
 
-  defp validate(_), do: {:error, :invalid_connector_configuration}
+  def validate(_), do: {:error, :invalid_connector_configuration}
 
   defp connector_id(opts) when is_list(opts) do
     case Keyword.keyword?(opts) && Keyword.get(opts, :config) do

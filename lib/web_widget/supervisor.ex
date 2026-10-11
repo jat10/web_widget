@@ -6,7 +6,58 @@ defmodule WebWidget.Supervisor do
 
   def start_link(opts) do
     with {:ok, config} <- WebWidget.Configuration.normalize(opts) do
-      Supervisor.start_link(__MODULE__, config, name: __MODULE__)
+      deadline = System.monotonic_time(:millisecond) + 5_000
+      with :ok <- previous_children(deadline), do: start(config, deadline)
+    end
+  end
+
+  # Killing the root does not synchronously drain its named children. The host's
+  # ordinary supervisor must see one bounded startup, not repeated name conflicts.
+  defp previous_children(deadline) do
+    if Process.whereis(__MODULE__) do
+      :ok
+    else
+      Enum.reduce_while(
+        [WebWidget.Configuration, WebWidget.RuntimeRegistry, WebWidget.Integration.BindingStore],
+        :ok,
+        fn name, :ok -> drain_named_child(name, deadline) end
+      )
+    end
+  end
+
+  defp drain_named_child(name, deadline) do
+    case {Process.whereis(__MODULE__), Process.whereis(name)} do
+      {root, _} when is_pid(root) -> {:halt, {:error, {:already_started, root}}}
+      {nil, nil} -> {:cont, :ok}
+      {nil, pid} -> drain_result(wait_for_exit(pid, deadline))
+    end
+  end
+
+  defp drain_result(:ok), do: {:cont, :ok}
+  defp drain_result(error), do: {:halt, error}
+
+  defp start(config, deadline) do
+    case Supervisor.start_link(__MODULE__, config, name: __MODULE__) do
+      {:error, {:shutdown, {:failed_to_start_child, _, {:already_started, pid}}}} = error ->
+        case wait_for_exit(pid, deadline) do
+          :ok -> start(config, deadline)
+          _ -> error
+        end
+
+      result ->
+        result
+    end
+  end
+
+  defp wait_for_exit(pid, deadline) do
+    ref = Process.monitor(pid)
+
+    receive do
+      {:DOWN, ^ref, :process, ^pid, _} -> :ok
+    after
+      max(0, deadline - System.monotonic_time(:millisecond)) ->
+        Process.demonitor(ref, [:flush])
+        {:error, :infrastructure_still_stopping}
     end
   end
 

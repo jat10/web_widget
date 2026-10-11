@@ -36,6 +36,41 @@ hooks, without `%Zaq.*{}` struct literals in the package. ZAQ never constructs
 
 ## Runtime integration
 
+### Public host adapter (PR #24 / issue #23)
+
+Generic hosts register `WebWidget.HostAdapter`. Its public callbacks are:
+`infrastructure_child_specs(host_opts) -> {:ok, [OTP child specs]}`,
+`build_runtime_specs(config, hooks) -> {:ok, {state_spec_or_nil, listeners}}`,
+`ingress_status(config, opts \\ []) -> {:ok, channel_status_map}`, and
+`installation(config_or_id, base_url, opts \\ []) -> {:ok, snippet}`.
+Construction errors are redacted. Infrastructure specs represent the shared
+singleton, never connector children. Runtime specs carry the independent connector
+supervisor; recovery remains inside that stable connector, not in host coordination.
+
+Host hooks contain only `message`, `command`, `context`, `delivery`, `response`
+constructors and the fixed config-bound `sink_mfa`. The adapter derives scope from
+`config.id` and presentation from string-keyed `config.settings` (`display_name`
+falls back to `config.name`). Generic host bridges do not construct widget hooks.
+Raw `WebWidget.Connector` retains its explicit widget hook API for compatibility.
+
+Infrastructure `proxy: [trusted_proxies: [ip_tuple, ...], public_origin: https_origin]`
+and `session: [partitioned: boolean, secure: boolean, endpoints: [{EndpointModule,
+[partitioned: boolean, secure: boolean]}]]` are authoritative process
+options alongside PubSub, authentication membership and transport settings. Proxy
+defaults to disabled; session defaults to partitioned with HTTPS-forced Secure.
+No widget policy is read from endpoint configuration or copied to package env.
+Normal Phoenix endpoint listener, URL, signing secret, TLS and routing remain
+host-owned. Never infer proxy trust from forwarding headers or membership from
+connected nodes. Scope normalization applies only to mounted widget HTTP/socket
+paths, and normal proxy-terminated HTTPS remains supported.
+
+The adapter owns bounded readiness, desired-versus-installed comparison, safe
+channel status projection and installation defaults/validation. Channel status
+uses `:ok`, `:pending`, `:error`, `:unknown`, `:disabled` with mode `"websocket"`
+and closed safe reasons/checks/settings/verification; readiness does not expose
+credentials, hooks or raw failures. `RuntimeBuilder.status/2` deliberately remains
+the raw package version-2 compatibility observation, not the generic host boundary.
+
 ### Explicit infrastructure lifecycle (issue #23)
 
 The embedding host starts `{WebWidget, opts}` once in its supervisor. The OTP
@@ -82,7 +117,7 @@ ZAQ's existing Channels map is:
 ```elixir
 web_widget: %{
   bridge: Zaq.Channels.WebBridge,
-  adapter: WebWidget.Integration.RuntimeBuilder
+  adapter: WebWidget.HostAdapter
 }
 ```
 
@@ -186,8 +221,8 @@ Unknown widget IDs return a static unavailable response without initializing a
 session or connecting LiveView; this is not a missing-policy fallback.
 
 Widget transport cookies are partitioned by default, independently of connector
-SameSite policy, and require Secure/HTTPS. Only trusted host endpoint configuration
-may disable partitioning (`web_widget_session: [partitioned: false]`), for example
+SameSite policy, and require Secure/HTTPS. Only validated infrastructure process options
+may disable partitioning (`session: [partitioned: false]`), for example
 for HTTP development. Instances share a connector cookie within one top-level site;
 different parent sites have separate partitions. Lax/Strict still prohibit cross-site
 iframe transport. Host/BO cookies are unchanged.
@@ -290,8 +325,9 @@ Listener observations are endpoint-wide; session/handshake results are widget-sp
 and are not retained across calls, avoiding stale green after lifecycle changes.
 
 Supported proxy topology is browser HTTPS/WSS -> trusted reverse proxy -> host HTTP/WS.
-The endpoint owns `web_widget_proxy: [trusted_proxies: [ip_tuple, ...]]` and an
-HTTPS `url` configuration (an optional `public_origin` overrides that URL).
+Infrastructure owns `proxy: [trusted_proxies: [ip_tuple, ...], public_origin: https_origin]`.
+The endpoint retains ordinary Phoenix URL/listener configuration, but never supplies
+widget trust or cookie policy. Public proxy origin is explicit at infrastructure init.
 The package accepts normalized forwarding headers only
 from these exact peer IPs and only for that HTTPS origin, before HTTP and socket
 dispatch. The proxy must strip client forwarding headers and overwrite proto/host/port;

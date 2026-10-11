@@ -14,6 +14,8 @@ defmodule WebWidget.TestInfrastructure do
     config.integration
     |> Keyword.drop([:widget_path])
     |> Keyword.put(:authentication, config.authentication)
+    |> Keyword.put(:session, config.session)
+    |> Keyword.put(:proxy, proxy_options(config.proxy))
     |> Keyword.put(:response_diagnostics, config.response_diagnostics)
     |> Keyword.put(
       :transport,
@@ -40,7 +42,12 @@ defmodule WebWidget.TestInfrastructure do
         pubsub_server: opts[:pubsub_server]
       )
 
-    {:ok, _} = Supervisor.start_child(WebWidget.Standalone, {WebWidget.Runtime, demo})
+    {:ok, _} =
+      Supervisor.start_child(
+        WebWidget.Standalone,
+        Supervisor.child_spec({WebWidget.Runtime, demo}, restart: :temporary)
+      )
+
     :ok
   end
 
@@ -57,5 +64,9 @@ defmodule WebWidget.TestInfrastructure do
     |> Keyword.drop([:readiness, :widget_path])
     |> Keyword.put(:transport, transport)
     |> Keyword.put_new(:pubsub_server, WebWidget.PubSub)
+    |> Keyword.put_new(:session, partitioned: false)
   end
+
+  defp proxy_options(nil), do: nil
+  defp proxy_options(policy), do: [trusted_proxies: policy.peers, public_origin: policy.origin]
 end

@@ -4,6 +4,12 @@ Embed a floating ZAQ chat on a website with one installation script. The script 
 
 ## Features
 
+Generic hosts integrate through `WebWidget.HostAdapter`: shared infrastructure
+specs, independent connector specs, bounded safe ingress status, and escaped
+installation markup. PubSub, authentication membership, proxy trust and cookie
+technical policy are authoritative process options, not endpoint widget settings.
+See [host integration](docs/host-integration.md) for the API and migration.
+
 - Chat with a ZAQ agent through the existing LiveView connection, including live response updates, typing status, and conversation resume.
 - A copyable installation script in ZAQ's Web Widget back office. It mounts the iframe automatically and includes no credentials.
 - Backend-signed HS256 identity tokens scoped to a widget and user, with a seven-day default maximum lifetime and five-second first-page binding. The website keeps the connector key on its backend.

@@ -19,13 +19,21 @@ config =
     watchers: [],
     live_reload: [patterns: []],
     check_origin: ["//127.0.0.1:4019", "//127.0.0.1:4022"],
-    web_widget_session: [partitioned: false],
     http: [ip: {127, 0, 0, 1}, port: 4019]
   )
 
 Application.put_env(:web_widget, WebWidgetWeb.Endpoint, config)
 {:ok, _} = Application.ensure_all_started(:web_widget)
-{:ok, _} = WebWidget.Standalone.start_link(demo: demo)
+Code.require_file("test/support/host/session_probe.ex")
+Code.require_file("test/support/host/readiness_gate.ex")
+Code.require_file("test/support/host/router.ex")
+Code.require_file("test/support/host/endpoint.ex")
+Code.require_file("assets/tests/support/http_endpoint.exs")
+{:ok, _} = WebWidget.Standalone.start_link(demo: demo, infrastructure: [session: [
+  partitioned: false,
+  endpoints: [{WebWidget.TestHost.Endpoint, [partitioned: true]},
+              {WebWidget.E2EHttpsEndpoint, [partitioned: true]}]
+]])
 
 # Controls exist only in the Playwright server, never in application routes.
 Code.require_file("assets/tests/support/controlled_host.exs")
@@ -42,12 +50,6 @@ Code.require_file("assets/tests/support/control.exs")
       multiple_conversations: multiple, allowed_domains: ["http://127.0.0.1:4019"]}
   end)
 }})
-
-Code.require_file("test/support/host/session_probe.ex")
-Code.require_file("test/support/host/readiness_gate.ex")
-Code.require_file("test/support/host/router.ex")
-Code.require_file("test/support/host/endpoint.ex")
-Code.require_file("assets/tests/support/http_endpoint.exs")
 
 Application.put_env(:web_widget, WebWidget.TestHost.Endpoint,
   adapter: Bandit.PhoenixAdapter,
@@ -66,7 +68,7 @@ Application.put_env(:web_widget, WebWidget.E2EHttpEndpoint,
   adapter: Bandit.PhoenixAdapter,
   secret_key_base: secret_key_base, live_view: [signing_salt: "host-live"],
   pubsub_server: WebWidget.PubSub, check_origin: ["//127.0.0.1:4020"],
-  web_widget_session: [partitioned: false], server: true,
+  server: true,
   http: [ip: {127, 0, 0, 1}, port: 4020])
 {:ok, _} = Supervisor.start_child(WebWidget.Standalone, WebWidget.E2EHttpEndpoint)
 Application.put_env(:web_widget, WebWidget.E2EHttpsEndpoint,

@@ -1,5 +1,5 @@
 defmodule WebWidget.Embedding.ProxyTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   import Plug.Conn
   import Plug.Test
   alias WebWidget.Embedding.Proxy
@@ -15,7 +15,14 @@ defmodule WebWidget.Embedding.ProxyTest do
     def url, do: "https://widget.example"
   end
 
-  test "the endpoint HTTPS URL supplies the public origin without duplicate configuration" do
+  setup do
+    WebWidget.TestInfrastructure.setup(
+      pubsub_server: WebWidget.PubSub,
+      proxy: [trusted_proxies: [{10, 0, 0, 1}], public_origin: "https://widget.example"]
+    )
+  end
+
+  test "process policy supplies the public origin without reading endpoint configuration" do
     conn = forwarded() |> Map.put(:remote_ip, {10, 0, 0, 1})
     result = Proxy.call(conn, EndpointURL, ["/widget"])
     assert result.scheme == :https

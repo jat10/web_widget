@@ -97,6 +97,41 @@ defmodule WebWidget.ConnectorTest do
     refute recovered.infrastructure_generation == before.infrastructure_generation
   end
 
+  test "unpaused ordinary host supervisor recovers root kills without replacing connectors",
+       ctx do
+    :ok = Supervisor.terminate_child(WebWidget.Standalone, WebWidget)
+
+    for attempt <- 1..20 do
+      bridge =
+        start_supervised!({DynamicSupervisor, strategy: :one_for_one}, id: {:root_host, attempt})
+
+      {:ok, root} = DynamicSupervisor.start_child(bridge, {WebWidget, ctx.opts})
+      {:ok, unrelated} = DynamicSupervisor.start_child(bridge, {Agent, fn -> :untouched end})
+      {config, hooks, _} = Host.fixture()
+
+      {:ok, connector} =
+        DynamicSupervisor.start_child(bridge, {Connector, config: config, hooks: hooks})
+
+      before = await_runtime(config.id)
+      {:ok, session} = Runtime.authenticate(to_string(config.id), Host.proof(config.id))
+      root_monitor = Process.monitor(root)
+      Process.exit(root, :kill)
+      assert_receive {:DOWN, ^root_monitor, :process, ^root, :killed}
+      recovered = await_runtime(config.id, before.runtime_ref)
+      refute recovered.infrastructure_generation == before.infrastructure_generation
+      refute Runtime.authorized?(session)
+      assert :global.whereis_name({Connector, node(), config.id}) == connector
+      assert Process.alive?(bridge)
+      assert Agent.get(unrelated, & &1) == :untouched
+
+      assert Enum.any?(DynamicSupervisor.which_children(bridge), fn {_, pid, _, _} ->
+               pid == connector
+             end)
+
+      stop_supervised!({:root_host, attempt})
+    end
+  end
+
   test "replacement and subsequent recovery use updated connector inputs", ctx do
     {config, hooks, _} = Host.fixture()
 

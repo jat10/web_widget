@@ -44,7 +44,10 @@ defmodule WebWidget.Standalone do
 
         [
           WebWidget.MockHost,
-          {WebWidget.Runtime, demo_config(Keyword.put(demo, :pubsub_server, server))}
+          Supervisor.child_spec(
+            {WebWidget.Runtime, demo_config(Keyword.put(demo, :pubsub_server, server))},
+            restart: :temporary
+          )
         ]
     end
   end
