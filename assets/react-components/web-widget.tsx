@@ -35,7 +35,7 @@ type Config = {
   max_length: number;
 };
 type ConversationSummary = { id: string; title: string };
-type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
+type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; submissionPending?: boolean; submissionBlocked?: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
 type MessageDelta = { conversation_id: string; id: string; delta: string };
 type MessageReset = { all?: boolean; conversation_id?: string | null; id?: string };
 const messageKey = (conversationId: string | null, id: string) => JSON.stringify([conversationId, id]);
@@ -73,11 +73,12 @@ function dateLabel(timestamp: string, locale: string, t: Record<string, string>)
   return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function WebWidget({ mode, messages, isRunning, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
+export function WebWidget({ mode, messages, isRunning, submissionPending = isRunning, submissionBlocked = false, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
   const { pushEvent } = useLiveReact();
   const t = config.strings;
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   const [submitting, setSubmitting] = useState(false);
+  const [submissionUnknown, setSubmissionUnknown] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   useEffect(() => {
@@ -125,7 +126,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
     messages: datedMessages,
     convertMessage: message => convertMessage(message, t["Unable to complete response"]),
     isRunning,
-    isSendDisabled: submitting || isRunning || authenticationPending || !connection.ready,
+    isSendDisabled: submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending || !connection.ready,
     onNew: async (message) => {
       const text = message.content
         .filter((part) => part.type === "text")
@@ -133,7 +134,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
         .join("\n")
         .trim();
       if (!text) return;
-      if (!connectionSnapshot().ready) {
+      if (submissionBlocked || submissionUnknown || !connectionSnapshot().ready) {
         runtime.thread.composer.setText(text);
         return;
       }
@@ -141,10 +142,14 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
       setError(null);
       try {
         await new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => reject(new Error(t["Connection interrupted. Please try again."])), 300000);
+           const timeout = window.setTimeout(() => {
+             setSubmissionUnknown(true);
+             reject(new Error(t["Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."]));
+           }, 300000);
           try {
             pushEvent("widget.submit", { text }, (reply) => {
-              window.clearTimeout(timeout);
+               window.clearTimeout(timeout);
+               setSubmissionUnknown(false);
               if (reply.ok) resolve();
               else reject(new Error(reply.error));
             });
@@ -209,7 +214,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
         <div className="zaq-chat-main" key="chat-main">
         {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
-        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} recoveringResponse={submitting || isRunning} error={error || responseError || null} />
+        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending} recoveringResponse={submitting || submissionPending || isRunning} error={error || responseError || null} />
         </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider></I18n.Provider>

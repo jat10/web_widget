@@ -446,7 +446,7 @@ for (const answerTiming of ["during", "after"] as const) {
       await input.press("Enter");
       await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
       const original = await (await request.get(`${control}/held-stream/${user}`)).json();
-      expect((await session()).active.request_id).toBe(original.request_id);
+       expect((await session()).streams[original.message_id].request_id).toBe(original.request_id);
       expect(tokenRequests).toBe(1);
 
       // Real scheduled renewal: no manual connect, synthetic event, or clock jump.
@@ -483,7 +483,7 @@ for (const answerTiming of ["during", "after"] as const) {
       expect(renewed.authentication_pending).toBe(false);
       expect(renewed.response_subscribed).toBe(true);
       if (answerTiming === "after") {
-        expect(renewed.active.request_id).toBe(original.request_id);
+         expect(renewed.streams[original.message_id].request_id).toBe(original.request_id);
         expect((await request.post(`${control}/held-stream/${user}/complete`)).status()).toBe(204);
       }
       await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
@@ -560,7 +560,7 @@ test("actual JWT expiry during a held response restores the final answer after a
     evidence.original = original;
     expect(original.status).toBe("running");
     expect(original.topic).toBe(initial.topic);
-    expect((await session()).active.request_id).toBe(original.request_id);
+    expect((await session()).streams[original.message_id].request_id).toBe(original.request_id);
     expect(await submissions()).toBe(1);
 
     // Only the real WidgetLive expiry path sets authentication_pending here.

@@ -357,3 +357,7 @@ msgstr ""
 #, elixir-autogen, elixir-format
 msgid "Reconnecting to recover the response…"
 msgstr ""
+
+#, elixir-autogen, elixir-format
+msgid "Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."
+msgstr ""

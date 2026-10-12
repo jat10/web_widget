@@ -69,6 +69,7 @@ defmodule WebWidget.Integration.ProtocolTest do
     assert delivery.topic == session.topic
     assert delivery.channel_config_id == id
     assert delivery.consumer == :widget
+    assert delivery.protocol_version == 2
 
     assert delivery.events == %{
              typing: "response.typing",
@@ -162,6 +163,9 @@ defmodule WebWidget.Integration.ProtocolTest do
           :selected_agent_id,
           :hooks,
           :sink_mfa,
+          :protocol_version,
+          :execution_id,
+          :root_request_id,
           "conversation_id"
         ] do
       assert Runtime.dispatch(Map.put(question(), key, "forged"), session) ==
@@ -233,7 +237,8 @@ defmodule WebWidget.Integration.ProtocolTest do
     for reply <- [
           {:error, :unauthorized},
           %{type: :error, payload: %{code: :conversation_not_found}},
-          %{type: :message_complete, payload: %{body: "Answer"}}
+          %{type: :message_complete, payload: %{body: "Answer"}},
+          %{type: :status, payload: %{accepted: true, created: false}, message_id: nil}
         ] do
       {config, spec} = runtime(reply)
       assert Runtime.dispatch(%{question() | mode: :sync}, session(config)) == reply

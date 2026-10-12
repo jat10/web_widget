@@ -13,21 +13,38 @@ defmodule WebWidget.Integration.Response do
     error: "response.error"
   }
 
-  def correlated?(%{protocol_version: 1, request_id: id}, id), do: true
+  def validate_version(%{protocol_version: 2}), do: :ok
+
+  def validate_version(response) when is_map(response),
+    do: {:error, :unsupported_protocol_version}
+
+  def validate_version(_), do: {:error, :invalid_response}
+
+  def correlated?(%{protocol_version: 2, request_id: id}, id)
+      when is_binary(id) and byte_size(id) in 1..255,
+      do: String.valid?(id) and String.trim(id) != ""
+
   def correlated?(_, _), do: false
 
-  def encode(event, %{type: type, payload: payload} = response, widget_id) do
-    with ^event <- Map.get(@events, type),
+  def encode(
+        event,
+        %{type: type, payload: payload, conversation_id: conversation} = response,
+        widget_id
+      )
+      when is_map(payload) do
+    with :ok <- validate_version(response),
+         ^event <- Map.get(@events, type),
          {:ok, payload} <- payload(type, payload, Map.get(response, :message_id)),
          {:ok, normalized} <-
            UIResponse.normalize(%{
              type: event,
              widget_id: widget_id,
-             conversation_id: response.conversation_id,
+             conversation_id: conversation,
              payload: payload
            }) do
       {:ok, normalized}
     else
+      {:error, :unsupported_protocol_version} = error -> error
       _ -> {:error, :invalid_response}
     end
   end
@@ -37,7 +54,8 @@ defmodule WebWidget.Integration.Response do
   def history(response, widget_id) do
     Diagnostics.log(:history_received, response)
 
-    with %{type: :conversation_history, payload: %{messages: messages}} <- response,
+    with :ok <- validate_version(response),
+         %{type: :conversation_history, payload: %{messages: messages}} <- response,
          true <- is_list(messages) and Enum.all?(messages, &is_map/1),
          {:ok, normalized} <-
            UIResponse.normalize(%{
@@ -48,13 +66,14 @@ defmodule WebWidget.Integration.Response do
            }) do
       {:ok, normalized, Enum.map(messages, &Map.get(&1, :position))}
     else
+      {:error, :unsupported_protocol_version} = error -> error
       _ -> {:error, :invalid_history}
     end
   end
 
   def error_text(%{payload: %{code: :timeout}}),
     do:
-      "The response timed out. Its outcome is unknown. Reload known conversation history before trying again."
+      "The submission acknowledgement timed out. Its outcome is unknown. Reload known conversation history before trying again."
 
   def error_text(_), do: "Unable to complete this request."
 

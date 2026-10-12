@@ -50,6 +50,9 @@ defmodule WebWidget.TestIntegration.ChatHost do
       %{content: "timeout"} ->
         response(request, :error, nil, %{code: :timeout, outcome: :unknown})
 
+      %{content: "rejected"} ->
+        response(request, :error, request.conversation_id, %{code: :invalid_message})
+
       %{content: _} ->
         message(request, context)
     end
@@ -67,13 +70,16 @@ defmodule WebWidget.TestIntegration.ChatHost do
         %{accepted: true, created: created}
       )
 
-    for {type, payload} <- [{:typing, %{active: true}}, {:message_create, %{body: ""}}] do
-      publish(context, %{receipt | type: type, payload: payload})
+    stream = %{receipt | message_id: "assistant-" <> request.request_id}
+
+    for {type, payload} <- [{:typing, %{active: true}}, {:message_create, %{body: ""}}],
+        request.content != "no answer" do
+      publish(context, %{stream | type: type, payload: payload})
     end
 
     if request.content == "instant" do
       publish(context, %{
-        receipt
+        stream
         | type: :message_complete,
           payload: %{body: "Immediate answer"}
       })
@@ -84,7 +90,7 @@ defmodule WebWidget.TestIntegration.ChatHost do
         Process.sleep(250)
 
         publish(context, %{
-          receipt
+          stream
           | type: :message_edit,
             payload: %{body: "## Update\n\n**Partial**"}
         })
@@ -92,14 +98,14 @@ defmodule WebWidget.TestIntegration.ChatHost do
         Process.sleep(1_000)
 
         publish(context, %{
-          receipt
+          stream
           | type: :message_complete,
             payload: %{body: "## Update\n\n**Finished**"}
         })
       end)
     end
 
-    {:ok, receipt}
+    {:ok, if(request.content == "no answer", do: Map.delete(receipt, :message_id), else: receipt)}
   end
 
   def publish(context, response) do
@@ -114,11 +120,22 @@ defmodule WebWidget.TestIntegration.ChatHost do
 
   def response(request, type, conversation, payload),
     do: %{
-      protocol_version: 1,
+      protocol_version: Process.get(:chat_host_protocol_version, 2),
       type: type,
       request_id: request.request_id,
       conversation_id: conversation,
-      message_id: "assistant-" <> request.request_id,
+      message_id:
+        if(
+          type in [
+            :message_create,
+            :message_edit,
+            :message_step,
+            :message_complete,
+            :message_failed
+          ],
+          do: "assistant-" <> request.request_id,
+          else: nil
+        ),
       payload: payload
     }
 end

@@ -67,8 +67,9 @@ defmodule WebWidget.E2ESharedHost do
         host = WebWidget.TestIntegration.ChatHost
         receipt = host.response(request, if(request.conversation_id, do: :status, else: :conversation_created), conversation,
           %{accepted: true, created: is_nil(request.conversation_id)})
-        host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
-        host.publish(context, %{receipt | type: :message_complete, payload: %{body: answer}})
+        stream = %{receipt | message_id: Ecto.UUID.generate()}
+        host.publish(context, %{stream | type: :message_create, payload: %{body: ""}})
+        host.publish(context, %{stream | type: :message_complete, payload: %{body: answer}})
         {:ok, receipt}
 
       %{type: type, conversation_id: "e2e-" <> _ = conversation} when type in [:conversation_init, :conversation_history] ->
@@ -113,7 +114,7 @@ defmodule WebWidget.E2ESharedHost do
   defp schedule_response(context, receipt, delay, type, body) do
     # Keep the destination accepted with the request, just as an in-flight host job does.
     {:ok, _timer} = :timer.apply_after(delay, WebWidget.TestIntegration.ChatHost, :publish, [
-      context, %{receipt | type: type, payload: %{body: body}}
+      context, %{receipt | message_id: "assistant-" <> receipt.request_id, type: type, payload: %{body: body}}
     ])
   end
 
@@ -123,11 +124,12 @@ defmodule WebWidget.E2ESharedHost do
     created = is_nil(request.conversation_id)
     receipt = host.response(request, if(created, do: :conversation_created, else: :status),
       conversation, %{accepted: true, created: created})
+    stream = %{receipt | message_id: Ecto.UUID.generate()}
     Agent.update(@requests, &Map.put(&1, {:held_stream, context.sender_id},
-      %{status: :running, receipt: receipt, context: context}))
+      %{status: :running, receipt: receipt, stream: stream, context: context}))
     host.publish(context, %{receipt | type: :typing, payload: %{active: true}})
-    host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
-    host.publish(context, %{receipt | type: :message_edit, payload: %{body: "**Partial**"}})
+    host.publish(context, %{stream | type: :message_create, payload: %{body: ""}})
+    host.publish(context, %{stream | type: :message_edit, payload: %{body: "**Partial**"}})
     {:ok, receipt}
   end
 
@@ -151,7 +153,7 @@ defmodule WebWidget.E2ESharedHost do
     end)
     if held do
       WebWidget.TestIntegration.ChatHost.publish(held.context,
-        %{held.receipt | type: :message_complete, payload: %{body: "**Finished**"}})
+        %{held.stream | type: :message_complete, payload: %{body: "**Finished**"}})
     end
     held != nil
   end
@@ -162,7 +164,7 @@ defmodule WebWidget.E2ESharedHost do
         nil -> %{status: :missing}
         held -> %{status: held.status, topic: held.context.delivery.topic,
           request_id: held.receipt.request_id, conversation_id: held.receipt.conversation_id,
-          message_id: held.receipt.message_id}
+          message_id: held.stream.message_id}
       end
     end)
   end
@@ -171,7 +173,7 @@ defmodule WebWidget.E2ESharedHost do
   def probe_stream(user_id) do
     held = Agent.get(@requests, &Map.fetch!(&1, {:held_stream, user_id}))
     WebWidget.TestIntegration.ChatHost.publish(held.context,
-      %{held.receipt | type: :message_edit, payload: %{body: "UNAUTHORIZED EXPIRY PROBE"}})
+      %{held.stream | type: :message_edit, payload: %{body: "UNAUTHORIZED EXPIRY PROBE"}})
   end
 
   def request_count(user_id, content) do

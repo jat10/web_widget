@@ -13,6 +13,13 @@ defmodule WebWidget.Conversation.State do
     }
   end
 
+  def acknowledge(%{pending_reply: %{request_id: request}} = state, request),
+    do: %{state | pending_reply: nil}
+
+  def acknowledge(state, _), do: state
+
+  def submission_error(state, error), do: %{state | pending_reply: nil, error: error}
+
   def apply_event(state, %{type: "response.message.create", payload: payload}) do
     if Enum.any?(state.messages, &(&1.id == payload.id)) do
       state

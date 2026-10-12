@@ -92,7 +92,8 @@ defmodule WebWidget.E2EControl do
                 binding_authorized: WebWidget.Integration.BindingStore.authorized?(
                   chat.session.binding_claims, chat.session.page_id) == :ok,
                 authentication_pending: assigns.authentication_pending,
-                conversation_id: chat.conversation_id, active: chat.active,
+                 conversation_id: chat.conversation_id,
+                 pending_submission: chat.pending_submission, streams: chat.streams,
                 restore_on_terminal: chat.restore_on_terminal,
                 response_subscribed: Enum.any?(Registry.lookup(server, topic), fn {p, _} -> p == pid end),
                 revocation_subscribed: Enum.any?(Registry.lookup(server, revocation_topic), fn {p, _} -> p == pid end),

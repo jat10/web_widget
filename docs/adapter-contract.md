@@ -2,11 +2,11 @@
 
 ## Status and source of truth
 
-Decision recorded in wiring milestone 0, 2026-10-05. This document defines the
-selected ZAQ integration against shared web protocol **version 1** at
-[`c38e7e4e5`](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/services/web-bridge.md).
-ZAQ's [installation handoff](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/guides/web-widget-integration.md)
-and published constructors own the host protocol. This document owns the widget's
+The submission/message lifecycle migration (2026-10-12), coordinated with
+[ZAQ PR #836](https://github.com/www-zaq-ai/zaq/pull/836), selects shared web protocol
+**version 2**. Version 1 responses are explicitly unsupported; this is a coordinated
+host/package upgrade, not an automatic compatibility fallback. ZAQ's published
+constructors own the host protocol. This document owns the widget's
 integration decisions and presentation mapping, not a second shared schema.
 
 The package implements the milestone 2 authenticated chat path and the issue #14
@@ -199,7 +199,7 @@ to its head. Credentials and non-HTTP(S) URLs are rejected. Omitting the attribu
 uses bundled styles; runtime `stylesheet_url` no longer supplies a stylesheet.
 This presentation message does not change signed identity, settings or host commands.
 Theme and language remain parent-owned. Start with `multiple_conversations: false`;
-ZAQ v1 does not provide the current widget's eager conversation-list contract.
+   ZAQ does not provide the current widget's eager conversation-list contract.
 
 The local ZAQ install mounts the package router on its existing endpoint.
 Released Git tags contain the built bundle in `web_widget/priv/static/assets`.
@@ -480,7 +480,7 @@ with the lifetime constraint. The public parent API is
 `zaq.widget.connect`; a temporary deprecated `init` alias may use the same
 path. A new JWT is bound to the same verified page, widget and user, then
 authorization expiry and generation-tagged timers change in place. Renewal
-must preserve the subscription, active request, selected conversation,
+must preserve the subscription, submission correlation, independent assistant streams, selected conversation,
 streaming deltas, messages, React component, draft and presentation settings.
 The old binding remains usable by its page until its original expiry, so a
 lost acknowledgement cannot strand a still-authorized session. Failed
@@ -616,13 +616,24 @@ it, its bound config, constructor modules or Context.
 | Operation | Sink result |
 | --- | --- |
 | Command | Semantic Response directly, including semantic `:error` on command failure |
-| Async message accepted | `{:ok, Response}` creation/status receipt; terminal comes later |
-| Sync message | One terminal Response directly; no duplicate live terminal |
+| Async message accepted | `{:ok, Response}` creation/status receipt; no assistant answer is promised |
+| Sync message | One status acknowledgement for a no-answer submission, or one terminal Response directly; no duplicate live terminal |
 | Failure before acceptance | May return `{:error, reason}` |
 
 Do not wrap all responses as `{:ok, map}` or reduce accepted receipts to `:ok`.
-Distinguish valid semantic errors from success. Keep request, conversation and
-message correlation through result handling and UI encoding.
+Distinguish valid semantic errors from success. Keep request and conversation
+correlation through result handling and UI encoding. Assistant events additionally
+carry their own stable transport message ID. ZAQ alone owns synchronous waiting;
+the widget dispatch boundary preserves the direct result without publishing it again.
+
+Acceptance acknowledges successful submission dispatch, not execution completion or
+input consumption. It requires `protocol_version: 2`, the original `request_id`, an
+authorized `conversation_id`, and `%{accepted: true, created: boolean}`. An async
+fresh-chat receipt is `:conversation_created` with `created: true`; a resumed-chat
+receipt is `:status` with `created: false`. Its `message_id` is absent or nil.
+Neither receipt reserves an assistant ID. Submission `:error` also has absent/nil
+`message_id` and settles only that submission. An unknown submission outcome blocks
+resending until explicit authorized recovery, without failing existing assistants.
 
 ## Widget initialization
 
@@ -646,7 +657,9 @@ user history when creating that conversation. Resume/later questions do not rese
 An accepted resumed question returns `:status`, `accepted: true`, `created: false`.
 
 Only a matching receipt establishes a new active conversation. Wait for its ID
-before another submission and preserve the active-response guard. Live events
+before another submission. Clear the pending submission on the receipt, even if no
+assistant event ever follows. Once accepted, later submissions can proceed while
+earlier independent assistant messages continue streaming. Live events
 may queue before the callback returns; process them only after acceptance is
 bound. If dispatch moves to another process, explicitly buffer this race.
 
@@ -662,21 +675,33 @@ without a verified page ID retain a fresh random destination per session.
 
 ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
 single ingress and encode once into widget UI events; do not republish into the
-old broad conversation topic. ZAQ keeps no LiveView PID. Its RequestOwner's internal
-reply topic is separate from the adapter session destination.
+old broad conversation topic. ZAQ keeps no LiveView PID. The widget knows only the
+public session destination, submission correlation and assistant transport IDs;
+execution, root/child/receipt IDs, queued/steer/native runtime states and execution
+management never enter widget state or UI events.
 
-Check protocol version, trusted event mapping, request ID, accepted conversation
-and transport message ID before applying events. Widget ID and sender come from
+Check protocol version, trusted event mapping, an accepted submission request ID,
+the selected authorized conversation and assistant transport message ID before
+applying message events. Create establishes each assistant ID under its original
+request; edit/step/terminal must match that binding. Multiple streams can belong to
+one submission or different submissions. Receipt correlation never chooses an
+assistant ID. Widget ID and sender come from
 the session. Reject stale/foreign responses; unsolicited events cannot switch
 conversations. UI output retains the `response.*` namespace.
 After a connected remount, the accepted request IDs from the former LiveView are
 gone. A valid terminal event for the already authorized conversation may trigger
 a fresh authorized history request; its payload is never applied as a stream
 event without the original request correlation.
+Restored terminal hints are deduplicated by assistant transport ID, not by a
+single chat-wide terminal flag. Each independent previous-page terminal can refresh
+authorized history. If a currently correlated assistant row is still streaming,
+defer the snapshot refresh until those displayed rows are terminal so history cannot
+overwrite live deltas. This is presentation recovery only, not execution waiting or
+submission gating; a submission receipt still settles immediately.
 
 ## Outbound payloads
 
-Shared Response uses semantic `type`, `protocol_version: 1`, `request_id`, optional
+Shared Response uses semantic `type`, `protocol_version: 2`, `request_id`, optional
 `conversation_id`/`message_id` and public `payload`. Map this into the existing UI
 vocabulary while preserving correlation; do not make ZAQ emit widget-private maps.
 
@@ -685,12 +710,12 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:widget_initialized` | `response.widget.initialized`; readiness with optional ID; displayed user comes from verified session |
 | `:conversation_created` | `response.conversation.created`; direct correlated receipt establishes the conversation |
 | `:conversation_history` | `response.conversation.history`; ordered public messages and separately retained pagination positions |
-| `:status` with accepted true | Direct resumed receipt, not assistant text or a terminal |
+| `:status` with accepted true | Direct resumed receipt (or sync no-answer acknowledgement), not assistant text or an assistant terminal |
 | `:typing` | `response.typing`, boolean `active` |
 | `:message_create`, `:message_edit`, `:message_complete` | Corresponding `response.message.*`; top-level transport `message_id` becomes UI payload `id`, public `body` becomes `content` |
 | `:message_step` | `response.message.step`; public `step_id` and message ID, safe label; `:activity/:running` maps to `status/started` or `updated` for an existing step |
 | `:message_failed` | `response.message.failed`; correlated message ID and public `body` as UI error text, with a generic fallback when `body` is absent or blank; do not expose raw error details |
-| `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
+| `:error` | Submission error; correlated request and safe code/text, nil/absent message ID; retain timeout `outcome: :unknown`, never fail unrelated assistant messages |
 
 ZAQ streaming edits are cumulative snapshots. LiveView keeps the full content,
 but sends only the new suffix to React when an edit extends a running message
@@ -702,10 +727,15 @@ The assistant transport ID is stable across create/edit/step/terminal and may di
 from persisted assistant/user message references. Retain those references separately.
 Never expose BO traces, private reasoning, raw tool calls or agent metadata.
 
-Live ordering is typing active -> assistant create -> optional edits/steps -> typing
-inactive -> one correlated terminal. A create precedes subsequent assistant events.
-Update steps by step ID; terminal message/step states cannot regress. Ignore duplicate
-or late terminals and typing resets from earlier requests.
+For each independent assistant stream a create precedes edits/steps and one terminal.
+Interleaving across streams is allowed. Update steps by step ID; terminal message/step
+states cannot regress. Ignore duplicate creates, duplicate/late terminals and late
+edits/steps per message, not per chat. `:typing` is optional public presentation only;
+it neither acknowledges submission nor promises an assistant. Aggregate correlated
+typing hints without letting another request's inactive hint clear current progress.
+Typing after a request's known streams have all terminated is ignored. No-answer
+acceptance needs no typing or terminal. A later independent create can still carry
+the original accepted request ID.
 
 ## Conversation ownership and history
 
@@ -728,14 +758,16 @@ roles and timestamps. Never invent timestamps for untimestamped history. Preserv
 message creation times during streaming; format dates in the selected language and
 browser time zone.
 
-PubSub offers no durable replay or exactly-once execution. Timeout is an unknown
-outcome, not cancellation or permission to retry. Accepted work can finish later.
+PubSub offers no durable replay or exactly-once execution. A display timeout concerns
+only an outstanding transport submission receipt, never a promised assistant or an
+accepted execution. Timeout is an unknown outcome, not cancellation or permission
+to retry. Accepted assistant streams can finish later and are not timed out by the widget.
 Recover through authorized history when the conversation ID is known. If an initial
 timeout returns no ID, surface unresolved outcome rather than inventing an ID or
 silently resending. Consult the host contract for timeout bounds.
 
 Multiple-conversation listing/sidebar integration is deferred. The existing mock's
-`include_conversations` response is not part of the shared ZAQ v1 history command.
+`include_conversations` response is not part of the shared ZAQ history command.
 
 ## Parent-owned presentation settings
 

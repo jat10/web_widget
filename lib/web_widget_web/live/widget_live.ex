@@ -163,7 +163,11 @@ defmodule WebWidgetWeb.WidgetLive do
           mode={@mode}
           canReopen={@conversation_opened}
           messages={@streams.ui_messages}
-          isRunning={@pending_reply != nil}
+          isRunning={
+            @pending_reply != nil or Enum.any?(@messages, &(Map.get(&1, :status) == "running"))
+          }
+          submissionPending={@pending_reply != nil}
+          submissionBlocked={@integrated and @chat != nil and @chat.blocked}
           isTyping={@typing}
           authenticationPending={@authentication_pending}
           responseError={@error}
@@ -573,14 +577,32 @@ defmodule WebWidgetWeb.WidgetLive do
     do: assign(socket, mode: :conversation, conversation_opened: true)
 
   defp assign_chat(socket, chat) do
-    socket
-    |> assign_state(chat.state)
-    |> assign(
-      chat: chat,
-      requested_conversation_id: chat.conversation_id,
-      authentication_pending: false,
-      accepted_context: %{user_id: chat.session.sender_id, conversation_id: chat.conversation_id}
-    )
+    previous = socket.assigns.chat
+
+    socket =
+      socket
+      |> assign_state(chat.state)
+      |> assign(
+        chat: chat,
+        requested_conversation_id: chat.conversation_id,
+        authentication_pending: false,
+        accepted_context: %{
+          user_id: chat.session.sender_id,
+          conversation_id: chat.conversation_id
+        }
+      )
+
+    if previous && previous.history_revision != chat.history_revision do
+      socket
+      |> stream(
+        :ui_messages,
+        Localization.messages(chat.state.messages, socket.assigns.config.locale),
+        reset: true
+      )
+      |> push_event("widget.message.reset", %{all: true})
+    else
+      socket
+    end
   end
 
   defp backend_revoke_chat(socket) do

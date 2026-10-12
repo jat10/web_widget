@@ -59,7 +59,8 @@ defmodule WebWidget.Integration.Chat do
         session
       )
 
-    with true <- Response.correlated?(response, request),
+    with :ok <- Response.validate_version(response),
+         true <- Response.correlated?(response, request),
          %{type: :widget_initialized, conversation_id: ^requested, payload: %{created: false}} <-
            response,
          true <- Runtime.authorized?(session),
@@ -76,8 +77,14 @@ defmodule WebWidget.Integration.Chat do
          timer: timer,
          auth_generation: generation,
          conversation_id: requested,
-         active: nil,
+         pending_submission: nil,
+         accepted_requests: MapSet.new(),
+         streams: %{},
+         typing_requests: MapSet.new(),
          restore_on_terminal: not is_nil(requested),
+         restored_terminals: MapSet.new(),
+         history_refresh_pending: false,
+         history_revision: 0,
          state: state,
          positions: positions,
          persisted_refs: %{},
@@ -86,6 +93,11 @@ defmodule WebWidget.Integration.Chat do
          blocked: false
        }}
     else
+      {:error, :unsupported_protocol_version} ->
+        Adapter.unsubscribe(subscription)
+        Adapter.unsubscribe(revocation)
+        {:error, "Unsupported host protocol version. This widget requires version 2."}
+
       _ ->
         Adapter.unsubscribe(subscription)
         Adapter.unsubscribe(revocation)
@@ -105,7 +117,7 @@ defmodule WebWidget.Integration.Chat do
   def update_context(chat, attrs) when is_map(attrs) do
     with {:ok, context} <-
            InitClaims.normalize(Map.put(attrs, :user_id, chat.session.sender_id)),
-         true <- is_nil(chat.active),
+         true <- is_nil(chat.pending_submission),
          true <- Runtime.authorized?(chat.session) do
       requested = context.conversation_id
 
@@ -153,7 +165,14 @@ defmodule WebWidget.Integration.Chat do
            prompt_context: nil,
            blocked: false,
            outcome: nil,
-           persisted_refs: %{}
+           persisted_refs: %{},
+           accepted_requests: MapSet.new(),
+           streams: %{},
+           typing_requests: MapSet.new(),
+           restore_on_terminal: true,
+           restored_terminals: MapSet.new(),
+           history_refresh_pending: false,
+           history_revision: chat.history_revision + 1
        }}
     else
       _ -> {:error, :invalid_context}
@@ -181,9 +200,10 @@ defmodule WebWidget.Integration.Chat do
     )
   end
 
-  def submit(%{active: nil, blocked: false} = chat, text) do
+  def submit(%{pending_submission: nil, blocked: false} = chat, text) do
     request = id()
     message = %{id: request, content: text, timestamp: DateTime.to_iso8601(DateTime.utc_now())}
+    chat = %{chat | pending_submission: request}
 
     result =
       Runtime.dispatch(
@@ -202,18 +222,19 @@ defmodule WebWidget.Integration.Chat do
 
     case result do
       {:ok, receipt} -> accept(chat, receipt, request, message)
-      error -> {:error, %{chat | blocked: true, outcome: :unknown}, Response.error_text(error)}
+      %{type: :error} = error -> reject(chat, error, request)
+      _ -> unknown_submission(chat)
     end
   end
 
   def submit(chat, _),
-    do: {:error, chat, "Wait for the current response or restore the conversation."}
+    do: {:error, chat, "Wait for the submission acknowledgement or restore the conversation."}
 
   defp accept(chat, receipt, request, message) do
     with true <- Response.correlated?(receipt, request),
-         %{conversation_id: conversation, message_id: transport, payload: %{accepted: true}} <-
+         %{conversation_id: conversation, payload: %{accepted: true}} <-
            receipt,
-         true <- identifier?(conversation) and identifier?(transport),
+         true <- identifier?(conversation) and is_nil(Map.get(receipt, :message_id)),
          true <- valid_receipt?(chat.conversation_id, receipt),
          true <- Runtime.authorized?(chat.session) do
       {:ok,
@@ -221,41 +242,76 @@ defmodule WebWidget.Integration.Chat do
          chat
          | conversation_id: conversation,
            prompt_context: nil,
-           active: %{request_id: request, message_id: transport, created: false},
-           restore_on_terminal: false,
-           state: State.submit(chat.state, message)
+           pending_submission: nil,
+           accepted_requests: MapSet.put(chat.accepted_requests, request),
+           state:
+             chat.state
+             |> State.submit(message)
+             |> State.acknowledge(request)
+             |> Map.put(:typing, chat.state.typing)
        }}
     else
-      _ ->
-        {:error, %{chat | blocked: true, outcome: :unknown},
-         "Message outcome is unknown. Restore the conversation before sending again."}
+      _ -> unknown_submission(chat, receipt)
     end
   end
 
-  def receive_response(%{active: active} = chat, event, response) when not is_nil(active) do
+  defp reject(chat, response, request) do
+    if Response.correlated?(response, request) and is_nil(Map.get(response, :message_id)) and
+         Map.get(response, :conversation_id) in [nil, chat.conversation_id] and
+         is_map(Map.get(response, :payload)) and Runtime.authorized?(chat.session) do
+      unknown =
+        Map.get(response.payload, :outcome) == :unknown or response.payload[:code] == :timeout
+
+      error = Response.error_text(response)
+
+      {:error,
+       %{
+         chat
+         | pending_submission: nil,
+           blocked: unknown,
+           outcome: if(unknown, do: :unknown),
+           state: State.submission_error(chat.state, error)
+       }, error}
+    else
+      unknown_submission(chat, response)
+    end
+  end
+
+  defp unknown_submission(chat, response \\ nil) do
+    error =
+      if response &&
+           Response.validate_version(response) == {:error, :unsupported_protocol_version},
+         do: "Unsupported host protocol version. This widget requires version 2.",
+         else: "Submission outcome is unknown. Restore the conversation before sending again."
+
+    {:error,
+     %{
+       chat
+       | pending_submission: nil,
+         blocked: true,
+         outcome: :unknown,
+         state: State.submission_error(chat.state, error)
+     }, error}
+  end
+
+  def receive_response(chat, event, %{request_id: request} = response) do
+    if MapSet.member?(chat.accepted_requests, request) do
+      receive_correlated(chat, event, response)
+    else
+      restore_history(chat, event, response)
+    end
+  end
+
+  def receive_response(chat, _, _), do: chat
+
+  defp receive_correlated(chat, event, response) do
     with true <- Runtime.authorized?(chat.session),
-         true <- Response.correlated?(response, active.request_id),
-         %{conversation_id: conversation, message_id: transport, type: type, payload: payload}
-         when is_map(payload) <- response,
-         true <- conversation == chat.conversation_id and transport == active.message_id,
-         true <- active.created or type in [:typing, :message_create, :error],
+         true <- Response.correlated?(response, response.request_id),
+         true <- Map.get(response, :conversation_id) == chat.conversation_id,
+         true <- applicable?(chat, response),
          {:ok, encoded} <- Response.encode(event, response, chat.session.widget_id) do
       Diagnostics.log(:applied, response)
-      terminal = response.type in [:message_complete, :message_failed, :error]
-
-      active =
-        if terminal,
-          do: nil,
-          else: %{active | created: active.created or response.type == :message_create}
-
-      %{
-        chat
-        | state: State.apply_event(chat.state, encoded),
-          active: active,
-          persisted_refs: retain_refs(chat.persisted_refs, response),
-          outcome: Map.get(response.payload, :outcome, chat.outcome),
-          blocked: chat.blocked or response.type == :error
-      }
+      apply_response(chat, encoded, response)
     else
       _ ->
         Diagnostics.log(:ignored_validation_or_encoding, response)
@@ -263,26 +319,114 @@ defmodule WebWidget.Integration.Chat do
     end
   end
 
-  def receive_response(
-        %{active: nil, restore_on_terminal: true, conversation_id: conversation} = chat,
-        event,
-        %{protocol_version: 1, type: :message_complete, conversation_id: conversation} = response
-      ) do
+  defp applicable?(chat, %{type: :typing, request_id: request}) do
+    streams = Enum.filter(Map.values(chat.streams), &(&1.request_id == request))
+    streams == [] or Enum.any?(streams, &(&1.status == :running))
+  end
+
+  defp applicable?(chat, %{type: :message_create, message_id: message}) do
+    identifier?(message) and not Map.has_key?(chat.streams, message) and
+      not Enum.any?(chat.state.messages, &(&1.id == message))
+  end
+
+  defp applicable?(chat, %{type: type, message_id: message, request_id: request})
+       when type in [:message_edit, :message_step, :message_complete, :message_failed] do
+    match?(%{request_id: ^request, status: :running}, Map.get(chat.streams, message))
+  end
+
+  defp applicable?(_, _), do: false
+
+  defp apply_response(chat, _encoded, %{type: :typing, request_id: request, payload: payload}) do
+    typing =
+      if payload.active,
+        do: MapSet.put(chat.typing_requests, request),
+        else: MapSet.delete(chat.typing_requests, request)
+
+    %{chat | typing_requests: typing, state: %{chat.state | typing: MapSet.size(typing) > 0}}
+  end
+
+  defp apply_response(chat, encoded, response) do
+    terminal = response.type in [:message_complete, :message_failed]
+    status = if terminal, do: :terminal, else: :running
+
+    streams =
+      Map.put(chat.streams, response.message_id, %{
+        request_id: response.request_id,
+        status: status
+      })
+
+    typing =
+      if terminal and
+           not Enum.any?(
+             Map.values(streams),
+             &(&1.request_id == response.request_id and &1.status == :running)
+           ),
+         do: MapSet.delete(chat.typing_requests, response.request_id),
+         else: chat.typing_requests
+
+    state = State.apply_event(chat.state, encoded)
+
+    %{
+      chat
+      | streams: streams,
+        typing_requests: typing,
+        state: %{state | typing: MapSet.size(typing) > 0},
+        persisted_refs: retain_refs(chat.persisted_refs, response)
+    }
+    |> maybe_restore_history()
+  end
+
+  defp restore_history(
+         %{restore_on_terminal: true, conversation_id: conversation} = chat,
+         event,
+         %{
+           protocol_version: 2,
+           type: type,
+           conversation_id: conversation,
+           request_id: request,
+           message_id: message
+         } = response
+       )
+       when type in [:message_complete, :message_failed] do
     with true <- Runtime.authorized?(chat.session),
-         true <- identifier?(response.request_id) and identifier?(response.message_id),
-         {:ok, _} <- Response.encode(event, response, chat.session.widget_id),
-         {:ok, state, positions} <- history(chat.session, conversation),
-         true <- Runtime.authorized?(chat.session) do
-      %{chat | state: state, positions: positions, restore_on_terminal: false}
+         true <- identifier?(request) and identifier?(message),
+         true <- not Map.has_key?(chat.streams, message),
+         true <- not MapSet.member?(chat.restored_terminals, message),
+         {:ok, _} <- Response.encode(event, response, chat.session.widget_id) do
+      %{
+        chat
+        | history_refresh_pending: true,
+          restored_terminals: MapSet.put(chat.restored_terminals, message)
+      }
+      |> maybe_restore_history()
     else
       _ -> chat
     end
   end
 
-  def receive_response(chat, _, response) do
-    Diagnostics.log(:ignored_no_active_request, response)
+  defp restore_history(chat, _, response) do
+    Diagnostics.log(:ignored_uncorrelated_request, response)
     chat
   end
+
+  defp maybe_restore_history(%{history_refresh_pending: true} = chat) do
+    with false <- Enum.any?(Map.values(chat.streams), &(&1.status == :running)),
+         true <- Runtime.authorized?(chat.session),
+         {:ok, state, positions} <- history(chat.session, chat.conversation_id),
+         true <- Runtime.authorized?(chat.session) do
+      %{
+        chat
+        | state: state,
+          positions: positions,
+          history_refresh_pending: false,
+          history_revision: chat.history_revision + 1
+      }
+    else
+      _ -> chat
+    end
+  end
+
+  defp maybe_restore_history(chat), do: chat
 
   defp retain_refs(refs, %{message_id: id, payload: payload}) do
     public = Map.take(payload, [:assistant_message_id, :user_message_id])

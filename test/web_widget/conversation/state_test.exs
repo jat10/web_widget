@@ -2,6 +2,28 @@ defmodule WebWidget.Conversation.StateTest do
   use ExUnit.Case, async: true
   alias WebWidget.Conversation.State, as: Conversation
 
+  test "accepted submission has no promised assistant and errors leave independent streams intact" do
+    state = Conversation.new() |> Conversation.submit(%{id: "u", content: "hello"})
+    assert %{request_id: "u", id: nil} = state.pending_reply
+    state = Conversation.acknowledge(state, "u")
+    assert state.pending_reply == nil
+
+    state =
+      Conversation.apply_event(state, %{
+        type: "response.message.create",
+        payload: %{id: "a", content: "Partial"}
+      })
+
+    state = Conversation.submission_error(state, "Rejected input")
+
+    assert [%{role: "user"}, %{id: "a", status: "running", content: "Partial", error: nil}] =
+             state.messages
+
+    assert state.error == "Rejected input"
+    state = Conversation.submit(state, %{id: "next", content: "next"})
+    assert Conversation.acknowledge(state, "foreign") == state
+  end
+
   test "request errors fail the pending assistant and active steps without regressing finished steps" do
     state =
       Conversation.new()

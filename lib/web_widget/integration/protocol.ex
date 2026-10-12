@@ -129,6 +129,7 @@ defmodule WebWidget.Integration.Protocol do
     with {:ok, payload} <- payload(hooks, event),
          {:ok, delivery} <-
            hooks.delivery.new(%{
+             protocol_version: 2,
              consumer: :widget,
              channel_config_id: hooks.widget_id,
              topic: session.topic,
