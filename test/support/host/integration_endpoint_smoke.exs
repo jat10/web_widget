@@ -5,6 +5,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
   use ExUnit.Case
   import Phoenix.ConnTest
 
+  alias WebWidget.Connector
   alias WebWidget.Integration.Installation
   alias WebWidget.Integration.RuntimeBuilder
   alias WebWidget.TestIntegration.Host
@@ -13,7 +14,6 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
 
   test "configuration starts the package endpoint without a Repo or demo" do
     Application.put_env(:phoenix, :json_library, Jason)
-    Application.put_env(:web_widget, :start_integration_server, true)
 
     Application.put_env(:web_widget, @endpoint,
       adapter: Bandit.PhoenixAdapter,
@@ -22,10 +22,17 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
       secret_key_base: String.duplicate("isolated-test", 8),
       live_view: [signing_salt: "isolated-test"],
       pubsub_server: WebWidget.PubSub,
-      server: true
+      server: true,
+      web_widget_session: [partitioned: false]
     )
 
     {:ok, _} = Application.ensure_all_started(:web_widget)
+
+    start_supervised!(
+      {WebWidget.Standalone, mode: :package, infrastructure: [session: [partitioned: false]]}
+    )
+
+    bridge = start_supervised!({DynamicSupervisor, strategy: :one_for_one})
     assert is_pid(Process.whereis(@endpoint))
     assert is_pid(Process.whereis(WebWidget.PubSub))
     assert Process.whereis(WebWidget.Repo) == nil
@@ -33,7 +40,7 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     assert WebWidget.Runtime.fetch_widget("demo") == {:error, :not_found}
 
     document =
-      get(build_conn(), "/widget/missing") |> html_response(200) |> LazyHTML.from_document()
+      get(build_conn(), "/widget/missing") |> html_response(404) |> LazyHTML.from_document()
 
     assert document |> LazyHTML.query("#widget-unavailable") |> Enum.count() == 1
     assert byte_size(response(get(build_conn(), "/web_widget/assets/embed.js"), 200)) > 100
@@ -41,8 +48,13 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     {:ok, {_ip, port}} = @endpoint.server_info(:http)
     base_url = "http://127.0.0.1:#{port}"
     {config, hooks, opts} = Host.fixture()
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
-    start_supervised!(spec)
+    opts = Keyword.put(opts, :pubsub_server, WebWidget.PubSub)
+    replace_infrastructure(opts)
+
+    {:ok, connector} =
+      DynamicSupervisor.start_child(bridge, {Connector, config: config, hooks: hooks})
+
+    Host.await_runtime(config.id)
     {:ok, snippet} = Installation.script(config.id, base_url)
 
     [src] =
@@ -52,5 +64,42 @@ defmodule WebWidget.IntegrationEndpointSmokeTest do
     assert body =~ "data-widget-id"
     assert %{status: 200, body: body} = Req.get!(base_url <> "/widget/#{config.id}")
     assert body =~ "widget-state"
+
+    :ok = DynamicSupervisor.terminate_child(bridge, connector)
+
+    config =
+      Map.merge(config, %{
+        token: String.duplicate("package-readiness-key", 3),
+        settings:
+          Map.merge(config.settings, %{
+            "identity_issuer" => "package-issuer",
+            "identity_audience" => "package-audience"
+          })
+      })
+
+    opts = [pubsub_server: WebWidget.PubSub, identity_verifier: :connector_key]
+    replace_infrastructure(opts)
+    {:ok, _} = DynamicSupervisor.start_child(bridge, {Connector, config: config, hooks: hooks})
+    before = Host.await_runtime(config.id)
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(config.id, [])
+    assert :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.RuntimeRegistry)
+    assert {:ok, %{reason: :runtime_not_registered}} = RuntimeBuilder.status(config.id, [])
+    assert {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.RuntimeRegistry)
+    Host.await_runtime(config.id, before.runtime_ref)
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(config.id, [])
+  end
+
+  defp replace_infrastructure(opts) do
+    :ok = Supervisor.terminate_child(WebWidget.Standalone, WebWidget)
+    :ok = Supervisor.delete_child(WebWidget.Standalone, WebWidget)
+
+    {:ok, _} =
+      Supervisor.start_child(
+        WebWidget.Standalone,
+        {WebWidget,
+         opts
+         |> Keyword.put(:transport, tls_options: [])
+         |> Keyword.put(:session, partitioned: false)}
+      )
   end
 end

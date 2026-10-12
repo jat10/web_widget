@@ -16,11 +16,16 @@ defmodule WebWidget.DependencyHostSmokeTest do
 
     start_supervised!({Phoenix.PubSub, name: WebWidget.DependencyHostPubSub})
 
+    start_supervised!(
+      {WebWidget, pubsub_server: WebWidget.DependencyHostPubSub, session: [partitioned: false]}
+    )
+
     Application.put_env(:web_widget, @endpoint,
       secret_key_base: String.duplicate("host", 16),
       live_view: [signing_salt: "host-live"],
       pubsub_server: WebWidget.DependencyHostPubSub,
-      server: false
+      server: false,
+      web_widget_session: [partitioned: false]
     )
 
     start_supervised!(@endpoint)
@@ -35,6 +40,7 @@ defmodule WebWidget.DependencyHostSmokeTest do
          widgets: [
            %{
              widget_id: "isolated",
+             same_site: "Lax",
              display_name: "Isolated host",
              allowed_domains: ["https://customer.com", "http://www.example.com"]
            }

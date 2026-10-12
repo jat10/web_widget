@@ -1,9 +1,14 @@
-defmodule WebWidget.Integration.RuntimeBuilderTest do
-  use ExUnit.Case, async: true
+defmodule WebWidget.Connector.RuntimeConfigTest do
+  use ExUnit.Case, async: false
 
-  alias WebWidget.Integration.RuntimeBuilder
+  alias WebWidget.Connector.RuntimeConfig
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
+
+  setup do
+    {_, _, opts} = Host.fixture()
+    WebWidget.TestInfrastructure.setup(opts)
+  end
 
   test "unconfigured identity permits runtime installation but never authenticates" do
     {config, hooks, opts} = Host.fixture()
@@ -15,7 +20,8 @@ defmodule WebWidget.Integration.RuntimeBuilderTest do
         {WebWidget.Integration.UnconfiguredIdentity, :verify, []}
       )
 
-    assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    assert {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
+    WebWidget.TestInfrastructure.replace(opts)
     start_supervised!(spec)
     assert {:ok, _widget} = Runtime.fetch_widget(to_string(config.id))
 
@@ -27,13 +33,14 @@ defmodule WebWidget.Integration.RuntimeBuilderTest do
   test "returns host-owned state specs with unique IDs and public presentation only" do
     for _ <- 1..2 do
       {config, hooks, opts} = Host.fixture()
-      assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+      assert {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
       assert spec.id == {Runtime, config.id}
       runtime = start_supervised!(spec)
       assert {:ok, public} = Runtime.fetch_widget(to_string(config.id))
 
       assert public == %{
                widget_id: to_string(config.id),
+               same_site: "Lax",
                display_name: hooks.display_name,
                allowed_domains: hooks.allowed_domains,
                stylesheet_url: nil,
@@ -58,10 +65,10 @@ defmodule WebWidget.Integration.RuntimeBuilderTest do
 
     for key <- [:message, :command, :context, :delivery, :response, :sink_mfa] do
       assert {:error, :invalid_integration_config} =
-               RuntimeBuilder.build(config, Map.delete(hooks, key), opts)
+               RuntimeConfig.prepare(config, Map.delete(hooks, key), opts)
 
       assert {:error, :invalid_integration_config} =
-               RuntimeBuilder.build(config, Map.put(hooks, key, String), opts)
+               RuntimeConfig.prepare(config, Map.put(hooks, key, String), opts)
     end
 
     for invalid <- [
@@ -71,30 +78,55 @@ defmodule WebWidget.Integration.RuntimeBuilderTest do
           [pubsub_server: false],
           Keyword.delete(opts, :identity_verifier)
         ] do
-      assert {:error, :invalid_integration_config} = RuntimeBuilder.build(config, hooks, invalid)
+      assert {:error, :invalid_integration_config} = RuntimeConfig.prepare(config, hooks, invalid)
     end
 
     for invalid <- [nil, %{}, %{config | id: 0}, %{config | provider: "web"}] do
-      assert {:error, :invalid_integration_config} = RuntimeBuilder.build(invalid, hooks, opts)
+      assert {:error, :invalid_integration_config} = RuntimeConfig.prepare(invalid, hooks, opts)
     end
 
     assert {:error, :invalid_integration_config} =
-             RuntimeBuilder.build(config, %{hooks | widget_id: config.id + 1}, opts)
+             RuntimeConfig.prepare(config, %{hooks | widget_id: config.id + 1}, opts)
 
     assert Runtime.fetch_widget(to_string(config.id)) == {:error, :not_found}
+  end
+
+  test "connector cookie settings are validated and retained without adapter defaults" do
+    {config, hooks, opts} = Host.fixture()
+
+    for missing <- [
+          Map.delete(config, :settings),
+          %{config | settings: nil},
+          %{config | settings: %{}}
+        ] do
+      assert {:error, :missing_cookie_policy} = RuntimeConfig.prepare(missing, hooks, opts)
+    end
+
+    for value <- ["None", "Lax", "Strict"] do
+      configured = Map.put(config, :settings, %{"same_site" => value})
+      assert {:ok, {spec, []}} = RuntimeConfig.prepare(configured, hooks, opts)
+      start_supervised!(spec)
+      assert {:ok, %{same_site: ^value}} = Runtime.fetch_widget(to_string(config.id))
+      stop_supervised!(spec.id)
+    end
+
+    for value <- [nil, "", "none", false] do
+      configured = Map.put(config, :settings, %{"same_site" => value})
+      assert {:error, :invalid_cookie_policy} = RuntimeConfig.prepare(configured, hooks, opts)
+    end
   end
 
   test "rejects invalid presentation; empty origins remain denied" do
     {config, hooks, opts} = Host.fixture()
 
     assert {:error, :invalid_runtime_config} =
-             RuntimeBuilder.build(config, %{hooks | allowed_domains: ["*"]}, opts)
+             RuntimeConfig.prepare(config, %{hooks | allowed_domains: ["*"]}, opts)
 
     assert {:error, :invalid_runtime_config} =
-             RuntimeBuilder.build(config, %{hooks | display_name: nil}, opts)
+             RuntimeConfig.prepare(config, %{hooks | display_name: nil}, opts)
 
     assert {:ok, {spec, []}} =
-             RuntimeBuilder.build(
+             RuntimeConfig.prepare(
                config,
                %{hooks | allowed_domains: []},
                opts
@@ -111,14 +143,14 @@ defmodule WebWidget.Integration.RuntimeBuilderTest do
   test "legacy stylesheet hooks cannot leak into connector-wide presentation" do
     {config, hooks, opts} = Host.fixture()
     hooks = Map.put(hooks, :stylesheet_url, "https://legacy.example/style.css")
-    assert {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    assert {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     start_supervised!(spec)
     assert {:ok, %{stylesheet_url: nil}} = Runtime.fetch_widget(to_string(config.id))
   end
 
   test "duplicate connector registration fails without replacing the original runtime" do
     {config, hooks, opts} = Host.fixture()
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     original = start_supervised!(spec)
     assert {:error, _} = start_supervised(%{spec | id: :duplicate})
     assert [{^original, _}] = Registry.lookup(WebWidget.RuntimeRegistry, to_string(config.id))

@@ -1,6 +1,7 @@
 defmodule WebWidget.Integration.SignedIdentityTest do
   use ExUnit.Case, async: false
-  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.Integration.{BindingStore, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -10,13 +11,22 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     options =
       Keyword.merge(options,
-        identity_verifier: :connector_key,
-        identity_issuer: "parent",
-        identity_audience: "widget"
+        pubsub_server: WebWidget.PubSub,
+        identity_verifier: :connector_key
       )
 
-    config = Map.put(config, :token, key)
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
+    config =
+      Map.merge(config, %{
+        token: key,
+        settings: %{
+          "identity_issuer" => "parent",
+          "identity_audience" => "widget",
+          "same_site" => "Lax"
+        }
+      })
+
+    WebWidget.TestInfrastructure.setup(options)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, options)
     start_supervised!(spec)
     reset = await_reset()
     delay = max(0, (reset + 1) * 1_000 - System.system_time(:millisecond))
@@ -113,20 +123,9 @@ defmodule WebWidget.Integration.SignedIdentityTest do
                now
              )
 
-    config = Application.get_env(:web_widget, :authentication, [])
-    :sys.suspend(BindingStore)
+    :ok = Supervisor.terminate_child(WebWidget.Supervisor, BindingStore)
 
     try do
-      Application.put_env(
-        :web_widget,
-        :authentication,
-        Keyword.put(config, :replica_nodes, [
-          node(),
-          :unavailable_a@localhost,
-          :unavailable_b@localhost
-        ])
-      )
-
       for times <- [%{"iat" => now, "exp" => now + 300}, %{"iat" => now - 20, "exp" => now - 1}] do
         proof = jwt(ctx.key, Map.merge(claims(ctx), times))
         assert {:error, :store_unavailable} = authenticate(ctx, proof)
@@ -134,8 +133,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
       assert {:error, :unauthorized} = authenticate(ctx, "untrusted")
     after
-      Application.put_env(:web_widget, :authentication, config)
-      :sys.resume(BindingStore)
+      {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, BindingStore)
     end
   end
 
@@ -204,7 +202,7 @@ defmodule WebWidget.Integration.SignedIdentityTest do
     {:ok, proof} = sign(ctx)
     stop_supervised!(ctx.spec.id)
     config = %{ctx.config | token: Base.url_encode64(:crypto.strong_rand_bytes(32))}
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, ctx.hooks, ctx.options)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, ctx.hooks, ctx.options)
     start_supervised!(spec)
     assert {:error, :unauthorized} = authenticate(ctx, proof)
     {:ok, public} = Runtime.fetch_widget(ctx.id)
@@ -212,7 +210,98 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     for key <- [nil, "placeholder", String.duplicate("x", 40)] do
       assert {:error, :invalid_identity_config} =
-               RuntimeBuilder.build(%{config | token: key}, ctx.hooks, ctx.options)
+               RuntimeConfig.prepare(%{config | token: key}, ctx.hooks, ctx.options)
+    end
+  end
+
+  test "simultaneous connectors isolate issuer and audience even with the same key", ctx do
+    {config, hooks, _} = Host.fixture()
+
+    config =
+      Map.merge(config, %{
+        token: ctx.key,
+        settings: %{
+          "identity_issuer" => "other-parent",
+          "identity_audience" => "other-widget",
+          "same_site" => "Lax"
+        }
+      })
+
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, ctx.options)
+    start_supervised!(spec)
+
+    for {id, issuer, audience, foreign_issuer, foreign_audience} <- [
+          {ctx.config.id, "parent", "widget", "other-parent", "other-widget"},
+          {config.id, "other-parent", "other-widget", "parent", "widget"}
+        ] do
+      {:ok, proof} =
+        SignedIdentity.sign(ctx.key, id, %{user_id: "visitor"},
+          issuer: issuer,
+          audience: audience
+        )
+
+      assert {:ok, _} = Runtime.authenticate(to_string(id), proof, ctx.page_id)
+
+      for overrides <- [[issuer: foreign_issuer], [audience: foreign_audience]] do
+        {:ok, bad} =
+          SignedIdentity.sign(
+            ctx.key,
+            id,
+            %{user_id: "visitor"},
+            Keyword.merge([issuer: issuer, audience: audience], overrides)
+          )
+
+        assert {:error, :unauthorized} = Runtime.authenticate(to_string(id), bad, ctx.page_id)
+      end
+    end
+  end
+
+  test "rebuilding edited identity settings revokes old sessions and browser/control proofs",
+       ctx do
+    alias WebWidget.Integration.ControlProof
+
+    for name <- ["identity_issuer", "identity_audience"] do
+      {:ok, proof} = sign(ctx)
+      assert {:ok, session} = authenticate(ctx, proof)
+
+      {:ok, control} =
+        ControlProof.sign(ctx.key, ctx.config.id, "visitor",
+          issuer: "parent",
+          audience: "widget:control"
+        )
+
+      stop_supervised!(ctx.spec.id)
+      config = %{ctx.config | settings: Map.put(ctx.config.settings, name, "edited")}
+
+      {:ok, {spec, []}} =
+        RuntimeConfig.prepare(
+          config,
+          ctx.hooks,
+          Keyword.put(ctx.options, :pubsub_server, WebWidget.PubSub)
+        )
+
+      pid = start_supervised!(spec)
+      refute Runtime.authorized?(session)
+      assert {:error, :unauthorized} = authenticate(ctx, proof)
+      assert {:error, :unauthorized} = Runtime.disconnect(ctx.id, "visitor", control)
+      issuer = config.settings["identity_issuer"]
+      audience = config.settings["identity_audience"]
+      {:ok, fresh} = sign(ctx, issuer: issuer, audience: audience)
+      assert {:ok, _} = authenticate(ctx, fresh)
+      control_user = "control-#{name}"
+
+      {:ok, fresh_control} =
+        ControlProof.sign(ctx.key, ctx.config.id, control_user,
+          issuer: issuer,
+          audience: audience <> ":control"
+        )
+
+      assert {:ok, _} = Runtime.disconnect(ctx.id, control_user, fresh_control)
+      assert {:ok, public} = Runtime.fetch_widget(ctx.id)
+      refute inspect(public) =~ ctx.key
+      refute inspect(:sys.get_status(pid)) =~ ctx.key
+      stop_supervised!(spec.id)
+      start_supervised!(ctx.spec)
     end
   end
 

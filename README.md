@@ -4,6 +4,12 @@ Embed a floating ZAQ chat on a website with one installation script. The script 
 
 ## Features
 
+Generic hosts integrate through `WebWidget.HostAdapter`: shared infrastructure
+specs, independent connector specs, bounded safe ingress status, and escaped
+installation markup. PubSub, authentication membership, proxy trust and cookie
+technical policy are authoritative process options, not endpoint widget settings.
+See [host integration](docs/host-integration.md) for the API and migration.
+
 - Chat with a ZAQ agent through the existing LiveView connection, including live response updates, typing status, and conversation resume.
 - A copyable installation script in ZAQ's Web Widget back office. It mounts the iframe automatically and includes no credentials.
 - Backend-signed HS256 identity tokens scoped to a widget and user, with a seven-day default maximum lifetime and five-second first-page binding. The website keeps the connector key on its backend.
@@ -93,7 +99,7 @@ Prerequisites:
 
 ```sh
 mix setup
-mix phx.server
+mix demo
 ```
 
 Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` installation script to create its iframe, then supplies mock identity and responses. The demo's unsigned bootstrap is for fixtures only; ZAQ integration requires a signed JWT. You can select startup settings with `/widget-demo?theme=dark&language=ar`, or run `zaq.widget.updateSettings(...)` from the parent-page browser console.
@@ -106,13 +112,22 @@ Open `http://localhost:4000/widget-demo`. The demo uses the same `embed.js` inst
 | `fail` | Tool and message failure, followed by the ability to send again. |
 | `slow` | Slower tool and streaming events. |
 
-The demo uses a mock host, not a live ZAQ agent. Enable its conversation sidebar with `WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix phx.server`. To embed the local demo on another origin, set `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` to a comma-separated list of exact allowed origins and restart the server.
+The demo uses a mock host, not a live ZAQ agent. `mix demo` explicitly starts its supervisor; merely starting the dependency or running `mix phx.server` does not start widget services. Enable its conversation sidebar with `WEB_WIDGET_DEMO_MULTIPLE_CONVERSATIONS=true mix demo`. To embed the local demo on another origin, set `WEB_WIDGET_DEMO_ALLOWED_DOMAINS` to a comma-separated list of exact allowed origins and restart the server. These variables belong to the demo script, not the host integration API.
 
 Iframe and embed assets use the built bundle. Run `mix assets.build` after changing them; the Vite development watcher alone does not rebuild those assets. Commit the generated files in `priv/static/assets` with frontend changes. The release workflow runs `npm --prefix assets ci` and `npm --prefix assets run build`, verifies that the tracked output matches, and attaches the bundle to the GitHub Release. Release Please updates `mix.exs`, `CHANGELOG.md`, tags, and releases from conventional commits. Git dependency installs use the assets committed in the release tag; they do not download release attachments.
 
 During a connection interruption, the widget keeps messages and the draft visible and pauses sending. After two seconds it shows a reconnecting banner; after fifteen seconds it offers **Retry connection**. A brief **Connected** notice appears after authentication and conversation restoration. Interrupted responses are recovered without automatically resending the question.
 
-ZAQ can depend on a released tag with `{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}` and mount `web_widget("/widget")` in its browser router. The macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`. ZAQ needs no asset copy, frontend build, static-path allowlist entry, or endpoint `WebWidget.Static` plug. See [host integration](docs/host-integration.md#routes-and-assets).
+ZAQ can depend on a released tag with `{:web_widget, git: "https://github.com/www-zaq-ai/web_widget.git", tag: "vX.Y.Z"}` and mount `web_widget("/widget")` outside its BO browser pipeline, plus `WebWidget.Endpoint.web_widget_socket("/widget")` in its endpoint. The widget uses an isolated cookie and its single `/widget/:id/live` connection; BO sessions remain unchanged. Generated installation scripts include the widget page URL, including a configured custom mount prefix. The macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`. ZAQ needs no asset copy, frontend build, static-path allowlist entry, or endpoint `WebWidget.Static` plug. See [host integration](docs/host-integration.md#routes-and-assets).
+
+Hosts start `{WebWidget, pubsub_server: Host.PubSub, authentication: [...]}` once
+and supervise each connector with `{WebWidget.Connector, config: config, hooks: hooks}`.
+Connectors recover automatically from infrastructure restarts; hosts replace or
+remove connector children to change configuration. Readiness discovers the actual
+serving widget endpoint/listener, with explicit overrides for ambiguity. Trusted
+proxy HTTPS -> host HTTP is supported without a dedicated widget TLS listener;
+readiness v2 distinguishes local checks from external HTTPS verification. See
+[host integration](docs/host-integration.md).
 
 ## Contributing
 

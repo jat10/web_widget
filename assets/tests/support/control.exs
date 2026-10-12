@@ -6,6 +6,12 @@ defmodule WebWidget.E2EControl do
   plug Plug.Parsers, parsers: [:json], json_decoder: Jason
   plug :dispatch
 
+  get "/ready" do
+    if WebWidget.E2ESharedHost.ready?(),
+      do: send_resp(conn, 200, "ready"),
+      else: send_resp(conn, 503, "connector runtimes unavailable")
+  end
+
   get "/identity" do
     conn = fetch_query_params(conn)
     ttl = case Integer.parse(conn.query_params["ttl"] || "") do
@@ -16,7 +22,8 @@ defmodule WebWidget.E2EControl do
     |> put_resp_content_type("application/json")
     |> send_resp(200, Jason.encode!(WebWidget.E2ESharedHost.bootstrap(
       ttl, conn.query_params["user_id"] || "e2e-visitor",
-      if(conn.query_params["stale"] == "true", do: -6, else: 0))))
+       if(conn.query_params["stale"] == "true", do: -6, else: 0),
+       if(conn.query_params["widget_id"] == "421", do: 421, else: 420))))
   end
 
   get "/control-proof" do
@@ -40,18 +47,15 @@ defmodule WebWidget.E2EControl do
   post "/auth-store/:action" do
     case action do
       "unavailable" ->
-        :sys.suspend(WebWidget.Integration.BindingStore)
-        options = Application.get_env(:web_widget, :authentication, [])
-        Application.put_env(:web_widget, :e2e_auth_options, options)
-        Application.put_env(:web_widget, :authentication, Keyword.put(options, :replica_nodes,
-          [node(), :"missing_a@localhost", :"missing_b@localhost"]))
+        :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
       "restore" ->
-        Application.put_env(:web_widget, :authentication, Application.fetch_env!(:web_widget, :e2e_auth_options))
-        :sys.resume(WebWidget.Integration.BindingStore)
+        {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+        :ok = WebWidget.E2ESharedHost.await_ready()
       "reset" ->
         :ok = Supervisor.terminate_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
         :stopped = :mnesia.stop()
         {:ok, _} = Supervisor.restart_child(WebWidget.Supervisor, WebWidget.Integration.BindingStore)
+        :ok = WebWidget.E2ESharedHost.await_ready()
     end
     send_resp(conn, 204, "")
   end

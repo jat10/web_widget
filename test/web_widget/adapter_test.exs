@@ -1,5 +1,5 @@
 defmodule WebWidget.AdapterTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   alias WebWidget.Adapter
   alias WebWidget.Runtime
 
@@ -7,6 +7,7 @@ defmodule WebWidget.AdapterTest do
     id = "adapter-#{System.unique_integer([:positive])}"
     server = Module.concat(__MODULE__, "PubSub#{System.unique_integer([:positive])}")
     start_supervised!({Phoenix.PubSub, name: server})
+    WebWidget.TestInfrastructure.setup(pubsub_server: server)
 
     start_supervised!(
       {Runtime,
@@ -14,7 +15,9 @@ defmodule WebWidget.AdapterTest do
          channel_config_id: id,
          sink_mfa: {__MODULE__, :callback, [self()]},
          pubsub_server: server,
-         widgets: [%{widget_id: id, display_name: "Adapter", allowed_domains: []}]
+         widgets: [
+           %{widget_id: id, same_site: "Lax", display_name: "Adapter", allowed_domains: []}
+         ]
        }}
     )
 

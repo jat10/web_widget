@@ -36,29 +36,154 @@ hooks, without `%Zaq.*{}` struct literals in the package. ZAQ never constructs
 
 ## Runtime integration
 
+### Public host adapter (PR #24 / issue #23)
+
+Generic hosts register `WebWidget.HostAdapter`. Its public callbacks are:
+`infrastructure_child_specs(host_opts) -> {:ok, [OTP child specs]}`,
+`build_runtime_specs(config, hooks) -> {:ok, {state_spec_or_nil, listeners}}`,
+`ingress_status(config, opts \\ []) -> {:ok, channel_status_map}`, and
+`installation(config_or_id, base_url, opts \\ []) -> {:ok, snippet}`.
+Construction errors are redacted. Infrastructure specs represent the shared
+singleton, never connector children. Runtime specs carry the independent connector
+supervisor; recovery remains inside that stable connector, not in host coordination.
+
+Host hooks contain only `message`, `command`, `context`, `delivery`, `response`
+constructors and the fixed config-bound `sink_mfa`. The adapter derives widget identity from
+`config.id` and presentation from string-keyed `config.settings` (`display_name`
+falls back to `config.name`). Generic host bridges do not construct widget hooks.
+Raw `WebWidget.Connector` retains its explicit widget hook API for compatibility.
+
+Infrastructure `proxy: [trusted_proxies: [ip_tuple, ...], public_origin: https_origin]`
+and `session: [partitioned: boolean, secure: boolean, endpoints: [{EndpointModule,
+[partitioned: boolean, secure: boolean]}]]` are authoritative process
+options alongside PubSub, authentication membership and transport settings. Proxy
+defaults to disabled; session defaults to partitioned with HTTPS-forced Secure.
+No widget policy is read from endpoint configuration or copied to package env.
+Normal Phoenix endpoint listener, URL, signing secret, TLS and routing remain
+host-owned. Never infer proxy trust from forwarding headers or membership from
+connected nodes. Scope normalization applies only to mounted widget HTTP/socket
+paths, and normal proxy-terminated HTTPS remains supported.
+
+The adapter owns bounded readiness, desired-versus-installed comparison, safe
+channel status projection and installation defaults/validation. Channel status
+uses `:ok`, `:pending`, `:error`, `:unknown`, `:disabled` with mode `"websocket"`
+and closed safe reasons/checks/settings/verification; readiness does not expose
+credentials, hooks or raw failures. `RuntimeBuilder.status/2` deliberately remains
+the raw package version-2 compatibility observation, not the generic host boundary.
+
+### Trusted deployment mount scope (PR #24)
+
+Top-level infrastructure `scope: "/channels"` is a trusted process option,
+normalized once at init. Omitted scope or explicit `"/"` preserves root mounting.
+A trailing slash is normalized; relative/empty/non-string paths, repeated slashes,
+dot segments, percent encoding, query/fragment, whitespace and backslashes reject
+startup with a fixed redacted configuration error. It is not a connector setting,
+browser parameter or endpoint policy.
+
+A non-root scope derives every package path: `/channels/widget/:widget_id`,
+its `/session` and `/live/*`, `/channels/widget-api/:widget_id/disconnect`, and
+`/channels/web_widget/assets/*`. Router/endpoint mounts are compiled, so hosts
+must use the same scope in `web_widget("/widget", scope: "/channels")`,
+`web_widget_api("/widget-api", scope: "/channels")` and
+`web_widget_socket("/widget", scope: "/channels")`, outside an additional Phoenix
+path scope. Arity-1 calls remain root/legacy compatible. A scoped macro accepts
+its default prefix or its exact fully-derived prefix without doubling; any other
+scoped prefix rejects compilation. Scope/path inconsistency fails init when an
+explicit endpoint supplies authoritative mount metadata; otherwise requests fail
+closed and readiness cannot be green. Runtime configuration never relocates routes.
+
+Legacy custom `transport.widget_path` is retained for root deployments. With
+non-root scope it may be omitted or exactly equal the derived widget prefix;
+conflicts reject instead of choosing precedence. Online installation `[]` uses
+the running scope; offline `installation(id, base_url, scope: "/channels")` uses
+the same validated path rules. An online scope/path override cannot contradict
+the running mount. Origins remain root HTTP(S) origins. No host asset copy or
+rewrite is needed; layouts, static serving, probes and scoped cookies agree.
+Callback signatures and the exact six-key constructor/sink hooks are unchanged.
+
+### Explicit infrastructure lifecycle (issue #23)
+
+The embedding host starts `{WebWidget, opts}` once in its supervisor. The OTP
+dependency starts required library applications (including Mnesia), but no widget
+services, endpoint, Repo, or demo runtime. Infrastructure is a singleton per BEAM
+node: its configuration owner, runtime registry and binding store have fixed names.
+Duplicate starts fail; multi-instance startup is not supported.
+
+Init options are the sole source of infrastructure authentication, trusted
+integration and transport/readiness overrides. Serving endpoints/listeners may be
+discovered from running endpoints bearing the package socket metadata. The startup boundary validates and
+normalizes them, applying package defaults. No options are copied into application
+environment. A configuration snapshot belongs to one infrastructure generation;
+stopped or replaced generations cannot authorize sessions or report ready. The
+infrastructure uses `:one_for_all`: a configuration-owner, registry or binding-store
+crash replaces the local infrastructure generation without resetting shared tables.
+
+Start host PubSub before widget infrastructure, and infrastructure before connector
+runtimes. The host owns endpoints, mounting, TLS, routing, and connector lifecycle.
+Infrastructure references the existing endpoint; it never starts or reconfigures
+it. Hosts supervise `{WebWidget.Connector, config: config, hooks: hooks}` independently
+of the infrastructure restart domain. The child specification carries host inputs,
+not a preconstructed runtime. Each connector owns runtime construction and bounded
+recovery after whole-infrastructure or internal-child replacement. Operational
+access is generation-fenced immediately; old runtime/session references never revive.
+The host owns creation, replacement and removal, not package-specific recovery.
+Infrastructure retains no connector inputs and cannot resurrect removed children.
+
+Stopping local infrastructure makes binding-store operations fail closed without
+stopping shared Mnesia or deleting tables, revocations, replay entries, or reset
+metadata. Local restart rejoins surviving shared state; quorum and full RAM-loss
+reset semantics remain unchanged. Membership is explicit on distributed nodes;
+the existing non-distributed single-node default is retained.
+
+Standalone/demo and package-endpoint deployments explicitly compose PubSub,
+infrastructure, endpoint and optional demo children in their own supervisor using
+the same API. Legacy automatic-start flags and global authentication/integration
+settings no longer select startup or runtime behavior; migrate them to init
+options. Endpoint configuration remains the endpoint owner's responsibility.
+
 Use the existing channel lifecycle and BridgeSupervisor. The provider entry in
 ZAQ's existing Channels map is:
 
 ```elixir
 web_widget: %{
   bridge: Zaq.Channels.WebBridge,
-  runtime_builder: WebWidget.Integration.RuntimeBuilder
+  adapter: WebWidget.HostAdapter
 }
 ```
 
-`WebWidget.Integration.RuntimeBuilder.build(config, hooks)` returns
-`{:ok, {state_child_spec_or_nil, listener_specs}}` or `{:error, reason}`.
-It reuses the package runtime registry. ZAQ owns startup, rollback, restart and
-teardown lifecycle; do not independently start a duplicate runtime. The local
-ZAQ installation now selects this builder through configuration and a path
-dependency; no ZAQ module or test changes are needed for runtime startup.
+`WebWidget.Connector.child_spec/1` returns a standard supervisor child specification.
+`start_link/1` validates `config:` and `hooks:` and starts a connector subtree, even
+when infrastructure is temporarily absent. A connector reserves its node-local ID
+throughout recovery, independently of the replaceable runtime registry. Invalid
+inputs fail with redacted errors. Hosts may use an ordinary DynamicSupervisor and
+terminate/replace the connector child using its returned PID. They must migrate
+from preconstructed runtime specifications; public builder construction APIs are removed.
 
 Hooks supply `widget_id = config.id`, presentation settings, the shared
 `message`, `command`, `context`, `delivery`, `response` modules, and the
 config-bound `sink_mfa`. They do **not** supply a PubSub server. For this host,
-the adapter receives `Zaq.PubSub` through trusted application configuration.
-`config :web_widget, :integration` supplies `pubsub_server` and `identity_verifier`
-(an MFA); `build/3` accepts these options explicitly for isolated consumers/tests.
+the adapter receives `Zaq.PubSub` through validated infrastructure init options.
+`{WebWidget, opts}` supplies `pubsub_server` and `identity_verifier`
+(a trusted MFA or the default `:connector_key`). Connector construction is private
+and always reads current infrastructure providers.
+Neither connector settings nor browser input may select
+these providers.
+
+Connector-key verification requires both canonical string keys
+`config.settings["identity_issuer"]` and `config.settings["identity_audience"]`.
+Each must be valid UTF-8, 1–255 bytes, with no leading/trailing whitespace. Missing,
+nil, blank and invalid values reject runtime construction with
+`:invalid_identity_config`. There are no adapter defaults or integration-option
+fallbacks: ZAQ supplies new-connector defaults `zaq_issuer` / `zaq_audience` and
+enforces the atomic configuration upgrade for existing connectors. Trusted custom
+verifier MFAs retain their own policy and do not use these connector-key settings.
+
+The builder binds the resolved connector key and exact identifiers privately into
+the existing verifier, and derives the backend audience as
+`identity_audience <> ":control"`. Changing either value requires a host-owned
+connector replacement; old sessions lose runtime-generation authorization and proofs
+with the old claims are rejected. Desired settings alone do not change an installed
+runtime. Readiness reports installed values, never a copy of desired host settings.
 
 One persisted connector identifies one widget. Keep its positive integer ID in
 Context/Delivery and use its string form in the registry and `/widget/:widget_id`.
@@ -78,22 +203,22 @@ ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
 The local ZAQ install mounts the package router on its existing endpoint.
 Released Git tags contain the built bundle in `web_widget/priv/static/assets`.
-The `web_widget/1` router macro serves those files at `/web_widget/assets/*path`
+The `web_widget/1,2` router macro serves those files at `<scope>/web_widget/assets/*path`
 from the dependency itself. ZAQ does not copy or build assets, change its static
-path allowlist, or add `WebWidget.Static` to its endpoint. Its `/live` socket
-serves the iframe; BO authentication does not apply to the widget mount.
+path allowlist, or add `WebWidget.Static` to its endpoint. Its scoped
+`/widget/:widget_id/live` socket serves the iframe; BO authentication does not apply to the widget mount.
 This supersedes the earlier configuration-only choice for this installation.
 
-For hosts retaining configuration-only installation, opt in to
-`start_integration_server: true` to start the package endpoint and its socket
+For hosts retaining package-endpoint installation, explicitly supervise
+`{WebWidget.Standalone, mode: :package, infrastructure: opts}` for the endpoint and its socket
 PubSub once, without the Repo/demo. Connector runtimes remain ZAQ-owned and use
-`Zaq.PubSub` for responses. The iframe uses this endpoint's existing `/live`
+`Zaq.PubSub` for responses. The iframe uses this endpoint's scoped LiveView
 connection; no additional browser realtime connection is introduced.
 
 `RuntimeBuilder.embed_script(widget_id, base_url)` returns one escaped script tag
 with `data-widget-id`. The optional trusted integration `public_url` overrides
 the supplied base URL; otherwise the deployment must proxy `/widget`,
-`/web_widget/assets` and `/live` at the ZAQ base origin to the package endpoint.
+`/web_widget/assets` and `/widget/:widget_id/live/*` at the ZAQ base origin to the package endpoint.
 Only root HTTP(S) origins are supported. The loader creates a single iframe at
 `/widget/<id>` on its own origin and applies the existing layout/client behavior.
 The authenticated loader obtains a fresh backend JWT and delivers it in the
@@ -107,6 +232,181 @@ The parent API remains single-widget. A missing/invalid target fails explicitly;
 it never falls back to the body. If the div is `#zaq-widget`, the child iframe is
 `#zaq-widget-frame` to avoid duplicate IDs. Otherwise the iframe is `#zaq-widget`.
 Manual callers may use `zaq.widget.mount(url, selector)` with the same behavior.
+
+## Widget session isolation (issue #12)
+
+The widget browser pipeline owns a separate signed, HttpOnly, host-only cookie
+`_web_widget_session`, scoped to the actual widget page path (including custom
+mount prefixes). Its sole LiveView transport is `<widget-page-path>/live`, mounted
+with `WebWidget.Endpoint.web_widget_socket/1`; BO retains its existing `/live` and
+session options. This supersedes the shared `/live` installation described above.
+The widget router must not run inside a pipeline that has already fetched the BO
+session. It installs its own session before flash/CSRF handling. Signing salts are
+package-specific; signed widget ID and mount path are checked against the socket
+request URI and page session. Cookie paths are not authorization boundaries.
+The endpoint integration rejects multiple occurrences of `_web_widget_session`
+in raw Cookie headers before HTTP or transport cookie parsing. Ambiguous requests
+fail without writing cookies; BO paths and cookie names are unaffected.
+Unknown widget IDs return a static unavailable response without initializing a
+session or connecting LiveView; this is not a missing-policy fallback.
+
+Widget transport cookies are partitioned by default, independently of connector
+SameSite policy, and require Secure/HTTPS. Only validated infrastructure process options
+may disable partitioning (`session: [partitioned: false]`), for example
+for HTTP development. Instances share a connector cookie within one top-level site;
+different parent sites have separate partitions. Lax/Strict still prohibit cross-site
+iframe transport. Host/BO cookies are unchanged.
+
+Instances of one connector share its transport cookie and CSRF state, never user
+identity or conversation state. Initial page responses do not write that cookie.
+Before connecting, the iframe obtains its CSRF token from the same-origin
+`<widget-page-path>/session` endpoint under a connector-path Web Lock. That endpoint
+creates fresh transport/CSRF state when the cookie is absent, invalid or bound to
+another widget, and otherwise reads the established
+session without rewriting it. A verification read confirms cookie acceptance;
+blocked cookies and unavailable coordination fail explicitly with bounded work.
+Replacement never copies state or authenticates a user: verified identity tokens
+remain authoritative. Verification and socket requests never initialize cookies.
+The independently signed LiveView page remains the JWT binding identity. Stable
+page, installation and transport URLs do not gain instance IDs or redirects.
+
+Browser locks may be storage-partitioned even where cookies are shared. Only the
+initial document bootstrap may initialize a cookie. Subsequent token resynchronization
+is read-only and has a document-lifetime attempt limit. Initial LiveView establishment
+and each transient reconnect have finite deadlines; opening a transport alone does
+not reset them. Failure stops recovery and offers explicit reload, never automatic
+reload or cookie-writing recovery. Cookie policy changes require a fresh page load.
+
+Canonical `config.settings["same_site"]` accepts exactly `"None"`, `"Lax"`,
+`"Strict"`; missing, nil/blank/invalid values reject runtime construction. Every
+registered widget must explicitly supply its policy; no endpoint or package
+fallback exists. Hosts must populate legacy connector settings before upgrading,
+using an explicitly chosen policy. Partial edits preserve the stored value; the
+complete resolved configuration must contain it. ZAQ owns new defaults and edits.
+HTTPS always requires Secure, including unpartitioned Lax/Strict and an endpoint
+`secure: false` setting. None requires HTTPS; HTTP development uses explicit Lax/Strict.
+No implicit downgrade, BO cookie rewrite, second iframe connection, or CSRF bypass
+is allowed. Policy changes require runtime replacement and a page reload before
+reconnecting with a session under the new policy. Third-party-cookie blocking can
+still prevent cross-site connection even with None.
+
+The generated host installation script includes the explicit `data-widget-url`,
+using the trusted deployment scope (or root legacy `:widget_path`) and public origin.
+The iframe renders its scoped transport URL; no JWT enters either URL's query.
+Host router, endpoint socket mount, proxy and installation prefix must agree.
+
+## Adapter readiness (version 2)
+
+The configured adapter optionally exposes `status(widget_id, timeout_ms: 2_000)`.
+The ID is a positive integer and the timeout is a total budget, capped at 2 seconds.
+ZAQ independently bounds invocation and validates the closed response. Old adapters
+without this callback remain supported; missing support never means ready.
+
+The response is `{:ok, %{protocol_version: 2, status: state, reason: reason,
+checks: checks, effective_settings: settings, verification: verification}}`.
+`verification` contains `scope: :local`, `session_handshake: :verified | :not_checked`
+and `external_https: :not_checked`. Local readiness never asserts public HTTPS reachability.
+Readiness means local feed liveness, not security or public-ingress acceptance.
+An HTTP-only feed can be ready with Secure/Partitioned/None policy when the scoped
+page and session boundaries respond with the expected cookie-free `503
+https_required`, or valid HTTPS redirects to the expected authority and path.
+This requires no widget proxy policy, host SSL classification or new startup flag.
+The actual listener, matching scoped route/socket mount, installed runtime,
+delivery, identity and valid cookie configuration must still be present. Arbitrary
+404/500/503 responses, wrong redirects and stale observations never establish readiness.
+For a guarded feed, `session_handshake` stays `:not_checked`; `cookie_policy` ready
+means valid installed enforcement, not permission to bootstrap an insecure session
+or evidence of browser cookie acceptance. Guarded HTTP does not downgrade policy.
+All five checks are required, in
+order: `runtime`, `transport`, `delivery`, `authentication`, `cookie_policy`.
+Each is `%{status: state, reason: reason}`. States are `:ready`, `:starting`,
+`:unavailable`, `:unknown`; ready has a nil reason. Overall precedence is
+unavailable, unknown, starting, ready; ties use check order.
+
+Fixed reasons are:
+
+| Check | Reasons |
+| --- | --- |
+| runtime | `runtime_not_registered`, `runtime_unresponsive`, `runtime_starting` |
+| transport | `transport_not_listening`, `transport_starting`, `transport_unverifiable` |
+| delivery | `pubsub_unavailable` |
+| authentication | `identity_not_configured`, `identity_settings_mismatch` |
+| cookie_policy | `cookie_policy_unsupported`, `cookie_policy_mismatch`, `secure_cookie_required`, `https_required` |
+| any | `check_timeout`, `check_failed` |
+
+Starting reasons mean starting. `transport_unverifiable`,
+`cookie_policy_unsupported`, `check_timeout`, `check_failed` mean unknown; other
+reasons mean unavailable. Callback failures are
+`{:error, :invalid_request | :check_timeout | :check_failed}`.
+
+Effective settings contain only `identity_issuer`, `identity_audience`, and
+`same_site`, each `%{value: value, source: source}`. Connector-key identifiers
+and SameSite are connector-owned; missing legacy policy must be populated by the
+host before upgrading, not inferred from endpoint defaults.
+Sources allowed by the protocol are connector/application/default, plus endpoint
+for SameSite. Unresolved is `%{value: nil, source: :unresolved}` and cannot be
+ready. Custom verifiers without provable effective identity settings are not green.
+ZAQ owns comparison against current desired settings, disabled state, NodeRouter
+invocation and refresh of both BO surfaces after lifecycle changes.
+
+Readiness checks an explicit serving endpoint override, or the unique running
+widget endpoint matching the configured mount. Omitted scheme discovers a unique
+actual local HTTP/HTTPS listener; ambiguous endpoints/listeners stay unknown.
+Where the listener permits a session handshake it checks the cookie-free page's socket/session
+paths, initializes an isolated anonymous cookie via `<widget-page-path>/session`,
+and verifies that cookie with `/session?verify=1` without rewriting it. The verified
+JSON CSRF token authorizes the widget-scoped WebSocket upgrade; the page's CSRF
+meta token is not used. Cookie attributes include the installed Partitioned policy,
+which requires HTTPS even for Lax/Strict; explicit unpartitioned HTTP development
+is supported without changing connector SameSite or weakening Secure requirements.
+It does not join a LiveView channel, authenticate a user, consume a JWT, create a
+conversation, require visitors, or start a listener. These ephemeral probe values
+never appear in results. A healthy BO `/live` or long-poll transport is insufficient.
+Listener observations are endpoint-wide; session/handshake results are widget-specific
+and are not retained across calls, avoiding stale green after lifecycle changes.
+
+Supported proxy topology is browser HTTPS/WSS -> trusted reverse proxy -> host HTTP/WS.
+Infrastructure owns `proxy: [trusted_proxies: [ip_tuple, ...], public_origin: https_origin]`.
+The endpoint retains ordinary Phoenix URL/listener configuration, but never supplies
+widget trust or cookie policy. Public proxy origin is explicit at infrastructure init.
+The package accepts normalized forwarding headers only
+from these exact peer IPs and only for that HTTPS origin, before HTTP and socket
+dispatch. The proxy must strip client forwarding headers and overwrite proto/host;
+the backend must be private. `X-Forwarded-Port` may be absent only when the
+configured root HTTPS `public_origin` uses default port 443 (including explicit
+`:443`). In that case the configured authority supplies 443, not another header
+or the backend listener. A supplied port must exactly match the configured port;
+empty, conflicting, comma-separated and repeated forwarding headers are rejected.
+Nondefault HTTPS ports still require a single explicit matching forwarded port.
+Trust is based on the immediate connection peer, never `X-Forwarded-For` visitor
+addresses. No dedicated widget TLS listener is required.
+The package endpoint macro validates forwarding before delegating into the
+normal Phoenix endpoint plug pipeline, including endpoint `force_ssl`. Trusted
+header conflicts still reject if the incoming connection is already marked HTTPS.
+Any earlier external scheme/host rewriter must enforce the same immediate-peer
+trust boundary: stripping headers cannot reconstruct a physical HTTP scheme that
+an upstream component already changed. Keep the backend restricted to ingress;
+do not fabricate headers or add a global forwarding trust bypass.
+Peer filtering here requires configured `proxy:` process options. With proxy
+disabled, host-wide `rewrite_on` remains host-owned and is not a replacement for
+the widget trust configuration. Do not expose an ingress-only HTTP backend to
+untrusted clients, whether or not native endpoint `force_ssl` is enabled.
+In this mode local readiness checks the real HTTP listener, widget socket mount,
+rejection of insecure widget page/session requests (including HTTPS redirects to
+the exact configured origin/path), and the configured Secure/SameSite policy.
+It does not manufacture forwarding headers to simulate HTTPS. Its session handshake
+is `:not_checked`; cookie-policy readiness means configured enforcement, not observed
+browser acceptance. Deployment acceptance must independently verify real HTTPS
+bootstrap cookies and WSS upgrades through the proxy. A public URL alone cannot
+activate proxy trust or prove TLS. HTTP guarded-feed readiness also works without
+this optional proxy block, including with host-managed normalization before the
+widget wrapper. The host/infrastructure then owns forwarding trust; readiness
+does not duplicate it or inspect `force_ssl` to classify ingress. HTTPS redirect
+authority is checked against the optional proxy origin or ordinary endpoint URL
+host/public port (default 443), as an expected destination only, never TLS evidence.
+Only successful direct-listener session handshakes are `:verified`.
+Neither mode proves real-user authentication or browser cookie acceptance.
+See [host integration](host-integration.md) for trusted readiness configuration.
 
 ## Identity, embedding and parent bootstrap
 
@@ -122,7 +422,7 @@ longer than the renewal lead (five minutes by default). Tests may use shorter
 configured intervals. The signing key never enters browser code. A browser JWT
 cannot authorize a backend control operation.
 
-Package authentication configuration uses `config :web_widget, :authentication`
+Package authentication configuration uses infrastructure `authentication:` init options
 with `token_ttl_seconds: 604_800`, `first_binding_window_seconds: 5`,
 `refresh_lead_seconds: 300`, `control_proof_ttl_seconds: 30`, and an explicit
 `replica_nodes` list for the Mnesia cluster. The first-binding window is a

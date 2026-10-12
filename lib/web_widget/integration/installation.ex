@@ -1,5 +1,6 @@
 defmodule WebWidget.Integration.Installation do
-  @moduledoc "Secret-free installation markup for a root-mounted widget endpoint."
+  @moduledoc "Secret-free installation markup for a trusted widget mount scope."
+  alias WebWidget.Mount
 
   @doc "Uses the configured public origin, or the host base origin with deployment proxying."
   def script(widget_id, base_url, opts \\ [])
@@ -19,11 +20,13 @@ defmodule WebWidget.Integration.Installation do
          true <- Keyword.keyword?(opts),
          {:ok, _} <- origin(base_url),
          {:ok, url} <- origin(Keyword.get(opts, :public_url, base_url)),
+         {:ok, mount} <- Mount.new(opts),
          {:ok, token_attribute} <- token_attribute(Keyword.get(opts, :token_url)) do
-      src = Phoenix.HTML.html_escape(url <> "/web_widget/assets/embed.js")
+      src = Phoenix.HTML.html_escape(url <> mount.assets_path <> "/embed.js")
+      widget_url = Phoenix.HTML.html_escape(url <> mount.widget_path <> "/" <> widget_id)
 
       snippet =
-        "<script src=\"#{Phoenix.HTML.safe_to_string(src)}\" data-widget-id=\"#{widget_id}\"#{token_attribute} defer></script>"
+        "<script src=\"#{Phoenix.HTML.safe_to_string(src)}\" data-widget-id=\"#{widget_id}\" data-widget-url=\"#{Phoenix.HTML.safe_to_string(widget_url)}\"#{token_attribute} defer></script>"
 
       if byte_size(snippet) <= 32_768,
         do: {:ok, snippet},

@@ -1,9 +1,14 @@
 defmodule WebWidget.Integration.ProtocolTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
-  alias WebWidget.Integration.RuntimeBuilder
+  alias WebWidget.Connector.RuntimeConfig
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
+
+  setup do
+    {_, _, opts} = Host.fixture()
+    WebWidget.TestInfrastructure.setup(opts)
+  end
 
   setup_all do
     start_supervised!({Phoenix.PubSub, name: WebWidget.TestIntegration.PubSub})
@@ -12,7 +17,7 @@ defmodule WebWidget.Integration.ProtocolTest do
 
   defp runtime(reply \\ nil) do
     {config, hooks, opts} = Host.fixture(reply: reply)
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, opts)
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
     start_supervised!(spec)
     {config, spec}
   end

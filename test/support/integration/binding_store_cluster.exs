@@ -1,6 +1,7 @@
 # Run with: MIX_ENV=test mix run --no-start test/support/integration/binding_store_cluster.exs
 defmodule WebWidget.Integration.BindingStoreClusterCheck do
-  alias WebWidget.Integration.{BindingStore, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector
+  alias WebWidget.Integration.{BindingStore, SignedIdentity}
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -76,6 +77,25 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
 
     {:error, :stale_or_revoked} = BindingStore.claim(claims, "page-a", now + 9)
 
+    # A local widget infrastructure restart must rejoin, not reset shared RAM state.
+    :ok = call(n2, Supervisor, :terminate_child, [WebWidget.TestClusterHost, WebWidget])
+    {:error, :unavailable} = call(n2, BindingStore, :available?, [])
+    {:ok, _} = call(n2, Supervisor, :restart_child, [WebWidget.TestClusterHost, WebWidget])
+    await(fn -> call(n2, BindingStore, :available?, []) == :ok end)
+    ^reset = call(n2, BindingStore, :reset_cutoff_value, [])
+
+    {:ok, ^cutoff, false} =
+      call(n2, BindingStore, :revoke_user, [
+        claims.issuer,
+        claims.widget_id,
+        claims.user_id,
+        request_id,
+        now + 8,
+        now + 9
+      ])
+
+    {:error, :stale_or_revoked} = call(n2, BindingStore, :claim, [claims, "page-a", now + 9])
+
     racing_user = claims(now + 10)
 
     claim_task =
@@ -104,20 +124,23 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
     pre_reset = claims(System.system_time(:second))
     :ok = BindingStore.claim(pre_reset, "page-before-reset", pre_reset.iat)
 
-    {config, hooks, options} = Host.fixture()
+    {config, hooks, _options} = Host.fixture()
     key = Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
-    config = Map.put(config, :token, key)
 
-    options =
-      Keyword.merge(options,
-        pubsub_server: WebWidget.PubSub,
-        identity_verifier: :connector_key,
-        identity_issuer: "parent",
-        identity_audience: "widget"
-      )
+    config =
+      Map.merge(config, %{
+        token: key,
+        settings: %{
+          "identity_issuer" => "parent",
+          "identity_audience" => "widget",
+          "same_site" => "Lax"
+        }
+      })
 
-    {:ok, {spec, []}} = RuntimeBuilder.build(config, hooks, options)
-    {:ok, _} = Supervisor.start_child(WebWidget.Supervisor, spec)
+    {:ok, _} =
+      Supervisor.start_child(WebWidget.TestClusterHost, {Connector, config: config, hooks: hooks})
+
+    Host.await_runtime(config.id)
 
     {:ok, current_proof} =
       SignedIdentity.sign(key, config.id, %{user_id: "renewing-user"},
@@ -151,13 +174,13 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
         now + 10
       )
 
-    :ok = Application.stop(:web_widget)
+    :ok = Supervisor.stop(WebWidget.TestClusterHost)
     :ok = Application.stop(:mnesia)
-    {:ok, _} = Application.ensure_all_started(:web_widget)
+    configure(node(), nodes)
     [{p1, ^n1}, {p2, ^n2}] = Enum.map(names, &start_peer/1)
     configure(n1, nodes)
     configure(n2, nodes)
-    await(fn -> BindingStore.available?() == :ok end)
+    await(fn -> Enum.all?(nodes, &(call(&1, BindingStore, :available?, []) == :ok)) end)
     new_reset = BindingStore.reset_cutoff_value()
     true = new_reset >= reset
     {:error, :stale_or_revoked} = BindingStore.claim(claims, "page-a", now)
@@ -194,11 +217,7 @@ defmodule WebWidget.Integration.BindingStoreClusterCheck do
   end
 
   defp configure(target, nodes) do
-    :ok =
-      call(target, Application, :put_env, [:web_widget, :authentication, [replica_nodes: nodes]])
-
-    :ok = call(target, Application, :put_env, [:web_widget, :start_web_server, false])
-    {:ok, _} = call(target, Application, :ensure_all_started, [:web_widget])
+    {:ok, _} = call(target, WebWidget.TestClusterHost, :start, [nodes])
   end
 
   defp claims(now) do

@@ -7,7 +7,6 @@ for file <- ~w(validation stylesheet message command response delivery context) 
   Code.require_file(Path.join([host_root, "lib/zaq/channels/web", file <> ".ex"]))
 end
 
-Application.put_env(:web_widget, :start_web_server, false)
 {:ok, _} = Application.ensure_all_started(:web_widget)
 ExUnit.start()
 
@@ -15,10 +14,19 @@ defmodule WebWidget.SharedProtocolSmokeTest do
   # credo:disable-for-next-line Credo.Check.Warning.WrongTestFilename
   use ExUnit.Case
 
+  alias WebWidget.Connector
   alias WebWidget.Integration.Chat
-  alias WebWidget.Integration.RuntimeBuilder
   alias WebWidget.Runtime
+  alias WebWidget.TestIntegration.Host
   alias Zaq.Channels.Web.{Command, Context, Delivery, Message, Response}
+
+  setup do
+    start_supervised!(
+      {WebWidget, pubsub_server: __MODULE__.PubSub, identity_verifier: {__MODULE__, :verify, []}}
+    )
+
+    :ok
+  end
 
   def verify(:fixture_session, %{channel_config_id: 42}),
     do:
@@ -90,7 +98,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
 
   test "chat lifecycle accepts actual semantic receipts and queued shared responses" do
     start_supervised!({Phoenix.PubSub, name: __MODULE__.PubSub})
-    config = %{id: 42, provider: "web_widget"}
+    config = connector_config()
 
     hooks = %{
       widget_id: 42,
@@ -104,13 +112,8 @@ defmodule WebWidget.SharedProtocolSmokeTest do
       sink_mfa: {__MODULE__, :ingress, [config]}
     }
 
-    {:ok, {spec, []}} =
-      RuntimeBuilder.build(config, hooks,
-        pubsub_server: __MODULE__.PubSub,
-        identity_verifier: {__MODULE__, :verify, []}
-      )
-
-    start_supervised!(spec)
+    start_supervised!({Connector, config: config, hooks: hooks})
+    Host.await_runtime(config.id)
 
     assert {:ok, chat} =
              Chat.open("42", %{
@@ -130,9 +133,9 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     Chat.close(chat)
   end
 
-  test "package builder and session use actual shared constructors and prefix-bound ingress" do
+  test "supervised connector and session use actual shared constructors and prefix-bound ingress" do
     start_supervised!({Phoenix.PubSub, name: __MODULE__.PubSub})
-    config = %{id: 42, provider: "web_widget"}
+    config = connector_config()
 
     hooks = %{
       widget_id: 42,
@@ -146,13 +149,8 @@ defmodule WebWidget.SharedProtocolSmokeTest do
       sink_mfa: {__MODULE__, :ingress, [config]}
     }
 
-    {:ok, {spec, []}} =
-      RuntimeBuilder.build(config, hooks,
-        pubsub_server: __MODULE__.PubSub,
-        identity_verifier: {__MODULE__, :verify, []}
-      )
-
-    start_supervised!(spec)
+    start_supervised!({Connector, config: config, hooks: hooks})
+    Host.await_runtime(config.id)
     assert {:ok, session} = Runtime.authenticate("42", :fixture_session)
 
     assert %Response{type: :widget_initialized, conversation_id: nil} =
@@ -220,5 +218,18 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     assert Process.whereis(WebWidgetWeb.Endpoint) == nil
     assert Process.whereis(WebWidget.Repo) == nil
     assert Process.whereis(WebWidget.PubSub) == nil
+  end
+
+  defp connector_config do
+    %{
+      id: 42,
+      provider: :web_widget,
+      token: String.duplicate("shared-protocol-fixture-key", 3),
+      settings: %{
+        "identity_issuer" => "fixture",
+        "identity_audience" => "widget",
+        "same_site" => "Lax"
+      }
+    }
   end
 end

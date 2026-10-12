@@ -1,7 +1,8 @@
 defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
   use WebWidgetWeb.ConnCase
   import Phoenix.LiveViewTest
-  alias WebWidget.Integration.{BindingStore, ControlProof, RuntimeBuilder, SignedIdentity}
+  alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.Integration.{BindingStore, ControlProof, SignedIdentity}
   alias WebWidget.TestIntegration.ChatHost
 
   setup %{conn: conn} do
@@ -21,11 +22,20 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     }
 
     {:ok, {spec, []}} =
-      RuntimeBuilder.build(%{id: id, provider: "web_widget", token: key}, hooks,
+      RuntimeConfig.prepare(
+        %{
+          id: id,
+          provider: "web_widget",
+          token: key,
+          settings: %{
+            "identity_issuer" => "parent",
+            "identity_audience" => "widget",
+            "same_site" => "Lax"
+          }
+        },
+        hooks,
         pubsub_server: WebWidget.PubSub,
-        identity_verifier: :connector_key,
-        identity_issuer: "parent",
-        identity_audience: "widget"
+        identity_verifier: :connector_key
       )
 
     start_supervised!(spec)

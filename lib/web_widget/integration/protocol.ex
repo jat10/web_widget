@@ -10,7 +10,13 @@ defmodule WebWidget.Integration.Protocol do
   alias WebWidget.Integration.{InitClaims, Session}
 
   @enforce_keys [:hooks, :pubsub_server, :identity_verifier]
-  defstruct @enforce_keys ++ [control_key: nil, control_issuer: nil, control_audience: nil]
+  defstruct @enforce_keys ++
+              [
+                control_key: nil,
+                control_issuer: nil,
+                control_audience: nil,
+                identity_source: :unresolved
+              ]
 
   @constructors [message: 1, command: 1, context: 2, delivery: 1, response: 1]
   @events %{
@@ -50,7 +56,8 @@ defmodule WebWidget.Integration.Protocol do
          identity_verifier: verifier,
          control_key: Keyword.get(opts, :control_key),
          control_issuer: Keyword.get(opts, :control_issuer),
-         control_audience: Keyword.get(opts, :control_audience)
+         control_audience: Keyword.get(opts, :control_audience),
+         identity_source: Keyword.get(opts, :identity_source, :unresolved)
        }}
     else
       _ -> {:error, :invalid_integration_config}
@@ -73,7 +80,8 @@ defmodule WebWidget.Integration.Protocol do
         do: Map.put(scope, :expected_sender, expected_sender),
         else: scope
 
-    with {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
+    with {:ok, infrastructure} <- WebWidget.Configuration.fetch(),
+         {:ok, %{sender_id: sender, expires_at: expiry} = verified} <-
            invoke(integration.identity_verifier, [proof, verify_scope]),
          true <- identifier?(sender),
          true <- expected_sender in [nil, sender],
@@ -86,6 +94,7 @@ defmodule WebWidget.Integration.Protocol do
          Map.merge(scope, %{
            sender_id: String.trim(sender),
            expires_at: expiry,
+           refresh_lead_seconds: infrastructure.authentication[:refresh_lead_seconds],
            init: init,
            binding_claims: Map.get(verified, :binding_claims),
            page_id: Map.get(verified, :page_id),
