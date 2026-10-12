@@ -88,17 +88,20 @@ defmodule WebWidget.Embedding.Session do
   def init(opts), do: opts
 
   def call(conn, _opts) do
+    if conn.private[:plug_session_fetch] == :done do
+      raise ArgumentError, "mount web_widget outside pipelines that fetch the host session"
+    end
+
     conn = CookieGuard.call(conn)
 
-    if conn.halted, do: conn, else: install_request(conn)
+    cond do
+      conn.halted -> conn
+      WebWidget.Mount.request_matches?(conn) -> install_request(conn)
+      true -> conn |> send_resp(503, "widget_mount_mismatch") |> halt()
+    end
   end
 
   defp install_request(conn) do
-    if conn.private[:plug_session_fetch] == :done do
-      raise ArgumentError,
-            "mount web_widget outside pipelines that fetch the host session"
-    end
-
     id = conn.path_params["widget_id"] || ""
     bootstrap? = conn.private[:web_widget_session_bootstrap] == true
     conn = put_resp_header(conn, "cache-control", "no-store")
@@ -162,6 +165,7 @@ defmodule WebWidget.Embedding.Session do
       conn
       |> assign(:web_widget_socket_path, path <> "/live")
       |> assign(:web_widget_session_path, path <> "/session")
+      |> assign(:web_widget_assets_path, conn.private.web_widget_mount.assets_path)
     end
   end
 

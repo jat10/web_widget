@@ -10,7 +10,14 @@ defmodule WebWidget.Router do
   Mount the matching scoped socket with `WebWidget.Endpoint.web_widget_socket/1`.
   """
 
-  defmacro web_widget(prefix \\ "/widget") do
+  defmacro web_widget(prefix \\ "/widget", opts \\ []) do
+    {prefix, mount} =
+      WebWidget.Mount.macro!(
+        Macro.expand(prefix, __CALLER__),
+        Macro.expand(opts, __CALLER__),
+        :widget
+      )
+
     session = String.to_atom("web_widget_#{__CALLER__.line}")
 
     quote do
@@ -18,13 +25,23 @@ defmodule WebWidget.Router do
       require LiveViewRouter
       import Phoenix.LiveView.Router, only: [fetch_live_flash: 2]
 
-      unless Module.get_attribute(__MODULE__, :web_widget_assets_registered) do
-        Module.put_attribute(__MODULE__, :web_widget_assets_registered, true)
+      if unquote(mount.scope) != "/" and Phoenix.Router.scoped_path(__MODULE__, "/") != "/" do
+        raise ArgumentError,
+              "scoped web_widget must be mounted outside another Phoenix path scope"
+      end
+
+      assets = unquote(mount.assets_path)
+      registered = Module.get_attribute(__MODULE__, :web_widget_assets_registered) || []
+
+      unless assets in registered do
+        Module.put_attribute(__MODULE__, :web_widget_assets_registered, [assets | registered])
 
         scope "/", alias: false do
-          get "/web_widget/assets/*path", WebWidget.Static, [],
-            as: nil,
-            private: %{plug_skip_csrf_protection: true}
+          get unquote(mount.assets_path) <> "/*path",
+              WebWidget.Static,
+              [at: unquote(String.replace_suffix(mount.assets_path, "/assets", ""))],
+              as: nil,
+              private: %{plug_skip_csrf_protection: true}
         end
       end
 
@@ -37,7 +54,9 @@ defmodule WebWidget.Router do
         plug WebWidget.Embedding.FramePolicy
       end
 
-      scope unquote(prefix), alias: false do
+      scope unquote(prefix),
+        alias: false,
+        private: %{web_widget_mount: unquote(Macro.escape(mount))} do
         pipe_through unquote(session)
 
         get "/:widget_id/session", WebWidget.Embedding.SessionBootstrap, [],
@@ -56,9 +75,23 @@ defmodule WebWidget.Router do
   end
 
   @doc "Mounts signed backend controls in a separate API pipeline."
-  defmacro web_widget_api(prefix \\ "/widget-api") do
+  defmacro web_widget_api(prefix \\ "/widget-api", opts \\ []) do
+    {prefix, mount} =
+      WebWidget.Mount.macro!(
+        Macro.expand(prefix, __CALLER__),
+        Macro.expand(opts, __CALLER__),
+        :api
+      )
+
     quote do
-      scope unquote(prefix), alias: false do
+      if unquote(mount.scope) != "/" and Phoenix.Router.scoped_path(__MODULE__, "/") != "/" do
+        raise ArgumentError,
+              "scoped web_widget_api must be mounted outside another Phoenix path scope"
+      end
+
+      scope unquote(prefix),
+        alias: false,
+        private: %{web_widget_mount: unquote(Macro.escape(mount))} do
         post "/:widget_id/disconnect", WebWidget.Integration.ControlAPI, :disconnect
       end
     end

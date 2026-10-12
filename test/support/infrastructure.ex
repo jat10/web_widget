@@ -57,7 +57,7 @@ defmodule WebWidget.TestInfrastructure do
         opts,
         :transport,
         Keyword.get(opts, :readiness, [])
-        |> Keyword.put(:widget_path, Keyword.get(opts, :widget_path, "/widget"))
+        |> Keyword.merge(Keyword.take(opts, [:widget_path]))
       )
 
     opts

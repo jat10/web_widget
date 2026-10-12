@@ -29,7 +29,10 @@ defmodule WebWidget.Integration.ReadinessTransport do
 
   defp deployment do
     with {:ok, config} <- WebWidget.Configuration.fetch(),
-         {:ok, transport} <- Deployment.resolve(config.transport) do
+         {:ok, transport} <-
+           Deployment.resolve(
+             Map.merge(config.transport, Map.take(config.mount, [:scope, :assets_path]))
+           ) do
       {:ok, Map.put(transport, :generation, config.generation)}
     else
       {:error, reason} -> {:error, reason}
@@ -95,7 +98,7 @@ defmodule WebWidget.Integration.ReadinessTransport do
     path = target.prefix <> "/" <> widget.widget_id
 
     with {:ok, response} <- page(target, path, deadline),
-         :ok <- page_paths(response, path),
+         :ok <- page_paths(response, path, target.assets_path),
          {:ok, cookie, csrf} <- bootstrap(target, path, policy, deadline),
          :ok <- upgrade(target, path, cookie, csrf, deadline),
          :ok <- current_deployment(target),
@@ -151,9 +154,18 @@ defmodule WebWidget.Integration.ReadinessTransport do
   defp current_deployment(target) do
     case deployment() do
       {:ok, current} ->
-        if current == Map.take(target, [:endpoint, :prefix, :scheme, :tls_options, :generation]),
-          do: :ok,
-          else: {:error, :transport_unverifiable}
+        if current ==
+             Map.take(target, [
+               :endpoint,
+               :prefix,
+               :scheme,
+               :tls_options,
+               :generation,
+               :scope,
+               :assets_path
+             ]),
+           do: :ok,
+           else: {:error, :transport_unverifiable}
 
       error ->
         error
@@ -203,18 +215,20 @@ defmodule WebWidget.Integration.ReadinessTransport do
     )
   end
 
-  defp page_paths(%{status: 200, body: body} = response, path) when is_binary(body) do
+  defp page_paths(%{status: 200, body: body} = response, path, assets) when is_binary(body) do
     with [] <- widget_cookies(response),
          socket_path when socket_path == path <> "/live" <- meta(body, "web-widget-socket"),
-         session_path when session_path == path <> "/session" <- meta(body, "web-widget-session") do
+         session_path when session_path == path <> "/session" <- meta(body, "web-widget-session"),
+         true <- String.contains?(body, "href=\"#{assets}/app.css\""),
+         true <- String.contains?(body, "src=\"#{assets}/app.js\"") do
       :ok
     else
       _ -> {:error, :transport_unverifiable}
     end
   end
 
-  defp page_paths(%{status: 503, body: "https_required"}, _), do: {:error, :https_required}
-  defp page_paths(_, _), do: {:error, :transport_unverifiable}
+  defp page_paths(%{status: 503, body: "https_required"}, _, _), do: {:error, :https_required}
+  defp page_paths(_, _, _), do: {:error, :transport_unverifiable}
 
   defp bootstrap(target, path, policy, deadline) do
     headers = [{"accept", "application/json"}, {"origin", target.origin}]

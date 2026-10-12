@@ -85,7 +85,7 @@ defmodule WebWidget.TestHost.TLSProxy do
     Process.flag(:trap_exit, true)
 
     {:ok, listener} =
-      :ssl.listen(0, [
+      :ssl.listen(Keyword.get(opts, :port, 0), [
         :binary,
         active: false,
         reuseaddr: true,

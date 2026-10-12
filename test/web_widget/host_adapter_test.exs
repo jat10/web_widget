@@ -56,6 +56,7 @@ defmodule WebWidget.HostAdapterTest do
 
     for extra <- [
           %{widget_id: config.id + 1},
+          %{scope: "/channels"},
           %{display_name: "attacker"},
           %{pubsub_server: OtherPubSub},
           %{identity_verifier: :attacker}

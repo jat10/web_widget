@@ -3,8 +3,16 @@ defmodule WebWidget.Integration.Deployment do
 
   def resolve(transport) do
     with {:ok, endpoint} <- endpoint(transport),
+         true <-
+           WebWidget.Mount.endpoint_matches?(endpoint, %{
+             scope: transport.scope,
+             widget_path: transport.prefix
+           }),
          {:ok, scheme} <- scheme(endpoint, transport.scheme) do
       {:ok, %{transport | endpoint: endpoint, scheme: scheme}}
+    else
+      false -> {:error, :transport_unverifiable}
+      error -> error
     end
   end
 

@@ -4,6 +4,7 @@ defmodule WebWidget.Configuration do
 
   alias WebWidget.Embedding.Proxy
   alias WebWidget.Integration.Installation
+  alias WebWidget.Mount
 
   @authentication [
     token_ttl_seconds: 604_800,
@@ -16,6 +17,7 @@ defmodule WebWidget.Configuration do
     :identity_verifier,
     :authentication,
     :transport,
+    :scope,
     :proxy,
     :session,
     :public_url,
@@ -29,6 +31,7 @@ defmodule WebWidget.Configuration do
     :authentication,
     :integration,
     :transport,
+    :mount,
     :proxy,
     :session,
     :response_diagnostics
@@ -40,22 +43,26 @@ defmodule WebWidget.Configuration do
          :ok <- valid_verifier(Keyword.get(opts, :identity_verifier, :connector_key)),
          {:ok, authentication} <- normalize_authentication(Keyword.get(opts, :authentication, [])),
          {:ok, transport} <- transport(Keyword.get(opts, :transport, [])),
+         {:ok, mount} <- mount(opts),
+         :ok <- mount_endpoint(transport.endpoint, mount),
          {:ok, proxy} <- proxy(Keyword.get(opts, :proxy)),
          {:ok, session} <- session(Keyword.get(opts, :session, [])),
-         :ok <- installation(opts, transport.prefix),
+         :ok <- installation(opts, mount),
          true <- Keyword.get(opts, :response_diagnostics, false) in [false, true, :summary] do
       integration =
         [
           pubsub_server: opts[:pubsub_server],
           identity_verifier: Keyword.get(opts, :identity_verifier, :connector_key),
-          widget_path: transport.prefix
+          widget_path: mount.widget_path,
+          scope: mount.scope
         ] ++ Keyword.take(opts, [:public_url, :token_url])
 
       {:ok,
        %__MODULE__{
          authentication: authentication,
          integration: integration,
-         transport: transport,
+         transport: %{transport | prefix: mount.widget_path},
+         mount: mount,
          proxy: proxy,
          session: session,
          response_diagnostics: Keyword.get(opts, :response_diagnostics, false)
@@ -203,7 +210,7 @@ defmodule WebWidget.Configuration do
       {:ok,
        %{
          endpoint: opts[:endpoint],
-         prefix: Keyword.get(opts, :widget_path, "/widget"),
+         prefix: Keyword.get(opts, :widget_path),
          scheme: Keyword.get(opts, :scheme, :auto),
          tls_options: Keyword.get(opts, :tls_options, [])
        }}
@@ -218,8 +225,32 @@ defmodule WebWidget.Configuration do
       Enum.all?(nodes, &(is_atom(&1) and &1 not in [nil, true, false]))
   end
 
-  defp installation(opts, prefix) do
-    install = Keyword.take(opts, [:public_url, :token_url]) ++ [widget_path: prefix]
+  defp mount(opts) do
+    paths =
+      Keyword.take(opts, [:scope]) ++
+        Keyword.take(Keyword.get(opts, :transport, []), [:widget_path])
+
+    case Mount.new(paths) do
+      {:ok, mount} ->
+        {:ok, mount}
+
+      {:error, field} ->
+        invalid(field, "must be a canonical mount scope with a consistent widget_path")
+    end
+  end
+
+  defp mount_endpoint(nil, _), do: :ok
+
+  defp mount_endpoint(endpoint, mount) do
+    if Mount.endpoint_matches?(endpoint, mount),
+      do: :ok,
+      else: invalid(:scope, "must match the compiled endpoint mount scope")
+  end
+
+  defp installation(opts, mount) do
+    install =
+      Keyword.take(opts, [:public_url, :token_url]) ++
+        [widget_path: mount.widget_path, scope: mount.scope]
 
     case Installation.script(1, "http://localhost", install) do
       {:ok, _} ->

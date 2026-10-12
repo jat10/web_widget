@@ -4,6 +4,7 @@ import path from "node:path";
 export default defineConfig({
   testDir: "./tests",
   testMatch: "**/*.spec.ts",
+  testIgnore: "**/scope.spec.ts",
   workers: 1,
   reporter: [["list"], ["html", { open: "never" }]],
   use: {

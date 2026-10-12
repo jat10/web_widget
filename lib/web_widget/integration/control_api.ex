@@ -9,7 +9,8 @@ defmodule WebWidget.Integration.ControlAPI do
   def init(:disconnect), do: :disconnect
 
   def call(conn, :disconnect) do
-    with true <- json_request?(conn),
+    with true <- WebWidget.Mount.request_matches?(conn),
+         true <- json_request?(conn),
          {:ok, conn, body} <- body(conn),
          %{"widget_id" => widget_id} <- conn.path_params,
          %{"user_id" => user_id} <- body,

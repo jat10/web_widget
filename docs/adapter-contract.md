@@ -48,7 +48,7 @@ singleton, never connector children. Runtime specs carry the independent connect
 supervisor; recovery remains inside that stable connector, not in host coordination.
 
 Host hooks contain only `message`, `command`, `context`, `delivery`, `response`
-constructors and the fixed config-bound `sink_mfa`. The adapter derives scope from
+constructors and the fixed config-bound `sink_mfa`. The adapter derives widget identity from
 `config.id` and presentation from string-keyed `config.settings` (`display_name`
 falls back to `config.name`). Generic host bridges do not construct widget hooks.
 Raw `WebWidget.Connector` retains its explicit widget hook API for compatibility.
@@ -70,6 +70,36 @@ uses `:ok`, `:pending`, `:error`, `:unknown`, `:disabled` with mode `"websocket"
 and closed safe reasons/checks/settings/verification; readiness does not expose
 credentials, hooks or raw failures. `RuntimeBuilder.status/2` deliberately remains
 the raw package version-2 compatibility observation, not the generic host boundary.
+
+### Trusted deployment mount scope (PR #24)
+
+Top-level infrastructure `scope: "/channels"` is a trusted process option,
+normalized once at init. Omitted scope or explicit `"/"` preserves root mounting.
+A trailing slash is normalized; relative/empty/non-string paths, repeated slashes,
+dot segments, percent encoding, query/fragment, whitespace and backslashes reject
+startup with a fixed redacted configuration error. It is not a connector setting,
+browser parameter or endpoint policy.
+
+A non-root scope derives every package path: `/channels/widget/:widget_id`,
+its `/session` and `/live/*`, `/channels/widget-api/:widget_id/disconnect`, and
+`/channels/web_widget/assets/*`. Router/endpoint mounts are compiled, so hosts
+must use the same scope in `web_widget("/widget", scope: "/channels")`,
+`web_widget_api("/widget-api", scope: "/channels")` and
+`web_widget_socket("/widget", scope: "/channels")`, outside an additional Phoenix
+path scope. Arity-1 calls remain root/legacy compatible. A scoped macro accepts
+its default prefix or its exact fully-derived prefix without doubling; any other
+scoped prefix rejects compilation. Scope/path inconsistency fails init when an
+explicit endpoint supplies authoritative mount metadata; otherwise requests fail
+closed and readiness cannot be green. Runtime configuration never relocates routes.
+
+Legacy custom `transport.widget_path` is retained for root deployments. With
+non-root scope it may be omitted or exactly equal the derived widget prefix;
+conflicts reject instead of choosing precedence. Online installation `[]` uses
+the running scope; offline `installation(id, base_url, scope: "/channels")` uses
+the same validated path rules. An online scope/path override cannot contradict
+the running mount. Origins remain root HTTP(S) origins. No host asset copy or
+rewrite is needed; layouts, static serving, probes and scoped cookies agree.
+Callback signatures and the exact six-key constructor/sink hooks are unchanged.
 
 ### Explicit infrastructure lifecycle (issue #23)
 
@@ -173,7 +203,7 @@ ZAQ v1 does not provide the current widget's eager conversation-list contract.
 
 The local ZAQ install mounts the package router on its existing endpoint.
 Released Git tags contain the built bundle in `web_widget/priv/static/assets`.
-The `web_widget/1` router macro serves those files at `/web_widget/assets/*path`
+The `web_widget/1,2` router macro serves those files at `<scope>/web_widget/assets/*path`
 from the dependency itself. ZAQ does not copy or build assets, change its static
 path allowlist, or add `WebWidget.Static` to its endpoint. Its scoped
 `/widget/:widget_id/live` socket serves the iframe; BO authentication does not apply to the widget mount.
@@ -261,7 +291,7 @@ reconnecting with a session under the new policy. Third-party-cookie blocking ca
 still prevent cross-site connection even with None.
 
 The generated host installation script includes the explicit `data-widget-url`,
-using the trusted `:widget_path` mount prefix (default `/widget`) and public origin.
+using the trusted deployment scope (or root legacy `:widget_path`) and public origin.
 The iframe renders its scoped transport URL; no JWT enters either URL's query.
 Host router, endpoint socket mount, proxy and installation prefix must agree.
 

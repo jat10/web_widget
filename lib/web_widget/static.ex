@@ -6,9 +6,9 @@ defmodule WebWidget.Static do
   @behaviour Plug
 
   @impl true
-  def init(_opts) do
+  def init(opts) do
     Plug.Static.init(
-      at: "/web_widget",
+      at: Keyword.get(opts, :at, "/web_widget"),
       from: :web_widget,
       only: ~w(assets),
       gzip: true,

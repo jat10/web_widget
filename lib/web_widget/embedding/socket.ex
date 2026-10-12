@@ -10,6 +10,7 @@ defmodule WebWidget.Embedding.Socket do
   @impl Phoenix.Socket
   def connect(%{"widget_id" => id}, socket, %{session: session, uri: uri}) do
     with true <- Session.valid_scope?(session, id, uri),
+         true <- WebWidget.Mount.socket_matches?(socket.endpoint, uri),
          {:ok, widget} <- WebWidget.Runtime.fetch_widget(id),
          true <- Session.valid_policy?(session, widget, socket.endpoint, uri.scheme) do
       {:ok, socket}

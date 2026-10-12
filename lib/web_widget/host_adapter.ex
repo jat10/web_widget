@@ -72,18 +72,10 @@ defmodule WebWidget.HostAdapter do
 
   def installation(id, base_url, opts) when is_integer(id) and id > 0 and is_list(opts) do
     if Keyword.keyword?(opts) and
-         Enum.all?(Keyword.keys(opts), &(&1 in [:public_url, :token_url, :widget_path])) and
+         Enum.all?(Keyword.keys(opts), &(&1 in [:public_url, :token_url, :widget_path, :scope])) and
          Keyword.keys(opts) == Enum.uniq(Keyword.keys(opts)) do
-      defaults =
-        case Configuration.fetch() do
-          {:ok, config} ->
-            Keyword.take(config.integration, [:public_url, :token_url, :widget_path])
-
-          _ ->
-            []
-        end
-
-      Installation.script(id, base_url, Keyword.merge(defaults, opts))
+      with {:ok, install_opts} <- installation_options(opts),
+           do: Installation.script(id, base_url, install_opts)
     else
       {:error, :invalid_widget_installation}
     end
@@ -92,6 +84,23 @@ defmodule WebWidget.HostAdapter do
   end
 
   def installation(_, _, _), do: {:error, :invalid_widget_installation}
+
+  defp installation_options(opts) do
+    case Configuration.fetch() do
+      {:ok, config} ->
+        defaults =
+          Keyword.take(config.integration, [:public_url, :token_url, :widget_path, :scope])
+
+        merged = Keyword.merge(defaults, opts)
+
+        if WebWidget.Mount.new(merged) == {:ok, config.mount},
+          do: {:ok, merged},
+          else: {:error, :invalid_widget_installation}
+
+      _ ->
+        {:ok, opts}
+    end
+  end
 
   defp status_options(opts) do
     if is_list(opts) and Keyword.keyword?(opts) and Keyword.keys(opts) in [[], [:timeout_ms]] and

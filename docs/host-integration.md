@@ -22,7 +22,7 @@ translating the package readiness protocol:
 ordinary DynamicSupervisor; terminate/replace its returned PID to remove/change it.
 `listeners` is currently empty. Hooks contain exactly `message`, `command`,
 `context`, `delivery`, `response` constructor modules plus a fixed config-bound
-`sink_mfa`. Scope comes from `config.id`, presentation from `config.settings`;
+`sink_mfa`. Widget identity comes from `config.id`, presentation from `config.settings`;
 `display_name` falls back to `config.name`. No host-specific module is referenced
 by this package. Raw `WebWidget` and `WebWidget.Connector` remain public for direct
 compositions, and `RuntimeBuilder.status/2` deliberately retains raw version-2
@@ -34,7 +34,7 @@ Ingress returns closed keys `status`, `mode`, `summary`, `reason`, `checks`,
 issuer/audience/SameSite with installed evidence and bounds the whole probe to
 1–2,000 milliseconds. No credentials, constructors or raw exceptions escape.
 Installation accepts a positive ID or resolved config and optional `public_url`,
-`token_url`, `widget_path`; `[]` works with running defaults or offline package
+`token_url`, `widget_path`, `scope`; `[]` works with running defaults or offline package
 defaults. It generates escaped, secret-free markup, not executable BO content.
 
 The OTP dependency starts required libraries, including Mnesia, but **no widget
@@ -86,7 +86,8 @@ Local shutdown does not stop Mnesia or erase shared authentication state.
 | `authentication.control_proof_ttl_seconds` | `30` |
 | `authentication.replica_nodes` | Required on distributed nodes; `[node()]` only when non-distributed |
 | `transport.endpoint` | Unset; discovers the unique running widget endpoint matching the mount; explicit override disambiguates |
-| `transport.widget_path` | `"/widget"`; must match router/socket mounts |
+| `scope` | `"/"`; trusted mount scope; derives widget, control and asset paths |
+| `transport.widget_path` | Derived `"/widget"` or `"<scope>/widget"`; legacy custom paths are root-only |
 | `transport.scheme` | `:auto`; discovers a unique actual listener; `:http` / `:https` disambiguate dual listeners, not the public proxy scheme |
 | `transport.tls_options` | `[]`; only verified `cacertfile` / `cacerts` |
 | `proxy` | Disabled; optional unique exact `trusted_proxies` IP tuples and explicit root HTTPS `public_origin` |
@@ -135,6 +136,72 @@ options from an endpoint.
 
 ### Routes and assets
 
+#### Trusted scoped deployments
+
+For a deployment below `/channels`, use the same trusted literal scope at
+process startup and in all three compile-time macros:
+
+```elixir
+{:ok, specs} = WebWidget.HostAdapter.infrastructure_child_specs(
+  pubsub_server: MyHost.PubSub, scope: "/channels")
+
+# Host router, outside any extra Phoenix path scope and BO session pipeline:
+import WebWidget.Router
+web_widget("/widget", scope: "/channels")
+web_widget_api("/widget-api", scope: "/channels")
+
+# Host endpoint; leave the BO /live socket unchanged:
+import WebWidget.Endpoint
+web_widget_socket("/widget", scope: "/channels")
+```
+
+Public macro signatures are `web_widget(prefix \\ "/widget", opts \\ [])`,
+`web_widget_api(prefix \\ "/widget-api", opts \\ [])`, and
+`web_widget_socket(prefix \\ "/widget", opts \\ [])`; the only macro option is
+`scope:`. Existing arity-1 calls are unchanged. Scoped calls accept the default
+prefix or the exact fully-derived prefix (such as `/channels/widget`) without
+doubling. A conflicting custom prefix or an additional outer Phoenix path scope
+rejects compilation. Mount API controls outside the BO/browser session pipeline.
+
+The scope creates `/channels/widget/:id`, its `/session` and `/live/*`,
+`/channels/widget-api/:id/disconnect`, and `/channels/web_widget/assets/*`.
+The reserved cookie remains HttpOnly/host-only with Path `/channels/widget/:id`;
+old root cookies cannot verify or connect a scoped widget. BO cookies and `/live`
+are unchanged. Layout script/CSS URLs, static serving and readiness probes use
+the same derived paths; hosts do not copy assets or rewrite their URLs.
+
+Omitting `scope:` or passing `"/"` preserves root mounting. A single trailing
+slash normalizes away, for example `"/channels/"`. Scope accepts bounded absolute
+paths of alphanumeric-leading segments with alphanumerics, `_` and `-`; empty,
+non-string/relative values, repeated slashes, dot/traversal segments, percent
+encoding, whitespace/backslashes, query and fragment are rejected with redacted
+startup errors. Scope never comes from connector/browser settings or endpoint
+policy. Runtime options cannot relocate Phoenix's compiled mounts: startup
+rejects a proven explicit-endpoint mismatch; missing/inconsistent discovered
+mounts cannot report green, and mismatched HTTP/session/socket/control requests
+fail closed.
+The supplied `WebWidgetWeb.Endpoint` is compiled for root mounting; passing a
+scope to `Standalone` does not relocate it. Scoped hosts compile their own matched
+endpoint/router mounts as above rather than starting a second package listener.
+
+Legacy `transport: [widget_path: "/support/chat"]` remains valid at root. With
+non-root scope, `widget_path` must be absent or exactly `/channels/widget`; even
+the old `/widget` value conflicts. Do not silently combine custom paths and scope.
+
+Online `WebWidget.HostAdapter.installation(config, base_url, [])` uses the running
+scope. Offline trusted `installation(id, base_url, scope: "/channels")` derives
+both loader and iframe URLs. Online overrides cannot contradict the installed
+scope or widget path. Origins (`base_url`, `public_url`, proxy `public_origin`)
+remain root HTTP(S) origins, not URLs containing a deployment path:
+
+```html
+<script src="https://HOST/channels/web_widget/assets/embed.js"
+        data-widget-id="42" data-widget-url="https://HOST/channels/widget/42"
+        defer></script>
+```
+
+The remaining examples below illustrate root/legacy mounts.
+
 Add a released Git tag to the host's Mix dependencies and run `mix deps.get`:
 
 ```elixir
@@ -167,7 +234,7 @@ web_widget_socket("/widget")
 
 Each iframe uses only `/widget/:widget_id/live` (WebSocket or the existing long-poll fallback). Its HttpOnly, host-only `_web_widget_session` cookie has Path `/widget/:widget_id`, and uses package-specific signing options. Signed widget ID and mount path are verified at socket connection and connected page mount. Normal CSRF and socket origin checks remain enabled. Mount `web_widget` outside other authenticated `live_session` blocks; its macro creates its own. `allowed_domains` controls iframe parent origins separately.
 
-`web_widget_socket/1` also wraps endpoint request handling to reject ambiguous
+`web_widget_socket/1,2` also wraps endpoint request handling to reject ambiguous
 duplicates of the reserved cookie name before HTTP or socket parsing. Do not bypass
 that wrapper in a custom endpoint `call/2`; delegate through `super/2`.
 The rejection does not affect BO routes or unrelated duplicate cookie names.
@@ -183,7 +250,7 @@ Backend revocation stops transport recovery without relabeling it as a session f
 
 For a nested/custom router mount such as `/support/chat`, register `web_widget_socket("/support/chat")` on the endpoint and set infrastructure `transport: [widget_path: "/support/chat"]`. The returned `RuntimeBuilder.embed_script/2` snippet includes `data-widget-url="https://PUBLIC-ORIGIN/support/chat/42"`; the loader honors that URL and the iframe renders the corresponding socket URL. All three prefixes must match.
 
-The `web_widget/1` macro serves `/web_widget/assets/*path` directly from the dependency's `priv/static/assets`, using `WebWidget.Static` as a route. Released Git tags include the tracked production bundle. The host needs no Node installation, asset copy/build task, static-path allowlist entry, or endpoint static plug. Do not run a second package endpoint when mounting in the host endpoint.
+The `web_widget/1,2` macro serves `<scope>/web_widget/assets/*path` directly from the dependency's `priv/static/assets`, using `WebWidget.Static` as a route. Root deployments retain `/web_widget/assets/*path`. Released Git tags include the tracked production bundle. The host needs no Node installation, asset copy/build task, static-path allowlist entry, or endpoint static plug. Do not run a second package endpoint when mounting in the host endpoint.
 
 The host-mounted topology uses the host endpoint for `/widget/:id`, `/widget/:id/live/*`, `/widget-api/:id/disconnect` and `/web_widget/assets`. A separate configuration-only package endpoint supports the same paths. Proxy the widget subtree, including WebSocket upgrades and long polling, to that endpoint; BO's `/live` must not be redirected. Keep one endpoint topology per public URL.
 
@@ -427,3 +494,9 @@ and the configuration needed before real ZAQ use.
 ## Verification
 
 Run `mix assets.build`, `mix test`, and `mix precommit` in this repository. Run Chromium Playwright tests in `assets/` with the installed browser. The package also provides `test/support/integration/shared_protocol_smoke.exs` for the pinned sibling ZAQ constructor contract and host mounted asset smoke scripts under `test/support/integration/`. These checks do not call a live agent/model; a final deployment smoke should exercise its real token endpoint, first question, authorized resume, renewal, and backend disconnect.
+
+Run `npm --prefix assets run test:e2e` for the complete root-mount browser suite,
+then `npm --prefix assets run test:e2e -- --config=playwright.scope.config.ts`
+for the separate scoped singleton with real proxy TLS/WSS, generated installation,
+bundled assets, authentication/assistant delivery, cookie isolation and signed
+disconnect. The two fixtures use the same ports and must not run concurrently.
