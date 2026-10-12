@@ -148,6 +148,33 @@ defmodule WebWidget.Integration.ScopeTransportTest do
     assert get(ctx.url <> ctx.path <> "/session").status == 503
   end
 
+  test "secure-policy scoped HTTP feed is locally ready while insecure sessions remain rejected",
+       ctx do
+    WebWidget.TestInfrastructure.replace(
+      pubsub_server: WebWidget.PubSub,
+      scope: "/channels",
+      session: [partitioned: true],
+      transport: [endpoint: ScopedEndpoint]
+    )
+
+    Host.await_runtime(ctx.config.id)
+
+    assert {:ok, %{status: :ok, verification: verification}} =
+             HostAdapter.ingress_status(ctx.config)
+
+    assert verification == %{
+             scope: :local,
+             session_handshake: :not_checked,
+             external_https: :not_checked
+           }
+
+    for path <- [ctx.path, ctx.path <> "/session"] do
+      response = get(ctx.url <> path)
+      assert {response.status, response.body} == {503, "https_required"}
+      assert Req.Response.get_header(response, "set-cookie") == []
+    end
+  end
+
   @tag :tmp_dir
   test "scope stays intact through real proxy TLS, partitioned cookies and WSS", ctx do
     assert_proxy_scope(ctx, :explicit)

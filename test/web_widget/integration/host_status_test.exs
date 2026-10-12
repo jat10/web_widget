@@ -37,8 +37,10 @@ defmodule WebWidget.Integration.HostStatusTest do
                )
     end
 
-    proxy = put_in(observed.verification.session_handshake, :not_checked)
-    assert HostStatus.project({:ok, proxy}, %{}).summary =~ "public session handshake"
+    guarded = put_in(observed.verification.session_handshake, :not_checked)
+
+    assert HostStatus.project({:ok, guarded}, %{}).summary ==
+             "Feed ready locally; session handshake and external HTTPS not checked"
   end
 
   test "malformed or private observations never escape the closed boundary" do

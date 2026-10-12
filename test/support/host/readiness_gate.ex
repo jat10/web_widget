@@ -36,6 +36,26 @@ defmodule WebWidget.TestHost.ReadinessGate do
   defp fault(conn, {:force_ssl, host}),
     do: Plug.SSL.call(conn, Plug.SSL.init(host: host, exclude: []))
 
+  defp fault(conn, {:redirect, location}) do
+    conn
+    |> Plug.Conn.put_resp_header("location", location)
+    |> Plug.Conn.send_resp(301, "")
+    |> Plug.Conn.halt()
+  end
+
+  defp fault(conn, {:response, stage, status, body, cookie?}) do
+    if gate?(conn, stage) do
+      conn =
+        if cookie?,
+          do: Plug.Conn.put_resp_cookie(conn, "_web_widget_session", "unexpected"),
+          else: conn
+
+      conn |> Plug.Conn.send_resp(status, body) |> Plug.Conn.halt()
+    else
+      conn
+    end
+  end
+
   defp fault(conn, fault) do
     cond do
       gate?(conn, :verification) -> verification_fault(conn, fault)

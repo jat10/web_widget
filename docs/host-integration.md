@@ -312,6 +312,17 @@ for the Mint (already used by Req) HTTP/1.1 WebSocket upgrade, then closes witho
 joining a LiveView or issuing/consuming identity credentials. All steps share the
 original total deadline. No user cookie jar or browser coordination lock is used.
 
+Readiness measures local feed liveness, not security or public ingress. A healthy
+HTTP-only listener can report ready even with Secure/Partitioned/None policy:
+the expected cookie-free `503 https_required` from both scoped page and session,
+or a validated HTTPS redirect to each expected path, proves a responding guarded
+feed. This needs neither a widget `proxy:` block nor `force_ssl` detection/configuration.
+Redirects must match the optional proxy origin or the endpoint URL's host/public
+port (default HTTPS 443); the URL is an expected destination, not proof of TLS.
+Arbitrary errors, wrong mounts, missing/stopped listeners or runtimes, invalid
+settings/identity and stale observations remain not ready. Request-time security
+is unchanged: direct HTTP session bootstrap still rejects without a widget cookie.
+
 The adapter's closed channel status contains five checks, allowlisted effective settings and
 `verification: %{scope: :local, session_handshake: :verified | :not_checked,
 external_https: :not_checked}`. Internally it validates the raw version-2 observation;
@@ -319,12 +330,15 @@ see [adapter contract](adapter-contract.md#adapter-readiness-version-2). Cookie 
 CSRF probe values, signing keys, callbacks, private configuration and raw failures
 never leave the checker. Connector-key identity reports the installed connector
 values. A custom verifier's opaque identity policy stays unresolved. Effective
-SameSite is connector-owned. Direct-listener mode verifies the scoped bootstrap
-cookie and socket; trusted-proxy mode reports configured enforcement, explicitly
+SameSite is connector-owned. Successful direct-listener handshakes verify the scoped bootstrap
+cookie and socket; guarded HTTP and trusted-proxy probes report configured enforcement, explicitly
 marking the session handshake `:not_checked`. Endpoint inheritance is not supported. Partitioned,
 Secure, HttpOnly, host-only and path attributes must match the installed policy;
-neither the page nor the verification read may write a widget cookie. HTTP-only
-development deployments must explicitly pass process `session: [partitioned: false]`.
+neither the page nor the verification read may write a widget cookie. To actually
+use insecure HTTP development sessions, explicitly pass process
+`session: [partitioned: false]` and use a policy permitting HTTP. This is not required
+merely to report guarded HTTP feed liveness. No unperformed session handshake or
+external HTTPS check is reported as verified.
 
 Response-delivery checks cover the installed Phoenix PubSub registry, running
 supervision tree and local PG2 membership, without subscribing or broadcasting.
@@ -401,6 +415,11 @@ no forged forwarding headers and marks `session_handshake: :not_checked` and
 proxy is down; external deployment verification must independently exercise real
 HTTPS page/bootstrap/cookie verification and WSS upgrade through that proxy.
 Keep browser cross-site connect/reconnect checks alongside that verification.
+The optional package proxy block above is not a readiness prerequisite. Hosts can
+instead normalize at their existing endpoint boundary before widget handling;
+their infrastructure remains responsible for private backend access and sanitized
+forwarding. Neither local readiness nor an endpoint HTTPS URL establishes that
+trust or proves the public proxy is healthy.
 
 ## Runtime builder and shared protocol
 

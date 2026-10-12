@@ -86,7 +86,7 @@ defmodule WebWidget.Integration.HostStatus do
   end
 
   defp summary(%{status: :ready, verification: %{session_handshake: :not_checked}}),
-    do: "Ready locally; public session handshake and external HTTPS not checked"
+    do: "Feed ready locally; session handshake and external HTTPS not checked"
 
   defp summary(%{status: :ready}), do: "Ready locally; external HTTPS not checked"
   defp summary(%{status: :starting}), do: "Widget transport is starting"

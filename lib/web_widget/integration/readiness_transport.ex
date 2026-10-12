@@ -13,10 +13,8 @@ defmodule WebWidget.Integration.ReadinessTransport do
          :ok <- socket_mount(target),
          {:ok, proxy} <- Proxy.policy(target.endpoint),
          target <- Map.put(target, :proxy, proxy),
-         {:ok, policy} <- Session.effective(widget, target.endpoint, policy_scheme(target)) do
-      if target.scheme == :http and not is_nil(proxy),
-        do: proxy_probe(widget, target, policy, deadline),
-        else: probe(widget, target, policy, deadline)
+         {:ok, policy} <- effective_policy(widget, target) do
+      probe(widget, target, policy, deadline)
     else
       {:error, reason} -> failure(network_reason(reason))
     end
@@ -63,6 +61,7 @@ defmodule WebWidget.Integration.ReadinessTransport do
            ip: ip,
            port: port,
            host: host,
+           redirect_origin: redirect_origin(deployment.endpoint),
            origin: origin,
            url: url,
            endpoint_pid: Process.whereis(deployment.endpoint)
@@ -97,8 +96,24 @@ defmodule WebWidget.Integration.ReadinessTransport do
   defp probe(widget, target, policy, deadline) do
     path = target.prefix <> "/" <> widget.widget_id
 
-    with {:ok, response} <- page(target, path, deadline),
-         :ok <- page_paths(response, path, target.assets_path),
+    case page(target, path, deadline) do
+      {:ok, response} ->
+        if target.scheme == :http and
+             (not is_nil(target.proxy) or policy.secure or response.status != 200) do
+          guarded_probe(widget, target, policy, deadline, response)
+        else
+          session_probe(widget, target, policy, deadline, response)
+        end
+
+      {:error, reason} ->
+        failure(network_reason(reason))
+    end
+  end
+
+  defp session_probe(widget, target, policy, deadline, response) do
+    path = target.prefix <> "/" <> widget.widget_id
+
+    with :ok <- page_paths(response, path, target.assets_path),
          {:ok, cookie, csrf} <- bootstrap(target, path, policy, deadline),
          :ok <- upgrade(target, path, cookie, csrf, deadline),
          :ok <- current_deployment(target),
@@ -111,11 +126,10 @@ defmodule WebWidget.Integration.ReadinessTransport do
     end
   end
 
-  defp proxy_probe(widget, target, policy, deadline) do
+  defp guarded_probe(widget, target, policy, deadline, response) do
     path = target.prefix <> "/" <> widget.widget_id
 
-    with {:ok, response} <- page(target, path, deadline),
-         :ok <- insecure_rejected(response, target, path),
+    with :ok <- insecure_rejected(response, target, path),
          {:ok, response} <- page(target, path <> "/session", deadline),
          :ok <- insecure_rejected(response, target, path <> "/session"),
          :ok <- current_deployment(target),
@@ -134,11 +148,13 @@ defmodule WebWidget.Integration.ReadinessTransport do
 
   defp insecure_rejected(%{status: status} = response, target, path)
        when status in [301, 302, 307, 308] do
+    origin = if target.proxy, do: target.proxy.uri, else: target.redirect_origin
+
     with [] <- widget_cookies(response),
          [location] <- Req.Response.get_header(response, "location"),
          uri <- URI.parse(location),
-         true <- uri.scheme == "https" and uri.host == target.proxy.uri.host,
-         true <- uri.port == target.proxy.uri.port and uri.path == path,
+         true <- uri.scheme == "https" and uri.host == origin.host,
+         true <- uri.port == origin.port and uri.path == path,
          true <- is_nil(uri.userinfo) and is_nil(uri.query) and is_nil(uri.fragment) do
       :ok
     else
@@ -150,6 +166,26 @@ defmodule WebWidget.Integration.ReadinessTransport do
 
   defp policy_scheme(%{proxy: nil, scheme: scheme}), do: scheme
   defp policy_scheme(_), do: :https
+
+  defp effective_policy(widget, target) do
+    case Session.effective(widget, target.endpoint, policy_scheme(target)) do
+      {:error, :https_required} when target.scheme == :http ->
+        Session.effective(widget, target.endpoint, :https)
+
+      result ->
+        result
+    end
+  end
+
+  defp redirect_origin(endpoint) do
+    url = endpoint.config(:url, [])
+
+    %URI{
+      scheme: "https",
+      host: Keyword.get(url, :host, "localhost"),
+      port: Keyword.get(url, :port, 443)
+    }
+  end
 
   defp current_deployment(target) do
     case deployment() do
@@ -163,7 +199,7 @@ defmodule WebWidget.Integration.ReadinessTransport do
                :generation,
                :scope,
                :assets_path
-             ]),
+             ]) and redirect_origin(target.endpoint) == target.redirect_origin,
            do: :ok,
            else: {:error, :transport_unverifiable}
 
@@ -183,8 +219,7 @@ defmodule WebWidget.Integration.ReadinessTransport do
   end
 
   defp current_policy(widget, target, policy) do
-    case {Proxy.policy(target.endpoint),
-          Session.effective(widget, target.endpoint, policy_scheme(target))} do
+    case {Proxy.policy(target.endpoint), effective_policy(widget, target)} do
       {{:ok, proxy}, {:ok, ^policy}} when proxy == target.proxy -> :ok
       _ -> {:error, :cookie_policy_mismatch}
     end

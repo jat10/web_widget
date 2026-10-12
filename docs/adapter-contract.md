@@ -306,6 +306,17 @@ The response is `{:ok, %{protocol_version: 2, status: state, reason: reason,
 checks: checks, effective_settings: settings, verification: verification}}`.
 `verification` contains `scope: :local`, `session_handshake: :verified | :not_checked`
 and `external_https: :not_checked`. Local readiness never asserts public HTTPS reachability.
+Readiness means local feed liveness, not security or public-ingress acceptance.
+An HTTP-only feed can be ready with Secure/Partitioned/None policy when the scoped
+page and session boundaries respond with the expected cookie-free `503
+https_required`, or valid HTTPS redirects to the expected authority and path.
+This requires no widget proxy policy, host SSL classification or new startup flag.
+The actual listener, matching scoped route/socket mount, installed runtime,
+delivery, identity and valid cookie configuration must still be present. Arbitrary
+404/500/503 responses, wrong redirects and stale observations never establish readiness.
+For a guarded feed, `session_handshake` stays `:not_checked`; `cookie_policy` ready
+means valid installed enforcement, not permission to bootstrap an insecure session
+or evidence of browser cookie acceptance. Guarded HTTP does not downgrade policy.
 All five checks are required, in
 order: `runtime`, `transport`, `delivery`, `authentication`, `cookie_policy`.
 Each is `%{status: state, reason: reason}`. States are `:ready`, `:starting`,
@@ -341,7 +352,7 @@ invocation and refresh of both BO surfaces after lifecycle changes.
 Readiness checks an explicit serving endpoint override, or the unique running
 widget endpoint matching the configured mount. Omitted scheme discovers a unique
 actual local HTTP/HTTPS listener; ambiguous endpoints/listeners stay unknown.
-For directly served deployments it checks the cookie-free page's socket/session
+Where the listener permits a session handshake it checks the cookie-free page's socket/session
 paths, initializes an isolated anonymous cookie via `<widget-page-path>/session`,
 and verifies that cookie with `/session?verify=1` without rewriting it. The verified
 JSON CSRF token authorizes the widget-scoped WebSocket upgrade; the page's CSRF
@@ -387,7 +398,13 @@ It does not manufacture forwarding headers to simulate HTTPS. Its session handsh
 is `:not_checked`; cookie-policy readiness means configured enforcement, not observed
 browser acceptance. Deployment acceptance must independently verify real HTTPS
 bootstrap cookies and WSS upgrades through the proxy. A public URL alone cannot
-activate this topology. Direct-listener session handshakes are `:verified`.
+activate proxy trust or prove TLS. HTTP guarded-feed readiness also works without
+this optional proxy block, including with host-managed normalization before the
+widget wrapper. The host/infrastructure then owns forwarding trust; readiness
+does not duplicate it or inspect `force_ssl` to classify ingress. HTTPS redirect
+authority is checked against the optional proxy origin or ordinary endpoint URL
+host/public port (default 443), as an expected destination only, never TLS evidence.
+Only successful direct-listener session handshakes are `:verified`.
 Neither mode proves real-user authentication or browser cookie acceptance.
 See [host integration](host-integration.md) for trusted readiness configuration.
 

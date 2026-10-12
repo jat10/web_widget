@@ -553,8 +553,8 @@ defmodule WebWidget.Integration.ReadinessTest do
 
     send(page, :release_readiness_page)
     assert {:ok, result} = Task.await(task)
-    assert result.checks.cookie_policy == %{status: :unavailable, reason: :https_required}
-    assert result.status == :unavailable
+    refute result.status == :ready
+    assert result.verification.session_handshake == :not_checked
   end
 
   test "a serving topology edit cannot return a result for the old deployment" do
@@ -610,13 +610,194 @@ defmodule WebWidget.Integration.ReadinessTest do
     end
   end
 
-  test "HTTP never silently downgrades None or claims HTTPS from public_url" do
+  test "guarded HTTP feed is locally ready without downgrading None or claiming public HTTPS" do
     {id, _} = install(%{"same_site" => "None"})
     integration(public_url: "https://public.example", readiness: [endpoint: @endpoint])
     assert {:ok, result} = RuntimeBuilder.status(id, [])
-    assert result.status == :unavailable
-    assert result.reason == :https_required
-    assert result.checks.cookie_policy == %{status: :unavailable, reason: :https_required}
+    assert result.status == :ready
+    assert result.reason == nil
+    assert result.effective_settings.same_site == %{value: "None", source: :connector}
+
+    assert result.verification == %{
+             scope: :local,
+             session_handshake: :not_checked,
+             external_https: :not_checked
+           }
+
+    assert_guarded_http(id)
+  end
+
+  test "HTTP liveness needs neither a public URL, widget proxy nor force_ssl configuration" do
+    for {same_site, session} <- [
+          {"None", [partitioned: false]},
+          {"Lax", [partitioned: true]},
+          {"Strict", [partitioned: false, secure: true]}
+        ] do
+      integration(session: session, transport: [endpoint: @endpoint])
+      {id, _} = install(%{"same_site" => same_site})
+      assert {:ok, config} = WebWidget.Configuration.fetch()
+      assert config.proxy == nil
+      assert @endpoint.config(:force_ssl) == nil
+      assert {:ok, result} = RuntimeBuilder.status(id, [])
+      assert result.status == :ready
+      assert result.effective_settings.same_site == %{value: same_site, source: :connector}
+      assert result.verification.session_handshake == :not_checked
+      assert result.verification.external_https == :not_checked
+      assert_guarded_http(id)
+    end
+  end
+
+  test "HTTP-only feed accepts a validated HTTPS redirect without a widget proxy" do
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+    endpoint_options(readiness_test_fault: {:force_ssl, "localhost"})
+
+    assert {:ok, %{status: :ready, verification: %{session_handshake: :not_checked}}} =
+             RuntimeBuilder.status(id, [])
+
+    for location <- [
+          "https://evil.example/widget/#{id}",
+          "https://localhost:8443/widget/#{id}",
+          "https://localhost/other",
+          "http://localhost/widget/#{id}",
+          "https://localhost/widget/#{id}?extra=1",
+          "https://localhost/widget/#{id}#fragment",
+          "https://user@localhost/widget/#{id}"
+        ] do
+      endpoint_options(readiness_test_fault: {:redirect, location})
+      assert {:ok, result} = RuntimeBuilder.status(id, [])
+      refute result.status == :ready
+      assert result.checks.transport.reason == :transport_unverifiable
+    end
+
+    endpoint_options(
+      url: [host: "localhost", scheme: "https", port: 8443],
+      readiness_test_fault: {:force_ssl, "localhost:8443"}
+    )
+
+    assert {:ok, %{status: :ready, verification: %{external_https: :not_checked}}} =
+             RuntimeBuilder.status(id, [])
+  end
+
+  test "guarded HTTP needs responding page and session boundaries, not arbitrary errors or cookies" do
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+
+    for stage <- [:page, :bootstrap],
+        {status, body, cookie?} <- [
+          {404, "not_found", false},
+          {500, "server_error", false},
+          {503, "unrelated", false},
+          {503, "https_required", true},
+          {200, "https_required", false}
+        ] do
+      endpoint_options(readiness_test_fault: {:response, stage, status, body, cookie?})
+      assert {:ok, result} = RuntimeBuilder.status(id, [])
+      refute result.status == :ready
+      assert result.checks.transport.reason == :transport_unverifiable
+    end
+  end
+
+  test "guarded HTTP never hides stopped listeners, missing mounts or runtimes" do
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+    assert {:ok, %{status: :ready}} = RuntimeBuilder.status(id, [])
+    :ok = Supervisor.terminate_child(@endpoint, {@endpoint, :http})
+    assert {:ok, %{reason: :transport_not_listening}} = RuntimeBuilder.status(id, [])
+    assert {:ok, _} = Supervisor.restart_child(@endpoint, {@endpoint, :http})
+    integration(session: [], transport: [endpoint: @endpoint, widget_path: "/not-mounted"])
+
+    assert {:ok, %{checks: %{transport: %{reason: :transport_unverifiable}}}} =
+             RuntimeBuilder.status(id, [])
+
+    integration(session: [], transport: [endpoint: @endpoint])
+    stop_supervised!({Runtime, id})
+    assert {:ok, %{reason: :runtime_not_registered}} = RuntimeBuilder.status(id, [])
+  end
+
+  test "guarded HTTP observation is fenced against listener stop during probing" do
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+    endpoint_options(readiness_test_gate: self(), readiness_test_gate_stage: :bootstrap)
+    task = Task.async(fn -> RuntimeBuilder.status(id, []) end)
+    assert_receive {:readiness_page, request}
+    :ok = Supervisor.terminate_child(@endpoint, {@endpoint, :http})
+    send(request, :release_readiness_page)
+
+    case Task.await(task) do
+      {:ok, result} -> refute result.status == :ready
+      {:error, reason} -> assert reason == :check_timeout
+    end
+  end
+
+  test "guarded HTTP retains unprovable identity and desired policy mismatch diagnostics" do
+    {config, hooks, opts} = Host.fixture()
+
+    integration(
+      session: [],
+      identity_verifier: opts[:identity_verifier],
+      transport: [endpoint: @endpoint]
+    )
+
+    {:ok, {spec, []}} = RuntimeConfig.prepare(config, hooks, opts)
+    start_supervised!(spec)
+    assert {:ok, result} = RuntimeBuilder.status(config.id, [])
+    assert result.checks.transport.status == :ready
+
+    assert result.checks.authentication == %{
+             status: :unavailable,
+             reason: :identity_not_configured
+           }
+
+    refute result.status == :ready
+    refute_receive {:verified_scope, _}
+
+    stop_supervised!({Runtime, config.id})
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+    desired = %{id: id, provider: :web_widget, settings: %{"same_site" => "Lax"}}
+
+    assert {:ok, %{status: :error, reason: :cookie_policy_mismatch}} =
+             WebWidget.HostAdapter.ingress_status(desired)
+  end
+
+  test "guarded HTTP cannot return an observation for a replaced runtime" do
+    integration(session: [], transport: [endpoint: @endpoint])
+    {id, _} = install(%{"same_site" => "None"})
+    gate_pages()
+    task = Task.async(fn -> RuntimeBuilder.status(id, []) end)
+    assert_receive {:readiness_page, request}
+    {:ok, public} = Runtime.fetch_widget(to_string(id))
+    stop_supervised!({Runtime, id})
+
+    start_supervised!(
+      {Runtime,
+       %{
+         channel_config_id: id,
+         sink_mfa: {__MODULE__, :unused, []},
+         pubsub_server: @pubsub,
+         widgets: [public]
+       }}
+    )
+
+    send(request, :release_readiness_page)
+    assert {:ok, %{status: :unavailable, reason: :runtime_not_registered}} = Task.await(task)
+  end
+
+  defp assert_guarded_http(id) do
+    {:ok, {_, port}} = @endpoint.server_info(:http)
+
+    for path <- ["/widget/#{id}", "/widget/#{id}/session"] do
+      response =
+        Req.get!("http://127.0.0.1:#{port}" <> path,
+          headers: [host: "localhost"],
+          retry: false,
+          redirect: false
+        )
+
+      assert {response.status, response.body} == {503, "https_required"}
+      assert Req.Response.get_header(response, "set-cookie") == []
+    end
   end
 
   @tag :tmp_dir
