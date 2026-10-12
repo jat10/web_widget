@@ -364,7 +364,13 @@ normal URL remains host-owned. Proxy peer addresses are exact IPv4/IPv6 tuples,
 not forwarded client addresses.
 Keep the HTTP backend private. The TLS ingress must remove client-supplied
 forwarding headers and overwrite `X-Forwarded-Proto: https`,
-`X-Forwarded-Host: chat.example`, and `X-Forwarded-Port: 443`. Forward cookies,
+`X-Forwarded-Host: chat.example`. `X-Forwarded-Port` can be omitted for a configured
+default-443 HTTPS origin, as with ngrok; the validated process authority supplies
+443. If present, it must be a single exact matching port. Empty, duplicate,
+comma-separated or conflicting values reject the request. Nondefault HTTPS
+origins require an explicit matching port; no port is inferred from Host,
+`X-Forwarded-For` or the private listener. Visitor addresses in `X-Forwarded-For`
+do not establish immediate-peer trust. Forward cookies,
 Origin, Upgrade and Connection correctly for `/widget/:id/live/*`, and route
 widget pages, session endpoints and assets to the same host. Do not redirect BO
 `/live` to a package listener. Malformed or mismatched trusted forwarding is
@@ -375,6 +381,17 @@ socket dispatch. Host/BO cookie handling remains untouched. Secure, HttpOnly,
 Partitioned, SameSite, scoped cookie paths, CSRF and socket origin checks remain
 enforced. Do not add another global forwarding rewrite that bypasses this trust
 boundary for widget requests.
+
+The package wrapper runs before the normal Phoenix endpoint plug pipeline,
+including native `force_ssl: [rewrite_on: [:x_forwarded_proto]]`. Malformed trusted
+forwarding rejects even when `conn.scheme` is already HTTPS. If an external
+middleware runs before that wrapper, it must enforce the same immediate-peer
+allowlist before rewriting: removing an untrusted header later cannot recover the
+original transport scheme. Restrict the backend to trusted ingress. This does not
+authorize blanket scheme rewriting or using visitor `X-Forwarded-For` as trust.
+This peer filter requires the explicit process `proxy:` block. If it is omitted,
+the package does not validate host-wide SSL rewriting; native `force_ssl` alone
+does not establish widget proxy trust. Keep such a backend restricted to ingress.
 
 Local readiness verifies the actual HTTP listener, mounted widget socket, rejection
 of insecure page/session requests (503 or a redirect to the exact public HTTPS

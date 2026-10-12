@@ -95,7 +95,8 @@ defmodule WebWidget.TestHost.TLSProxy do
       ])
 
     {:ok, {_, port}} = :ssl.sockname(listener)
-    acceptor = spawn_link(fn -> accept(listener, opts[:backend_port], port) end)
+    forwarded_port = Keyword.get(opts, :forwarded_port, port)
+    acceptor = spawn_link(fn -> accept(listener, opts[:backend_port], forwarded_port) end)
     {:ok, %{listener: listener, acceptor: acceptor, port: port}}
   end
 
@@ -156,11 +157,9 @@ defmodule WebWidget.TestHost.TLSProxy do
           headers
         end
 
-      forwarded = [
-        "x-forwarded-proto: https",
-        "x-forwarded-host: localhost",
-        "x-forwarded-port: #{public_port}"
-      ]
+      forwarded =
+        ["x-forwarded-proto: https", "x-forwarded-host: localhost"] ++
+          if(public_port == :omit, do: [], else: ["x-forwarded-port: #{public_port}"])
 
       :ok =
         :gen_tcp.send(

@@ -20,6 +20,9 @@ config :web_widget, WebWidgetWeb.Endpoint,
   secret_key_base: "hItqrDpSbn8YcVdlF3NUYNNEzMovPEE/ziM0eSAIxf4ZDDX8SSCztM/ifXQ9iq5H",
   server: false
 
+config :web_widget, WebWidget.TestHost.ForceSSLScopedEndpoint,
+  force_ssl: [rewrite_on: [:x_forwarded_proto], host: "localhost", exclude: []]
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 

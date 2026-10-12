@@ -150,10 +150,91 @@ defmodule WebWidget.Integration.ScopeTransportTest do
 
   @tag :tmp_dir
   test "scope stays intact through real proxy TLS, partitioned cookies and WSS", ctx do
+    assert_proxy_scope(ctx, :explicit)
+  end
+
+  @tag :tmp_dir
+  test "default443 public authority supports real proxy TLS and WSS without a forwarded port",
+       ctx do
+    assert_proxy_scope(ctx, :omit)
+  end
+
+  test "native endpoint force_ssl cannot bless malformed or untrusted widget forwarding", ctx do
+    endpoint = WebWidget.TestHost.ForceSSLScopedEndpoint
+    previous = Application.fetch_env!(:web_widget, endpoint)
+    on_exit(fn -> Application.put_env(:web_widget, endpoint, previous) end)
+
+    Application.put_env(
+      :web_widget,
+      endpoint,
+      Keyword.merge(previous,
+        secret_key_base: String.duplicate("host", 16),
+        live_view: [signing_salt: "host-live"],
+        pubsub_server: WebWidget.PubSub,
+        server: false,
+        url: [host: "localhost", scheme: "https"]
+      )
+    )
+
+    start_supervised!(endpoint)
+
+    WebWidget.TestInfrastructure.replace(
+      pubsub_server: WebWidget.PubSub,
+      scope: "/channels",
+      transport: [endpoint: endpoint],
+      proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: "https://localhost"]
+    )
+
+    Host.await_runtime(ctx.config.id)
+
+    forwarded =
+      Plug.Test.conn(:get, ctx.path)
+      |> Plug.Conn.put_req_header("x-forwarded-proto", "https")
+      |> Plug.Conn.put_req_header("x-forwarded-host", "localhost")
+      |> Map.put(:remote_ip, {127, 0, 0, 1})
+
+    valid = endpoint.call(forwarded, [])
+    assert valid.status == 200
+    assert {valid.scheme, valid.host, valid.port} == {:https, "localhost", 443}
+
+    for path <- [ctx.path, ctx.path <> "/session", ctx.path <> "/live/websocket"],
+        {header, value} <- [
+          {"x-forwarded-host", "evil.example"},
+          {"x-forwarded-proto", "http"},
+          {"x-forwarded-port", "80"}
+        ] do
+      conn =
+        %{forwarded | request_path: path, path_info: String.split(path, "/", trim: true)}
+        |> Plug.Conn.put_req_header(header, value)
+
+      invalid = endpoint.call(conn, [])
+      assert invalid.status == 400
+      assert invalid.resp_body == "invalid_widget_proxy"
+    end
+
+    untrusted = endpoint.call(%{forwarded | remote_ip: {198, 51, 100, 1}}, [])
+    assert untrusted.status in [301, 308]
+    assert untrusted.scheme == :http
+    assert Plug.Conn.get_req_header(untrusted, "x-forwarded-proto") == []
+    assert map_size(untrusted.resp_cookies) == 0
+    direct = endpoint.call(Plug.Test.conn(:get, ctx.path <> "/session"), [])
+    assert direct.status in [301, 308]
+    assert map_size(direct.resp_cookies) == 0
+  end
+
+  defp assert_proxy_scope(ctx, forwarding) do
     {cert, key, ca} = TLSProxy.certificates(ctx.tmp_dir)
-    proxy = start_supervised!({TLSProxy, backend_port: ctx.port, certfile: cert, keyfile: key})
+    proxy_opts = [backend_port: ctx.port, certfile: cert, keyfile: key]
+
+    proxy_opts =
+      if forwarding == :omit,
+        do: Keyword.put(proxy_opts, :forwarded_port, :omit),
+        else: proxy_opts
+
+    proxy = start_supervised!({TLSProxy, proxy_opts})
     port = TLSProxy.port(proxy)
-    origin = "https://localhost:#{port}"
+    origin = if forwarding == :omit, do: "https://localhost", else: "https://localhost:#{port}"
+    authority = if forwarding == :omit, do: "localhost", else: "localhost:#{port}"
 
     WebWidget.TestInfrastructure.replace(
       pubsub_server: WebWidget.PubSub,
@@ -167,7 +248,7 @@ defmodule WebWidget.Integration.ScopeTransportTest do
 
     options = [
       connect_options: [hostname: "localhost", transport_opts: [cacertfile: ca]],
-      headers: [{"host", "localhost:#{port}"}],
+      headers: [{"host", authority}],
       retry: false
     ]
 
@@ -184,38 +265,52 @@ defmodule WebWidget.Integration.ScopeTransportTest do
 
     pair = hd(String.split(cookie, ";"))
 
-    assert {:ok, connection} =
-             Mint.HTTP.connect(:https, "127.0.0.1", port,
-               hostname: "localhost",
-               transport_opts: [cacertfile: ca]
-             )
+    verification =
+      Req.get!(
+        url <> ctx.path <> "/session?verify=1",
+        Keyword.put(options, :headers, [{"cookie", pair}, {"origin", origin}, {"host", authority}])
+      )
 
-    query = URI.encode_query(%{"_csrf_token" => bootstrap.body["csrf_token"], "vsn" => "2.0.0"})
-    key = Base.encode64(:crypto.strong_rand_bytes(16))
+    assert verification.status == 200
+    assert Req.Response.get_header(verification, "set-cookie") == []
 
-    headers = [
-      {"host", "localhost:#{port}"},
-      {"origin", origin},
-      {"cookie", pair},
-      {"upgrade", "websocket"},
-      {"connection", "Upgrade"},
-      {"sec-websocket-key", key},
-      {"sec-websocket-version", "13"}
-    ]
+    for {csrf, request_origin, status} <- [
+          {bootstrap.body["csrf_token"], origin, 101},
+          {"forged", origin, 403},
+          {bootstrap.body["csrf_token"], "https://evil.example", 403}
+        ] do
+      assert {:ok, connection} =
+               Mint.HTTP.connect(:https, "127.0.0.1", port,
+                 hostname: "localhost",
+                 transport_opts: [cacertfile: ca]
+               )
 
-    assert {:ok, connection, ref} =
-             Mint.HTTP.request(
-               connection,
-               "GET",
-               ctx.path <> "/live/websocket?" <> query,
-               headers,
-               nil
-             )
+      query = URI.encode_query(%{"_csrf_token" => csrf, "vsn" => "2.0.0"})
 
-    assert_receive message, 2_000
-    assert {:ok, connection, responses} = Mint.HTTP.stream(connection, message)
-    assert {:status, ref, 101} in responses
-    Mint.HTTP.close(connection)
+      headers = [
+        {"host", authority},
+        {"origin", request_origin},
+        {"cookie", pair},
+        {"upgrade", "websocket"},
+        {"connection", "Upgrade"},
+        {"sec-websocket-key", Base.encode64(:crypto.strong_rand_bytes(16))},
+        {"sec-websocket-version", "13"}
+      ]
+
+      assert {:ok, connection, ref} =
+               Mint.HTTP.request(
+                 connection,
+                 "GET",
+                 ctx.path <> "/live/websocket?" <> query,
+                 headers,
+                 nil
+               )
+
+      assert_receive message, 2_000
+      assert {:ok, connection, responses} = Mint.HTTP.stream(connection, message)
+      assert {:status, ref, status} in responses
+      Mint.HTTP.close(connection)
+    end
 
     assert {:ok, %{status: :ok, verification: %{session_handshake: :not_checked}}} =
              HostAdapter.ingress_status(ctx.config)

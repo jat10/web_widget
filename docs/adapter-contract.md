@@ -360,8 +360,26 @@ The endpoint retains ordinary Phoenix URL/listener configuration, but never supp
 widget trust or cookie policy. Public proxy origin is explicit at infrastructure init.
 The package accepts normalized forwarding headers only
 from these exact peer IPs and only for that HTTPS origin, before HTTP and socket
-dispatch. The proxy must strip client forwarding headers and overwrite proto/host/port;
-the backend must be private. No dedicated widget TLS listener is required.
+dispatch. The proxy must strip client forwarding headers and overwrite proto/host;
+the backend must be private. `X-Forwarded-Port` may be absent only when the
+configured root HTTPS `public_origin` uses default port 443 (including explicit
+`:443`). In that case the configured authority supplies 443, not another header
+or the backend listener. A supplied port must exactly match the configured port;
+empty, conflicting, comma-separated and repeated forwarding headers are rejected.
+Nondefault HTTPS ports still require a single explicit matching forwarded port.
+Trust is based on the immediate connection peer, never `X-Forwarded-For` visitor
+addresses. No dedicated widget TLS listener is required.
+The package endpoint macro validates forwarding before delegating into the
+normal Phoenix endpoint plug pipeline, including endpoint `force_ssl`. Trusted
+header conflicts still reject if the incoming connection is already marked HTTPS.
+Any earlier external scheme/host rewriter must enforce the same immediate-peer
+trust boundary: stripping headers cannot reconstruct a physical HTTP scheme that
+an upstream component already changed. Keep the backend restricted to ingress;
+do not fabricate headers or add a global forwarding trust bypass.
+Peer filtering here requires configured `proxy:` process options. With proxy
+disabled, host-wide `rewrite_on` remains host-owned and is not a replacement for
+the widget trust configuration. Do not expose an ingress-only HTTP backend to
+untrusted clients, whether or not native endpoint `force_ssl` is enabled.
 In this mode local readiness checks the real HTTP listener, widget socket mount,
 rejection of insecure widget page/session requests (including HTTPS redirects to
 the exact configured origin/path), and the configured Secure/SameSite policy.

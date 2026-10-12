@@ -66,13 +66,16 @@ defmodule WebWidget.Embedding.Proxy do
 
       get_req_header(conn, "x-forwarded-proto") == ["https"] and
         get_req_header(conn, "x-forwarded-host") == [policy.uri.host] and
-          get_req_header(conn, "x-forwarded-port") == [Integer.to_string(policy.uri.port)] ->
+          forwarded_port?(get_req_header(conn, "x-forwarded-port"), policy.uri.port) ->
         %{conn | scheme: :https, host: policy.uri.host, port: policy.uri.port}
 
       true ->
         reject(conn)
     end
   end
+
+  defp forwarded_port?([], 443), do: true
+  defp forwarded_port?(values, port), do: values == [Integer.to_string(port)]
 
   defp reject(conn), do: conn |> send_resp(400, "invalid_widget_proxy") |> halt()
 
