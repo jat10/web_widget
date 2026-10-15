@@ -1,5 +1,32 @@
-/** One transport session per connector, independent from every iframe's identity. */
+class TransientSessionError extends Error {}
+
+/** Retry only the HTTP prerequisite. Socket connection/rejoin belongs to Phoenix. */
 export async function widgetSessionToken(
+  path: string,
+  options: { verifyOnly?: boolean; signal?: AbortSignal } = {},
+): Promise<string> {
+  let delay = 1_000;
+  for (;;) {
+    try {
+      return await readSessionToken(path, options);
+    } catch (error) {
+      if (options.signal?.aborted || !(error instanceof TransientSessionError ||
+          error instanceof TypeError || (error instanceof DOMException && error.name === "AbortError"))) throw error;
+      await new Promise<void>((resolve, reject) => {
+        const abort = () => { window.clearTimeout(timer); reject(options.signal?.reason); };
+        const timer = window.setTimeout(() => {
+          options.signal?.removeEventListener("abort", abort);
+          resolve();
+        }, delay);
+        options.signal?.addEventListener("abort", abort, { once: true });
+      });
+      delay = Math.min(delay * 2, 10_000);
+    }
+  }
+}
+
+/** One transport session per connector, independent from every iframe's identity. */
+async function readSessionToken(
   path: string,
   { verifyOnly = false, signal }: { verifyOnly?: boolean; signal?: AbortSignal } = {},
 ): Promise<string> {
@@ -25,6 +52,9 @@ export async function widgetSessionToken(
           credentials: "same-origin", cache: "no-store", signal: controller.signal,
           headers: { Accept: "application/json" },
         });
+        if (response.status >= 500 || response.status === 408 || response.status === 429) {
+          throw new TransientSessionError("session_unavailable");
+        }
         if (!response.ok) throw new Error(response.status === 409 ? "cookie_unavailable" : "session_bootstrap_failed");
         if (!response.headers.get("cache-control")?.toLowerCase().includes("no-store")) {
           throw new Error("invalid_session_response");

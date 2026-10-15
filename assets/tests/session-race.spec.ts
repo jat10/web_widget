@@ -218,61 +218,57 @@ test("unsupported session coordination fails explicitly without creating a cooki
   expect(requests).toEqual([]);
 });
 
-test("missing cookies during socket recovery fail without another initialization request", async ({ page, context }) => {
+test("confirmed cookie rejection requires explicit reload without repeated initialization", async ({ page }) => {
+  let rejectCookie = true;
+  await page.route("**/widget/theme-dark/session?verify=1", route =>
+    rejectCookie ? route.fulfill({ status: 409 }) : route.continue());
   const requests: string[] = [];
   page.on("request", request => {
     if (request.url().includes("/widget/theme-dark/session")) requests.push(request.url());
   });
   await page.goto("/widget/theme-dark");
-  await expect.poll(() => page.evaluate(() => (window as any).liveSocket?.isConnected() || false)).toBe(true);
-  await page.evaluate(() => window.dispatchEvent(new Event("phx:page-loading-start")));
-  const progress = page.locator("canvas.widget-progress");
-  await expect(progress).toBeVisible();
-  await expect(progress).toHaveCSS("pointer-events", "none");
-  await context.clearCookies({ name: "_web_widget_session" });
-  await page.evaluate(() => (window as any).liveSocket.getSocket().onConnError(new Error("probe")));
   await expect(page.locator("#widget-session-error")).toHaveAttribute("data-reason", "cookie_unavailable");
   expect(requests.filter(url => !new URL(url).search)).toHaveLength(1);
-  expect(requests.filter(url => new URL(url).searchParams.get("verify") === "1")).toHaveLength(2);
+  expect(requests.filter(url => new URL(url).searchParams.get("verify") === "1")).toHaveLength(1);
   expect(await page.evaluate(() => (window as any).liveSocket.isConnected())).toBe(false);
-  await expect(progress).toBeHidden();
+  rejectCookie = false;
   await page.getByRole("button", { name: "Reload widget" }).click();
   await expect.poll(() => page.evaluate(() => (window as any).liveSocket?.isConnected() || false)).toBe(true);
   expect(requests.filter(url => !new URL(url).search)).toHaveLength(2);
 });
 
-test("terminal session failure cancels pending progress and ignores later loading events", async ({ page, context }) => {
-  await page.goto("/widget/theme-dark");
-  await expect.poll(() => page.evaluate(() => (window as any).liveSocket?.isConnected() || false)).toBe(true);
+test("terminal session failure ignores later loading events", async ({ page }) => {
   await page.clock.install();
-  await page.clock.pauseAt(new Date());
-  await context.clearCookies({ name: "_web_widget_session" });
-  await page.evaluate(() => {
-    window.dispatchEvent(new Event("phx:page-loading-start"));
-    (window as any).liveSocket.getSocket().onConnError(new Error("probe"));
-  });
+  await page.route("**/widget/theme-dark/session?verify=1", route => route.fulfill({ status: 409 }));
+  await page.goto("/widget/theme-dark");
+  await page.clock.pauseAt(Date.now() + 1_000);
   await expect(page.locator("#widget-session-error")).toHaveAttribute("data-reason", "cookie_unavailable");
   await page.evaluate(() => window.dispatchEvent(new Event("phx:page-loading-start")));
   await page.clock.runFor(1_000);
   await expect(page.locator("canvas.widget-progress")).toBeHidden();
 });
 
-test("an open socket without LiveView establishment reaches the document deadline", async ({ page }) => {
-  await page.clock.install();
+test("Phoenix heals initial transport failure without a widget deadline", async ({ page }) => {
+  test.setTimeout(60_000);
+  let unavailable = true;
+  let sockets = 0;
   const requests: string[] = [];
   page.on("request", request => {
     if (request.url().includes("/widget/theme-dark/session")) requests.push(request.url());
   });
-  await page.routeWebSocket("**/widget/theme-dark/live/websocket*", () => {
-    // Accept the transport but never acknowledge the LiveView join.
+  await page.routeWebSocket("**/widget/theme-dark/live/websocket*", socket => {
+    sockets++;
+    if (unavailable) socket.close({ code: 1013 });
+    else socket.connectToServer();
   });
-  await page.route("**/widget/theme-dark/live/longpoll*", route => route.abort());
+  await page.route("**/widget/theme-dark/live/longpoll*", route => unavailable ? route.abort() : route.continue());
   await page.goto("/widget/theme-dark");
-  await expect.poll(() => page.evaluate(() => (window as any).liveSocket?.getSocket().isConnected() || false)).toBe(true);
-  await page.clock.runFor(10_000);
-  await expect(page.locator("#widget-session-error")).toHaveAttribute("data-reason", "session_connection_failed");
-  expect(await page.evaluate(() => (window as any).liveSocket.getSocket().isConnected())).toBe(false);
+  await expect.poll(() => sockets).toBeGreaterThan(0);
+  await page.waitForTimeout(12_000);
+  await expect(page.locator("#widget-session-error")).toBeHidden();
+  expect(sockets).toBeGreaterThan(1);
   expect(requests.filter(url => !new URL(url).search)).toHaveLength(1);
-  await page.clock.runFor(20_000);
+  unavailable = false;
+  await expect(page.locator("[data-phx-main]")).toHaveClass(/phx-connected/, { timeout: 20_000 });
   expect(requests.filter(url => !new URL(url).search)).toHaveLength(1);
 });

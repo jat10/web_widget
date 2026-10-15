@@ -271,11 +271,14 @@ The independently signed LiveView page remains the JWT binding identity. Stable
 page, installation and transport URLs do not gain instance IDs or redirects.
 
 Browser locks may be storage-partitioned even where cookies are shared. Only the
-initial document bootstrap may initialize a cookie. Subsequent token resynchronization
-is read-only and has a document-lifetime attempt limit. Initial LiveView establishment
-and each transient reconnect have finite deadlines; opening a transport alone does
-not reset them. Failure stops recovery and offers explicit reload, never automatic
-reload or cookie-writing recovery. Cookie policy changes require a fresh page load.
+initial document bootstrap may initialize a cookie. Transient failures of the initial
+session HTTP request retry with capped backoff; each attempt is time-bounded but the
+outage has no terminal deadline. Successful session initialization is not repeated on
+socket errors. Confirmed cookie rejection or invalid configuration offers explicit reload.
+Phoenix owns initial transport connection, reconnection and channel rejoin without
+widget deadlines or retry budgets.
+The widget observes connectivity for presentation and uses existing authentication and
+history restoration after rejoin. Cookie policy changes require a fresh page load.
 
 Canonical `config.settings["same_site"]` accepts exactly `"None"`, `"Lax"`,
 `"Strict"`; missing, nil/blank/invalid values reject runtime construction. Every
