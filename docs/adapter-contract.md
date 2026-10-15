@@ -386,6 +386,16 @@ addresses. No dedicated widget TLS listener is required.
 The package endpoint macro validates forwarding before delegating into the
 normal Phoenix endpoint plug pipeline, including endpoint `force_ssl`. Trusted
 header conflicts still reject if the incoming connection is already marked HTTPS.
+Hosts needing earlier normalization may implement the endpoint callback
+`web_widget_normalize/1` installed by `web_widget_socket/1,2`. Its default is the
+identity function. The supported endpoint-wide order is host normalization,
+widget Proxy, widget CookieGuard, then Phoenix (including socket dispatch and
+`force_ssl`). A halted connection stops at each boundary. Hosts do not override
+`call/2`. The callback is trusted host code, not automatic forwarding opt-in:
+it must validate immediate-peer trust and reject ambiguous forwarding before
+rewriting, preserve the physical peer for the widget Proxy, and retain headers
+needed by that guard. Merely configuring Phoenix `force_ssl` does not activate
+this callback or widget proxy trust.
 Any earlier external scheme/host rewriter must enforce the same immediate-peer
 trust boundary: stripping headers cannot reconstruct a physical HTTP scheme that
 an upstream component already changed. Keep the backend restricted to ingress;
