@@ -717,6 +717,13 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:message_failed` | `response.message.failed`; correlated message ID and public `body` as UI error text, with a generic fallback when `body` is absent or blank; do not expose raw error details |
 | `:error` | Submission error; correlated request and safe code/text, nil/absent message ID; retain timeout `outcome: :unknown`, never fail unrelated assistant messages |
 
+Public failure bodies use the same safe Markdown/link rendering as assistant text;
+raw HTML and executable URL schemes are not enabled. The host owns public wording
+and recovery URLs. An accepted execution that fails before streaming still sends
+`:message_create` before `:message_failed` with the same transport message ID;
+it is not a submission rejection. An optional inactive typing hint may precede the
+terminal failure. True submission rejection remains `:error` without an assistant.
+
 ZAQ streaming edits are cumulative snapshots. LiveView keeps the full content,
 but sends only the new suffix to React when an edit extends a running message
 without changing its other fields. Full replacements still use the message stream.

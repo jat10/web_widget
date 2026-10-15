@@ -15,6 +15,10 @@ defmodule WebWidget.TestIntegration.ChatHost do
     end
   end
 
+  defp dispatch(%{content: "submission rejected"} = request, _context) do
+    response(request, :error, request.conversation_id, %{code: :submission_rejected})
+  end
+
   defp dispatch(request, context) do
     case request do
       %{type: :conversation_init, conversation_id: denied}
@@ -56,6 +60,32 @@ defmodule WebWidget.TestIntegration.ChatHost do
       %{content: _} ->
         message(request, context)
     end
+  end
+
+  defp message(%{content: "pre-stream failure: " <> body} = request, context) do
+    conversation = request.conversation_id || "conversation-1"
+    created = is_nil(request.conversation_id)
+
+    receipt =
+      response(
+        request,
+        if(created, do: :conversation_created, else: :status),
+        conversation,
+        %{accepted: true, created: created}
+      )
+
+    stream = %{receipt | message_id: "assistant-" <> request.request_id}
+
+    for {type, payload} <- [
+          {:typing, %{active: true}},
+          {:message_create, %{body: ""}},
+          {:typing, %{active: false}},
+          {:message_failed, %{body: body, error: "PRIVATE_TRACE"}}
+        ] do
+      publish(context, %{stream | type: type, payload: payload})
+    end
+
+    {:ok, receipt}
   end
 
   defp message(request, context) do

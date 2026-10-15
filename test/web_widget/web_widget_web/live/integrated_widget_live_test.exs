@@ -586,6 +586,31 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     refute has_element?(ctx.view, "#web-widget")
   end
 
+  test "accepted pre-stream failure preserves the public recovery body and releases submission",
+       ctx do
+    init(ctx)
+
+    body =
+      "Personal credentials are required. [Open People portal](https://people.example.test/credentials)."
+
+    text = "pre-stream failure: " <> body
+    render_event(ctx.view, "widget.submit", %{text: text}, %{ok: true})
+    assert_receive {:shared_request, %{content: ^text} = request, _, _}
+
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert MapSet.member?(chat.accepted_requests, request.request_id)
+    assert chat.pending_submission == nil
+    refute chat.blocked
+    refute chat.state.typing
+
+    assert [%{role: "user"}, %{role: "assistant", content: "", status: "failed", error: ^body}] =
+             chat.state.messages
+
+    refute render(ctx.view) =~ "PRIVATE_TRACE"
+    render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "instant"}, _, _}
+  end
+
   test "terminal failure releases send guard and never exposes private error details", ctx do
     init(ctx)
     render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})

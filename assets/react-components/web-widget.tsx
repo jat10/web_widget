@@ -5,6 +5,7 @@ import {
   ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  TextMessagePartProvider,
   useAuiState,
   useExternalStoreRuntime,
   type ThreadMessageLike,
@@ -314,7 +315,7 @@ function AssistantMessage() {
       </div>
       <MessageTime />
       {running && <WorkingIndicator label={hasContent ? t["Writing response"] : activeTools ? t["Working with tools"] : t["Preparing your answer"]} />}
-      {error && <div className="zaq-response-error" role="alert"><ActivityIcon kind="failed" /><div><strong>{t["Couldn't finish this response"]}</strong><p>{error}</p><span>{t["You can send another message below."]}</span></div></div>}
+      {error && <div className="zaq-response-error" role="alert"><ActivityIcon kind="failed" /><div><strong>{t["Couldn't finish this response"]}</strong><TextMessagePartProvider text={error}><AssistantMarkdown /></TextMessagePartProvider><span>{t["You can send another message below."]}</span></div></div>}
     </MessagePrimitive.Root></>
   );
 }
