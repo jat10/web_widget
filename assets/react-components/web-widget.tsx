@@ -14,6 +14,7 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import "../css/widget.css";
 import { connectionSnapshot, subscribeConnection } from "../js/widget-connection";
+import { ConversationProgress, WorkingIndicator } from "./working-indicator";
 
 type Mode = "launcher" | "conversation";
 type Step = {
@@ -213,7 +214,7 @@ export function WebWidget({ mode, messages, isRunning, submissionPending = isRun
       <ThreadPrimitive.Root ref={root} className="zaq-widget" data-mode={mode} data-language={config.locale} data-theme={config.theme} data-conversation-id={conversationId ?? ""} data-reconnecting={!connection.ready} style={{ colorScheme: config.theme === "auto" ? "light dark" : config.theme }} data-multiple-conversations={!!config.multiple_conversations} data-calendar-day={today} aria-label={config.title}>
         {mode === "conversation" && config.multiple_conversations && <ConversationSidebar conversations={conversations} selectedId={conversationId} disabled={submitting || isRunning || !connection.ready} onSelect={id => changeConversation("widget.conversation.select", { id })} onNew={() => changeConversation("widget.conversation.new")} />}
         <div className="zaq-chat-main" key="chat-main">
-        {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} empty={messages.length === 0} />}
+        {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} messages={messages} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
         <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending} recoveringResponse={submitting || submissionPending || isRunning} error={error || responseError || null} />
         </div>
@@ -267,7 +268,7 @@ function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { m
   );
 }
 
-function Conversation({ isTyping, onClose, empty }: { isTyping: boolean; onClose: () => void; empty: boolean }) {
+function Conversation({ isTyping, onClose, messages }: { isTyping: boolean; onClose: () => void; messages: Message[] }) {
   const { strings: t } = useI18n();
   return (
     <>
@@ -279,8 +280,9 @@ function Conversation({ isTyping, onClose, empty }: { isTyping: boolean; onClose
       </header>
       <ThreadPrimitive.Viewport className="zaq-thread" aria-label={t["Conversation"]}>
         <div className="zaq-thread-content">
-          {empty && <div className="zaq-empty-chat"><h2>{t["How can I help?"]}</h2><p>{t["Start a new conversation or choose one from your history."]}</p></div>}
+          {messages.length === 0 && <div className="zaq-empty-chat"><h2>{t["How can I help?"]}</h2><p>{t["Start a new conversation or choose one from your history."]}</p></div>}
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+          <ConversationProgress isTyping={isTyping} messages={messages} label={t["Preparing your answer"]} />
           <ThreadPrimitive.ScrollToBottom className="zaq-scroll-bottom">{t["Latest messages"]}</ThreadPrimitive.ScrollToBottom>
         </div>
       </ThreadPrimitive.Viewport>
@@ -337,10 +339,6 @@ function MessageTime() {
   if (!timestamp) return null;
   const date = new Date(timestamp);
   return <time className="zaq-message-time" dateTime={timestamp} title={date.toLocaleString(locale)}>{date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })}</time>;
-}
-
-function WorkingIndicator({ label }: { label: string }) {
-  return <div className="zaq-working" role="status"><span className="zaq-working-dots" aria-hidden="true"><i /><i /><i /></span><span>{label}</span></div>;
 }
 
 function ResponseActivity({ steps, running, failed }: { steps: Step[]; running: boolean; failed: boolean }) {

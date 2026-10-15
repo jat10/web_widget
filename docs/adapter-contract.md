@@ -865,7 +865,11 @@ browser time zone.
 The same public history response adds `payload.processing: :active | :idle | :unknown`.
 The host performs its authorized native-runtime lookup; no native IDs, PIDs or
 execution records enter the widget. `:active` shows the existing processing indicator
-without inventing an assistant, pending submission or per-send spinner. Terminal
+without inventing an assistant, pending submission or per-send spinner.
+Before an actual running assistant row is available, the conversation also shows
+the existing localized “Preparing your answer” working indicator as presentation
+only. It disappears when a real running row takes over, without adding a message
+ID or changing submission state. Terminal
 events or inactive typing clear recovered progress; independent active typing hints
 remain aggregated. `:unknown` is uncertainty, not completion or cancellation, and
 does not manufacture a terminal. No-answer/steering receipts retain their ordinary
