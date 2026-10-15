@@ -794,7 +794,10 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 
 Public failure bodies use the same safe Markdown/link rendering as assistant text;
 raw HTML and executable URL schemes are not enabled. The host owns public wording
-and recovery URLs. An accepted execution that fails before streaming still sends
+and recovery URLs. Rendered content links open in a new tab with `target="_blank"`
+and `rel="noopener noreferrer"`, never replacing the widget iframe or parent page.
+This applies equally to ordinary assistant responses and public failure bodies.
+An accepted execution that fails before streaming still sends
 `:message_create` before `:message_failed` with the same transport message ID;
 it is not a submission rejection. An optional inactive typing hint may precede the
 terminal failure. True submission rejection remains `:error` without an assistant.

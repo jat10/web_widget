@@ -65,4 +65,21 @@ test("assistant host responses render Markdown as semantic HTML", async ({ page,
     inlineCode: "mix test",
     codeBlock: 'IO.puts("Hello")',
   });
+
+  const link = answer.getByRole("link", { name: "documentation", exact: true });
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await page.context().route("https://example.com/docs", route => route.fulfill({ contentType: "text/html", body: "Documentation" }));
+  const widgetUrl = await widget.locator("body").evaluate(() => location.href);
+  const [documentationTab] = await Promise.all([
+    page.context().waitForEvent("page"),
+    link.click(),
+  ]);
+  await expect(documentationTab).toHaveURL("https://example.com/docs");
+  await expect(documentationTab.locator("body")).toHaveText("Documentation");
+  expect(await documentationTab.evaluate(() => window.opener)).toBeNull();
+  expect(await widget.locator("body").evaluate(() => location.href)).toBe(widgetUrl);
+  await expect(answer).toContainText("Markdown response complete.");
+  await expect(input).toBeEnabled();
+  await documentationTab.close();
 });

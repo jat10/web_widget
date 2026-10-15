@@ -45,14 +45,27 @@ test("accepted pre-stream failure renders the host recovery link and permits ano
   await expect(widget.locator(".zaq-header-status, .zaq-working")).toHaveCount(0);
   await expect(input).toHaveValue("");
 
+  // Context routing also intercepts the new tab's first request.
+  await page.context().route("https://people.example.test/**", route => route.fulfill({ contentType: "text/html", body: "People portal" }));
+  const link = alert.getByRole("link", { name: "Open People portal" });
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  const widgetUrl = await widget.locator("body").evaluate(() => location.href);
+  const [portalTab] = await Promise.all([
+    page.context().waitForEvent("page"),
+    link.click(),
+  ]);
+  await expect(portalTab).toHaveURL(portal);
+  await expect(portalTab.locator("body")).toHaveText("People portal");
+  expect(await portalTab.evaluate(() => window.opener)).toBeNull();
+  expect(await widget.locator("body").evaluate(() => location.href)).toBe(widgetUrl);
+  await expect(widget.locator("#widget-context")).toHaveAttribute("data-authorized", "true");
+  await expect(alert).toContainText("Personal credentials are required.");
+
   await input.fill("instant");
   await input.press("Enter");
   await expect(widget.getByText("Immediate answer", { exact: true })).toBeVisible();
-
-  // Intercept navigation rather than contacting a real credentials portal.
-  await page.route("https://people.example.test/**", route => route.fulfill({ body: "People portal" }));
-  await alert.getByRole("link", { name: "Open People portal" }).click();
-  await expect.poll(() => page.frames().some(frame => frame.url() === portal)).toBe(true);
+  await portalTab.close();
 });
 
 test("failure Markdown cannot inject HTML or executable links and does not block later replies", async ({ page, request }) => {

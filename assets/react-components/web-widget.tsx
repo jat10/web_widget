@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useLiveReact } from "live_react";
 import {
   AssistantRuntimeProvider,
@@ -292,8 +292,14 @@ function UserMessage() {
   return <><MessageDate /><MessagePrimitive.Root className="zaq-message zaq-message-user" data-role="user"><span className="zaq-user-content" dir="auto"><MessagePrimitive.Parts /></span><MessageTime /></MessagePrimitive.Root></>;
 }
 
+function MarkdownLink({ href, title, children }: ComponentPropsWithoutRef<"a">) {
+  return <a href={href} title={title} target="_blank" rel="noopener noreferrer">{children}</a>;
+}
+
+const markdownComponents = { a: MarkdownLink };
+
 function AssistantMarkdown() {
-  return <MarkdownTextPrimitive className="zaq-markdown" smooth={false} remarkPlugins={[remarkGfm]} />;
+  return <MarkdownTextPrimitive className="zaq-markdown" smooth={false} remarkPlugins={[remarkGfm]} components={markdownComponents} />;
 }
 
 function AssistantMessage() {

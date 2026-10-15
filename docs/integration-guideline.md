@@ -146,6 +146,9 @@ clearing drafts or streaming responses. The connector key never reaches the
 browser. Custom token providers and manual mounting are documented in
 [authenticated chat](authenticated-chat.md).
 
+Links in assistant answers and recovery messages open in a new tab, leaving the
+widget and your website open with the current conversation intact.
+
 ## Optional: restore conversations
 
 Opening the widget creates no conversation. To resume, retain the ID emitted in `zaq:conversation`, then call `updateContext` after public readiness. ZAQ checks that the verified user may resume it; unknown or foreign IDs fail without creating a replacement. Plain prompt context is sent only with the first question of a new conversation and is not identity or routing authority.
