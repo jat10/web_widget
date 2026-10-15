@@ -33,6 +33,23 @@ The parent backend signs a compact HS256 JWT with protected header exactly `{"al
 )
 ```
 
+To enable verified sender enrichment, the third argument may include an optional
+backend-sourced profile:
+
+```elixir
+%{user_id: authenticated_external_user_id,
+  profile: %{full_name: "Ada Example", email: "ada@example.com", phone: "+33123456789"}}
+```
+
+The JWT claim is `profile` with those string-keyed fields. Never populate it from
+unverified browser input. Missing fields may be omitted or nil; user-ID-only tokens
+remain supported. The host retrieves the verified profile server-side through
+`WebWidget.HostAdapter.fetch_profile(sender_id, %{channel_config_id: connector_id})`
+on the runtime node, including during the initial sink call. See the
+[profile contract](adapter-contract.md#verified-sender-profiles) for validation,
+refresh ordering, revocation, and ZAQ's People enrichment boundary. Profile changes
+should use a strictly later `iat` second than the previous snapshot.
+
 Expose a same-origin authenticated `GET /api/widget-token` on the embedding website. Return `{"identity_token":"<JWT>"}` and `Cache-Control: no-store`. The installation script can fetch it through `data-token-url="/api/widget-token"`. It puts the first token in the iframe URL fragment; the iframe removes the fragment before LiveView connects. The public parent API is `zaq.widget.connect()`. `zaq.widget.init({identity_token})` remains a deprecated direct-token alias; unsigned `user_id` works only in standalone mock fixtures.
 
 Conversation ID and prompt context are **not JWT claims**. Once `zaq:ready` fires, the parent may call `zaq.widget.updateContext({conversation_id})` to ask ZAQ to authorize and load an existing conversation, or `zaq.widget.updateContext({prompt_context})` to retain validated plain text for the first new question. Foreign, deleted, and unknown IDs fail without creating a replacement. Parent context cannot change identity, widget scope, routing, or authentication. Clear saved IDs on logout or account change. The first accepted question creates a conversation and emits `zaq:conversation` with its ID; opening the widget alone creates none.

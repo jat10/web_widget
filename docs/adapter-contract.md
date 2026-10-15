@@ -43,6 +43,9 @@ Generic hosts register `WebWidget.HostAdapter`. Its public callbacks are:
 `build_runtime_specs(config, hooks) -> {:ok, {state_spec_or_nil, listeners}}`,
 `ingress_status(config, opts \\ []) -> {:ok, channel_status_map}`, and
 `installation(config_or_id, base_url, opts \\ []) -> {:ok, snippet}`.
+The optional sender enrichment callback is
+`fetch_profile(sender_id, %{channel_config_id: positive_integer}) -> {:ok, profile} | {:error, reason}`;
+see [verified sender profiles](#verified-sender-profiles).
 Construction errors are redacted. Infrastructure specs represent the shared
 singleton, never connector children. Runtime specs carry the independent connector
 supervisor; recovery remains inside that stable connector, not in host coordination.
@@ -578,6 +581,66 @@ origin. CSP `frame-ancestors`, exact parent source/origin checks and
 HTTP(S)-only stylesheet URL validation remain required. Settings remain
 separate from identity, and neither settings nor parent context can select a
 host topic, connector or internal agent.
+
+## Verified sender profiles
+
+The backend identity JWT may additionally contain `profile`, a closed object with
+`full_name`, `email`, and `phone`. It is covered by the existing HS256 signature,
+widget/user/issuer/audience checks, binding, expiry and revocation policy. No
+unsigned parent setting, init parameter, message or prompt context can override it.
+Missing/null/empty profiles preserve user-ID-only authentication. Invalid profiles
+reject the credential before binding; unknown fields reject rather than being copied.
+
+Fields are optional strings or null. Strings must be valid UTF-8, nonblank,
+already trimmed and free of ASCII control characters. `full_name` is at most 255
+bytes; `email` is at most 254 bytes, with one `@`, a dotted domain and no whitespace;
+`phone` is canonical international form (`+`, a nonzero leading digit, 7–15 digits
+total). Values are preserved, not case-folded or matched by the widget. Signing
+asserts the backend's profile provenance; it does not independently prove ownership
+of an email address or phone number. Backends must source these fields from their
+authenticated account records, not arbitrary request parameters.
+
+Authentication commits the verified snapshot to the existing connector runtime
+before returning a Session and before any `widget.init` sink invocation. Sink
+callbacks run in the caller, outside the runtime GenServer, so synchronous profile
+lookup from the sink does not self-deadlock. The host-only API is:
+
+```elixir
+WebWidget.HostAdapter.fetch_profile(sender_id, %{channel_config_id: connector_id})
+# {:ok, %{full_name: "Ada Example", email: "ada@example.com", phone: nil}}
+# {:error, :not_found} or {:error, :invalid_request}
+```
+
+Only the positive integer `channel_config_id` is read from the trusted scope map;
+extra keys are ignored and secrets are unnecessary. Results always have the three
+atom keys, with nil for missing fields. Lookup runs on the connector's runtime
+node; hosts must route it there just as they route connector operations. Snapshots
+are runtime-local, RAM-only enrichment, not durable identity records. Lookup
+rechecks the bound credential's authorization and current runtime/infrastructure
+generation. Missing, expired, revoked, conflicted or unavailable profiles return
+`:not_found`; malformed sender/scope inputs return `:invalid_request`. Never return
+JWTs, signing keys, claims, page IDs or session handles through this callback.
+
+For each connector/sender, the latest signed `iat` wins. A newer profile replaces
+the whole snapshot; omission/null/empty clears it. Older page reconnects cannot
+roll it back. Conflicting snapshots with the same second-resolution `iat` hide
+the profile until a strictly later-issued token arrives; authentication remains
+valid. Identical same-second snapshots may extend expiry. Failed authentication
+or cross-sender renewal does not change the snapshot. Expiry/revocation disables
+lookup immediately without waiting for browser cleanup; there is no fallback to
+an older snapshot. A minute cleanup removes expired profile data, retaining the
+issuance watermark until all older credentials must have expired. Runtime removal,
+replacement or infrastructure replacement discards the local snapshots. Fresh
+successful authentication populates the new runtime under its installed policy.
+
+ZAQ WebBridge delegates its existing `fetch_profile/2` callback using only this
+scoped map, maps `full_name` to `display_name`, and pins `channel_id` to the requested
+sender. Missing enrichment allows the legacy user-ID-only path. ZAQ's existing
+IdentityResolver enrichment and `People.find_or_create_from_channel/2` own email/
+phone matching and durable People records. No profile fields are added to Context,
+Incoming, web Message, host commands, browser responses or conversation metadata;
+the package introduces no compile-time ZAQ dependency. JWTs remain browser-carried
+signed credentials, not encrypted containers.
 
 ## Inbound communication: web_widget -> ZAQ
 

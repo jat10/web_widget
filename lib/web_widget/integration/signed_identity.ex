@@ -5,14 +5,15 @@ defmodule WebWidget.Integration.SignedIdentity do
   Configure `identity_verifier: :connector_key` in trusted integration options and
   `identity_issuer` / `identity_audience` in connector settings. Mint a fresh proof for each
   iframe connection using `sign/4` on the authenticated parent backend.
-  The third argument is a map containing only `:user_id`.
+  The third argument contains `:user_id` and an optional verified `:profile`
+  with `:full_name`, `:email`, and `:phone` fields supplied by the backend.
   Standard JWT claims bind issuer, audience, issue/expiry times
   and a random token ID. Use the raw connector key as the HMAC secret, without
   salt or Base64 decoding. Signed tokens provide integrity, not confidentiality.
   """
-  alias WebWidget.Integration.{BindingStore, InitClaims}
+  alias WebWidget.Integration.{BindingStore, InitClaims, VerifiedProfile}
 
-  @claim_keys ~w(widget_id user_id iss aud iat exp jti nbf)
+  @claim_keys ~w(widget_id user_id profile iss aud iat exp jti nbf)
   @max_proof_bytes 200_000
 
   def sign(key, widget_id, init, opts) do
@@ -23,8 +24,7 @@ defmodule WebWidget.Integration.SignedIdentity do
 
     ttl = Keyword.get(opts, :ttl, max_age)
 
-    with true <- is_map(init) and Map.keys(init) == [:user_id],
-         {:ok, init} <- InitClaims.normalize(init),
+    with {:ok, init, profile} <- signing_claims(init),
          true <-
            valid_key?(key) and is_integer(widget_id) and widget_id > 0 and
              is_integer(ttl) and ttl in 1..max_age and
@@ -38,6 +38,8 @@ defmodule WebWidget.Integration.SignedIdentity do
         "exp" => now + ttl,
         "jti" => Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
       }
+
+      claims = if profile, do: Map.put(claims, "profile", profile), else: claims
 
       {_metadata, token} =
         key
@@ -70,6 +72,7 @@ defmodule WebWidget.Integration.SignedIdentity do
            "jti" => nonce
          } <- claims,
          true <- Enum.all?(Map.keys(claims), &(&1 in @claim_keys)),
+         {:ok, profile} <- VerifiedProfile.normalize(Map.get(claims, "profile")),
          {:ok, init} <-
            InitClaims.normalize(%{user_id: sender}),
          true <- Map.get(scope, :expected_sender) in [nil, init.user_id],
@@ -96,7 +99,7 @@ defmodule WebWidget.Integration.SignedIdentity do
 
       result =
         if expiry > now,
-          do: claim_binding(binding, scope.page_id, now, sender, expiry, init),
+          do: claim_binding(binding, scope.page_id, now, sender, expiry, init, profile),
           else: revoked_error(binding)
 
       fenced_result(result, infrastructure.generation)
@@ -109,7 +112,15 @@ defmodule WebWidget.Integration.SignedIdentity do
 
   def verify(_, _, _, _, _), do: {:error, :unauthorized}
 
-  defp claim_binding(binding, page_id, now, sender, expiry, init) do
+  defp signing_claims(init) do
+    with true <- is_map(init) and Enum.all?(Map.keys(init), &(&1 in [:user_id, :profile])),
+         {:ok, profile} <- VerifiedProfile.normalize(Map.get(init, :profile)),
+         {:ok, init} <- InitClaims.normalize(Map.take(init, [:user_id])) do
+      {:ok, init, profile}
+    end
+  end
+
+  defp claim_binding(binding, page_id, now, sender, expiry, init, profile) do
     case BindingStore.claim(binding, page_id, now) do
       :ok ->
         {:ok,
@@ -117,6 +128,7 @@ defmodule WebWidget.Integration.SignedIdentity do
            sender_id: sender,
            expires_at: expiry,
            init: init,
+           profile: profile,
            binding_claims: binding,
            page_id: page_id
          }}

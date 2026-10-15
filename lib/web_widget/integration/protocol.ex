@@ -7,7 +7,7 @@ defmodule WebWidget.Integration.Protocol do
   command/acceptance/error shapes; browser response encoding belongs to LiveView.
   """
 
-  alias WebWidget.Integration.{InitClaims, Session}
+  alias WebWidget.Integration.{InitClaims, Session, VerifiedProfile}
 
   @enforce_keys [:hooks, :pubsub_server, :identity_verifier]
   defstruct @enforce_keys ++
@@ -86,6 +86,7 @@ defmodule WebWidget.Integration.Protocol do
          true <- identifier?(sender),
          true <- expected_sender in [nil, sender],
          true <- is_integer(expiry) and expiry > System.system_time(:second),
+         {:ok, profile} <- VerifiedProfile.normalize(Map.get(verified, :profile)),
          {:ok, init} <- InitClaims.normalize(%{user_id: String.trim(sender)}),
          true <- init.user_id == String.trim(sender) do
       {:ok,
@@ -96,6 +97,7 @@ defmodule WebWidget.Integration.Protocol do
            expires_at: expiry,
            refresh_lead_seconds: infrastructure.authentication[:refresh_lead_seconds],
            init: init,
+           profile: profile,
            binding_claims: Map.get(verified, :binding_claims),
            page_id: Map.get(verified, :page_id),
            runtime_ref: runtime_ref,

@@ -9,10 +9,28 @@ defmodule WebWidget.HostAdapter do
   Scope and presentation come from the resolved connector configuration, not hooks.
   """
 
-  alias WebWidget.{Configuration, Connector}
-  alias WebWidget.Integration.{HostStatus, Installation, Readiness}
+  alias WebWidget.{Configuration, Connector, Runtime}
+  alias WebWidget.Integration.{HostStatus, Installation, Readiness, SignedIdentity}
 
   @hooks [:message, :command, :context, :delivery, :response, :sink_mfa]
+
+  @doc """
+  Fetches the latest verified sender profile on the connector's runtime node.
+
+  Only `channel_config_id` is read from the trusted scope map. Returns an atom-keyed
+  map with `full_name`, `email`, and `phone` (missing fields are nil), or
+  `{:error, :not_found}` when no currently authorized profile exists. Hosts may
+  retain their user-ID-only fallback. No credential or browser input is accepted.
+  """
+  @spec fetch_profile(String.t(), map()) :: {:ok, map()} | {:error, :not_found | :invalid_request}
+  def fetch_profile(sender_id, %{channel_config_id: id})
+      when is_integer(id) and id > 0 and is_binary(sender_id) do
+    if SignedIdentity.valid_identifier?(sender_id),
+      do: Runtime.fetch_profile(Integer.to_string(id), sender_id),
+      else: {:error, :invalid_request}
+  end
+
+  def fetch_profile(_, _), do: {:error, :invalid_request}
 
   @spec infrastructure_child_specs(keyword()) ::
           {:ok, [Supervisor.child_spec()]} | {:error, term()}
