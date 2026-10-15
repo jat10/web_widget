@@ -4,19 +4,55 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { transformWithEsbuild } from "vite";
+import { AssistantRuntimeProvider, ThreadPrimitive, useAuiState, useExternalStoreRuntime } from "@assistant-ui/react";
 
 // Exercise the real presentation component using the existing TSX build tooling.
 const source = await readFile(new URL("../react-components/working-indicator.tsx", import.meta.url), "utf8");
 const { code } = await transformWithEsbuild(source, "working-indicator.tsx", { jsx: "automatic" });
-const compiled = code.replaceAll('"react/jsx-runtime"', JSON.stringify(import.meta.resolve("react/jsx-runtime")));
+const compiled = ["react/jsx-runtime", "@assistant-ui/react"].reduce(
+  (source, name) => source.replaceAll(JSON.stringify(name), JSON.stringify(import.meta.resolve(name))), code);
 const { ConversationProgress, WorkingIndicator } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
 const label = "Préparation de votre réponse";
-const render = (isTyping, messages = []) => renderToStaticMarkup(createElement(ConversationProgress, { isTyping, messages, label }));
+const render = (isTyping, messages = []) => renderToStaticMarkup(createElement(RuntimeConversation, { isTyping, messages, isRunning: false }));
 const history = Object.freeze([
   Object.freeze({ id: "saved-user", role: "user", status: "complete", content: "Question" }),
   Object.freeze({ id: "saved-answer", role: "assistant", status: "complete", content: "Answer" }),
 ]);
+
+function RuntimeIndicator() {
+  const running = useAuiState(state => state.message.status?.type === "running");
+  return running ? createElement(WorkingIndicator, { label: "Existing runtime indicator" }) : null;
+}
+
+function RuntimeConversation({ isTyping, messages, isRunning }) {
+  const runtime = useExternalStoreRuntime({
+    messages,
+    isRunning,
+    convertMessage: message => ({
+      id: message.id,
+      role: message.role,
+      content: message.content ?? "",
+      ...(message.role === "assistant" && {
+        status: message.status === "running" ? { type: "running" }
+          : message.status === "failed" ? { type: "incomplete", reason: "error", error: message.error }
+          : { type: "complete", reason: "stop" },
+      }),
+    }),
+    onNew: async () => {},
+  });
+  return createElement(AssistantRuntimeProvider, { runtime },
+    createElement(ThreadPrimitive.Messages, { components: { UserMessage: () => null, AssistantMessage: RuntimeIndicator } }),
+    createElement(ConversationProgress, { isTyping, label }));
+}
+
+test("real assistant-ui optimistic rows suppress the fallback during local submission", () => {
+  const messages = [{ id: "local-user", role: "user", content: "Hello" }];
+  const html = renderToStaticMarkup(createElement(RuntimeConversation, { isTyping: true, isRunning: true, messages }));
+  assert.equal((html.match(/class="zaq-working"/g) || []).length, 1);
+  assert.match(html, /Existing runtime indicator/);
+  assert.doesNotMatch(html, /Préparation de votre réponse/);
+});
 
 test("active recovery without an assistant create uses the existing localized working indicator", () => {
   for (const messages of [[], history]) {
@@ -35,7 +71,10 @@ test("real create, full-body edit, or activity takes over without a duplicate in
     { id: "live", role: "assistant", status: "running", content: "Full snapshot" },
     { id: "live", role: "assistant", status: "running", content: "", steps: [{ id: "activity", state: "updated" }] },
   ]) {
-    assert.equal(render(true, [...history, message]), "");
+    const html = render(true, [...history, message]);
+    assert.equal((html.match(/class="zaq-working"/g) || []).length, 1);
+    assert.match(html, /Existing runtime indicator/);
+    assert.doesNotMatch(html, /Préparation de votre réponse/);
   }
 });
 
