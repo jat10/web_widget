@@ -78,7 +78,8 @@ defmodule WebWidget.E2ESharedHost do
         case saved do
           %{id: ^conversation, messages: messages} ->
             if type == :conversation_init,
-              do: host.response(request, :widget_initialized, conversation, %{created: false}),
+              do: %{response: host.response(request, :widget_initialized, conversation, %{created: false}),
+                delivery_binding: host.delivery(context)},
               else: host.response(request, :conversation_history, conversation, %{messages: messages})
           _ -> host.response(request, :error, conversation, %{code: :conversation_not_found})
         end
@@ -134,13 +135,19 @@ defmodule WebWidget.E2ESharedHost do
   end
 
   defp held_history(request, held) do
+    user = %{message_id: "held-user", position: 1, role: "user", content: "held stream", provider_sent_at: nil}
+    assistant = %{message_id: "held-assistant", position: 2, role: "assistant", content: "**Finished**", provider_sent_at: nil}
+    running = held.status == :running
+
+    if running do
+      # Model the next full-body live edit racing history, not an unfinished persisted row.
+      WebWidget.TestIntegration.ChatHost.publish(held.context,
+        %{held.stream | type: :message_edit, payload: %{body: "**Partial**", user_message_id: "held-user"}})
+    end
+
     WebWidget.TestIntegration.ChatHost.response(request, :conversation_history,
-      request.conversation_id, %{messages: [
-        %{message_id: "held-user", position: 1, role: "user", content: "held stream", provider_sent_at: nil},
-        %{message_id: "held-assistant", position: 2, role: "assistant",
-          content: if(held.status == :running, do: "**Partial**", else: "**Finished**"),
-          provider_sent_at: nil}
-      ]})
+      request.conversation_id, %{processing: if(running, do: :active, else: :idle),
+        messages: if(running, do: [user], else: [user, assistant])})
   end
 
   def release_stream(user_id) do
@@ -153,7 +160,8 @@ defmodule WebWidget.E2ESharedHost do
     end)
     if held do
       WebWidget.TestIntegration.ChatHost.publish(held.context,
-        %{held.stream | type: :message_complete, payload: %{body: "**Finished**"}})
+        %{held.stream | type: :message_complete, payload: %{body: "**Finished**",
+          assistant_message_id: "held-assistant", user_message_id: "held-user"}})
     end
     held != nil
   end

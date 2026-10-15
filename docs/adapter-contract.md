@@ -506,7 +506,7 @@ is independent from authentication renewal. A message with unknown outcome
 is never automatically resent.
 
 Recovery retires the old Chat's process/topic registrations, runtime monitor,
-and expiry timer before opening its replacement on the same page-stable topics.
+and expiry timer before opening its replacement on the host-authorized recipient topic.
 Phoenix PubSub registrations are not reference-counted Chat handles: closing an
 old Chat after subscribing its replacement would remove the replacement too.
 Successful recovery reauthorizes the selected conversation and loads history
@@ -657,8 +657,10 @@ is a routing selector, not authority to select an internal agent. Do not send
 capabilities, supplied history, actors, internal IDs or dispatch choices in messages.
 Shared constructors validate the definitive fields and constraints.
 
-Build Delivery for `consumer: :widget`, trusted integer configuration ID and an
-authorized session topic, with all seven mappings:
+ZAQ resolves the verified sender and connector into a Person. Only the host issues
+the private Delivery descriptor for `consumer: :widget`, the trusted integer
+configuration ID and its normalized `web_widget:recipient:<connector>:<person>`
+topic, with all seven mappings:
 
 ```elixir
 %{
@@ -673,7 +675,9 @@ authorized session topic, with all seven mappings:
 ```
 
 Build Context with nil actor, `consumer: :widget`, verified `sender_id`, integer
-`channel_config_id` and Delivery. Nil actor grants no capability. Do not supply
+`channel_config_id` and the host-issued Delivery unchanged. Bootstrap initialization
+uses nil Delivery; a subsequent initialization may carry the existing descriptor.
+Nil actor grants no capability. Do not supply
 BO bypasses, agent selection, history or content-filter overrides.
 
 Invoke the published config-bound sink with its argument prefix:
@@ -694,6 +698,16 @@ it, its bound config, constructor modules or Context.
 | Async message accepted | `{:ok, Response}` creation/status receipt; no assistant answer is promised |
 | Sync message | One status acknowledgement for a no-answer submission, or one terminal Response directly; no duplicate live terminal |
 | Failure before acceptance | May return `{:error, reason}` |
+
+Successful `:conversation_init` is the one private command-envelope exception:
+`%{response: existing_public_response, delivery_binding: host_delivery}`. Unwrap it
+only server-side, validate the response and subscription fields, and retain the
+opaque host descriptor in Session. Its conversation/message IDs are nil and it
+remains stable across selections. Neither the descriptor, its topic nor Person ID
+may enter public Response.payload, LiveView props or parent postMessage. The widget
+does not derive a destination from sender ID or interpret the topic's Person ID.
+Missing/invalid bindings and initialization/subscription failures fail closed with
+no page-topic, sender-topic, broad-topic or random-topic fallback.
 
 Do not wrap all responses as `{:ok, map}` or reduce accepted receipts to `:ok`.
 Distinguish valid semantic errors from success. Keep request and conversation
@@ -720,8 +734,10 @@ without replacement creation.
 The first-question sequence is:
 
 ```text
-verify parent session -> readiness (conversation_id nil)
-  -> subscribe to authorized session destination
+authenticate parent session -> host initialize -> bind private Delivery
+  -> subscribe to host-authorized recipient destination
+  -> authorized selected-conversation history/status (when resuming)
+  -> enable sends (conversation_id nil for a fresh widget)
   -> submit first async question with retained optional prompt_context
   <- accepted conversation_created receipt with new conversation ID
   <- live typing / assistant events on the pre-existing subscription
@@ -740,39 +756,41 @@ bound. If dispatch moves to another process, explicitly buffer this race.
 
 ## Outbound communication: ZAQ -> web_widget
 
-Subscribe on the configured host PubSub server before the first question using
-a server-derived destination scoped to the verified root `socket.id`. It must
-exist without a conversation ID. Renewal and ordinary reconnect reuse that
-page's destination after verification; an iframe reload receives a new root
-socket ID and destination. The topic is not an authorization credential: verify
-the session and correlate every response before applying it. Integrations
-without a verified page ID retain a fresh random destination per session.
+After authenticated host initialization, subscribe on the configured host PubSub
+server using the returned private binding, before history or the first question.
+Every tab/page initializes independently; the same connector/Person receives the
+same destination, including after full reload. This replaces page-isolated delivery.
+Page/JWT binding, expiry, renewal, revocation and runtime-generation authorization
+remain independent security controls. A topic is not an authorization credential.
 
 ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
 single ingress and encode once into widget UI events; do not republish into the
 old broad conversation topic. ZAQ keeps no LiveView PID. The widget knows only the
-public session destination, submission correlation and assistant transport IDs;
+private recipient destination, local submission correlation and assistant transport IDs;
 execution, root/child/receipt IDs, queued/steer/native runtime states and execution
 management never enter widget state or UI events.
 
-Check protocol version, trusted event mapping, an accepted submission request ID,
-the selected authorized conversation and assistant transport message ID before
-applying message events. Create establishes each assistant ID under its original
-request; edit/step/terminal must match that binding. Multiple streams can belong to
-one submission or different submissions. Receipt correlation never chooses an
-assistant ID. Widget ID and sender come from
-the session. Reject stale/foreign responses; unsolicited events cannot switch
-conversations. UI output retains the `response.*` namespace.
-After a connected remount, the accepted request IDs from the former LiveView are
-gone. A valid terminal event for the already authorized conversation may trigger
-a fresh authorized history request; its payload is never applied as a stream
-event without the original request correlation.
-Restored terminal hints are deduplicated by assistant transport ID, not by a
-single chat-wide terminal flag. Each independent previous-page terminal can refresh
-authorized history. If a currently correlated assistant row is still streaming,
-defer the snapshot refresh until those displayed rows are terminal so history cannot
-overwrite live deltas. This is presentation recovery only, not execution waiting or
-submission gating; a submission receipt still settles immediately.
+Check protocol version, trusted event mapping, the selected authorized conversation
+and assistant transport message/request IDs before applying message events. Local
+accepted-request membership is not required: authorized host-topic events may come
+from an old page or another tab. Create, first full-body edit, or first terminal
+establishes an assistant binding. Later events must retain that request and any
+persisted references; steps alone never invent a row. Multiple independent streams
+may share a request. Terminal states never regress, and duplicate/late events are
+ignored per message. Unsolicited events cannot select or switch conversations.
+Receipts/submission errors settle only the local direct submission callback, never
+another tab's send. UI output retains the `response.*` namespace.
+
+Subscribe before history so concurrent events queue in the LiveView mailbox.
+Reconcile them after the authorized snapshot using persisted assistant/user refs,
+including refs first learned after create. Existing canonical history rows suppress
+duplicate live rows and stale snapshots. Do not replace a newer terminal or a live
+independent stream with another history refresh. Missed-create full-body events
+need no separate stream snapshot store. Missed terminals are recovered by authorized
+history on reconnect; old-request terminals arriving later apply directly.
+Canonical assistant history rows are finalized, never unfinished stream snapshots.
+An active history response may therefore contain only the persisted user row while
+the assistant's next full-body edit or terminal arrives through the subscription.
 
 ## Outbound payloads
 
@@ -812,7 +830,8 @@ The assistant transport ID is stable across create/edit/step/terminal and may di
 from persisted assistant/user message references. Retain those references separately.
 Never expose BO traces, private reasoning, raw tool calls or agent metadata.
 
-For each independent assistant stream a create precedes edits/steps and one terminal.
+The host normally emits create before edits/steps and one terminal per stream;
+the widget can recover from a missed create using a full-body edit or terminal.
 Interleaving across streams is allowed. Update steps by step ID; terminal message/step
 states cannot regress. Ignore duplicate creates, duplicate/late terminals and late
 edits/steps per message, not per chat. `:typing` is optional public presentation only;
@@ -820,7 +839,7 @@ it neither acknowledges submission nor promises an assistant. Aggregate correlat
 typing hints without letting another request's inactive hint clear current progress.
 Typing after a request's known streams have all terminated is ignored. No-answer
 acceptance needs no typing or terminal. A later independent create can still carry
-the original accepted request ID.
+the original host request ID, without a local submission.
 
 ## Conversation ownership and history
 
@@ -842,6 +861,15 @@ conversation/transcript identifiers. Render oldest to newest, normalizing public
 roles and timestamps. Never invent timestamps for untimestamped history. Preserve
 message creation times during streaming; format dates in the selected language and
 browser time zone.
+
+The same public history response adds `payload.processing: :active | :idle | :unknown`.
+The host performs its authorized native-runtime lookup; no native IDs, PIDs or
+execution records enter the widget. `:active` shows the existing processing indicator
+without inventing an assistant, pending submission or per-send spinner. Terminal
+events or inactive typing clear recovered progress; independent active typing hints
+remain aggregated. `:unknown` is uncertainty, not completion or cancellation, and
+does not manufacture a terminal. No-answer/steering receipts retain their ordinary
+submission-only semantics. No additional command or browser connection is introduced.
 
 PubSub offers no durable replay or exactly-once execution. A display timeout concerns
 only an outstanding transport submission receipt, never a promised assistant or an

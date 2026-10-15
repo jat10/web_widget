@@ -29,10 +29,13 @@ defmodule WebWidget.TestIntegration.ChatHost do
         response(request, :error, "history-failure", %{code: :unavailable})
 
       %{type: :conversation_init, conversation_id: conversation} ->
-        response(request, :widget_initialized, conversation, %{created: false})
+        initialize(request, context, conversation)
 
       %{type: :conversation_history, conversation_id: conversation} ->
+        for event <- Process.get(:chat_host_history_events, []), do: publish(context, event)
+
         response(request, :conversation_history, conversation, %{
+          processing: Process.get(:chat_host_processing, :unknown),
           messages: [
             %{
               message_id: "persisted-user",
@@ -59,6 +62,34 @@ defmodule WebWidget.TestIntegration.ChatHost do
 
       %{content: _} ->
         message(request, context)
+    end
+  end
+
+  defp initialize(request, context, conversation) do
+    binding = delivery(context)
+    public = response(request, :widget_initialized, conversation, %{created: false})
+
+    case Process.get(:chat_host_binding, :valid) do
+      :missing ->
+        public
+
+      :invalid ->
+        %{response: public, delivery_binding: %{binding | channel_config_id: -1}}
+
+      :unsubscribable ->
+        %{response: public, delivery_binding: %{binding | topic: <<255>>}}
+
+      :changed ->
+        %{response: public, delivery_binding: %{binding | topic: binding.topic <> ":changed"}}
+
+      :events ->
+        %{response: public, delivery_binding: %{binding | events: %{}}}
+
+      :version ->
+        %{response: public, delivery_binding: %{binding | protocol_version: 1}}
+
+      :valid ->
+        %{response: public, delivery_binding: binding}
     end
   end
 
@@ -147,6 +178,27 @@ defmodule WebWidget.TestIntegration.ChatHost do
       {:web_response, event, response}
     )
   end
+
+  def delivery(context) do
+    %{
+      protocol_version: 2,
+      consumer: :widget,
+      channel_config_id: context.channel_config_id,
+      topic: "web_widget:recipient:#{context.channel_config_id}:#{person(context.sender_id)}",
+      events: %{
+        typing: "response.typing",
+        message_create: "response.message.create",
+        message_edit: "response.message.edit",
+        message_step: "response.message.step",
+        message_complete: "response.message.complete",
+        message_failed: "response.message.failed",
+        error: "response.error"
+      }
+    }
+  end
+
+  # Deliberately not the sender ID: only this host fixture resolves recipients.
+  defp person(sender), do: Base.url_encode64(:crypto.hash(:sha256, sender), padding: false)
 
   def response(request, type, conversation, payload),
     do: %{

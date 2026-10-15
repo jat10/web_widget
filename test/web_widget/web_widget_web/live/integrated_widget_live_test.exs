@@ -250,9 +250,12 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       assert :sys.get_state(view.pid).socket.assigns.chat == nil
       assert {:monitors, ^before} = Process.info(view.pid, :monitors)
 
-      refute Enum.any?(Registry.lookup(WebWidget.PubSub, context.delivery.topic), fn {pid, _} ->
-               pid == view.pid
-             end)
+      refute Enum.any?(
+               Registry.lookup(WebWidget.PubSub, ChatHost.delivery(context).topic),
+               fn {pid, _} ->
+                 pid == view.pid
+               end
+             )
 
       refute Enum.any?(
                Registry.keys(WebWidget.PubSub, view.pid),
@@ -278,6 +281,293 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     assert_receive {:shared_request, %{content: "instant", conversation_id: "conversation-1"}, _,
                     _}
+  end
+
+  test "new pages bind the same host recipient and old terminals reach both tabs", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "stream"} = request, context, _}
+
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, refreshed, _} = live(conn, "/widget/#{ctx.id}")
+    first = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    second = :sys.get_state(refreshed.pid).socket.assigns.chat
+    refute first.session.page_id == second.session.page_id
+    assert first.session.topic == second.session.topic
+    assert second.session.delivery_binding == context.delivery
+    refute render(refreshed) =~ second.session.topic
+    refute render(refreshed) =~ "delivery_binding"
+
+    terminal =
+      ChatHost.response(request, :message_complete, "conversation-1", %{
+        body: "Old request finished"
+      })
+
+    ChatHost.publish(context, terminal)
+    assert render(refreshed) =~ "Old request finished"
+    assert render(ctx.view) =~ "Old request finished"
+    ChatHost.publish(context, %{terminal | type: :message_edit, payload: %{body: "LATE"}})
+    ChatHost.publish(context, terminal)
+    messages = :sys.get_state(refreshed.pid).socket.assigns.chat.state.messages
+    assert Enum.count(messages, &(&1.id == terminal.message_id)) == 1
+    refute render(refreshed) =~ "LATE"
+  end
+
+  test "missing or invalid private binding fails closed and releases resources", ctx do
+    for failure <- [:missing, :invalid, :unsubscribable, :events, :version] do
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.put(:chat_host_binding, failure)
+        state
+      end)
+
+      render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{ok: false})
+      assert :sys.get_state(ctx.view.pid).socket.assigns.chat == nil
+      assert Registry.keys(WebWidget.PubSub, ctx.view.pid) == []
+      render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+      refute_receive {:shared_request, %{content: "blocked"}, _, _}
+    end
+  end
+
+  test "a changed host binding cannot replace an initialized session during selection", ctx do
+    init(ctx)
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_binding, :changed)
+      state
+    end)
+
+    render_event(ctx.view, "widget.context.update", %{conversation_id: "conversation-1"}, %{
+      ok: false
+    })
+
+    assert :sys.get_state(ctx.view.pid).socket.assigns.chat == before
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+  end
+
+  test "recovered processing is indication only and a missed-create edit binds the stream", ctx do
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_processing, :active)
+      state
+    end)
+
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert chat.state.typing
+    assert length(chat.state.messages) == 2
+    assert chat.pending_submission == nil
+    assert chat.streams == %{}
+
+    response =
+      ChatHost.response(%{request_id: "another-tab"}, :message_edit, "conversation-1", %{
+        body: "Full snapshot"
+      })
+
+    ChatHost.publish(context, response)
+    assert render(ctx.view) =~ "Full snapshot"
+    ChatHost.publish(context, %{response | type: :message_complete, payload: %{body: "Finished"}})
+    assert render(ctx.view) =~ "Finished"
+    refute :sys.get_state(ctx.view.pid).socket.assigns.chat.state.typing
+  end
+
+  test "persisted assistant references deduplicate history and late live snapshots", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+
+    response =
+      ChatHost.response(%{request_id: "old-request"}, :message_complete, "conversation-1", %{
+        body: "Saved answer",
+        assistant_message_id: "persisted-assistant",
+        user_message_id: "persisted-user"
+      })
+
+    ChatHost.publish(context, response)
+
+    ChatHost.publish(context, %{
+      response
+      | type: :message_create,
+        payload: %{body: "STALE", assistant_message_id: "persisted-assistant"}
+    })
+
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert Enum.count(chat.state.messages, &(&1.role == "assistant")) == 1
+    refute render(ctx.view) =~ "STALE"
+  end
+
+  test "subscribed history bootstrap reconciles queued old snapshots without duplicate rows",
+       ctx do
+    create =
+      ChatHost.response(%{request_id: "previous-page"}, :message_create, "conversation-1", %{
+        body: "STALE",
+        assistant_message_id: "persisted-assistant",
+        user_message_id: "persisted-user"
+      })
+
+    terminal = %{
+      create
+      | type: :message_complete,
+        payload: %{
+          body: "Saved answer",
+          assistant_message_id: "persisted-assistant",
+          user_message_id: "persisted-user"
+        }
+    }
+
+    live_terminal = %{
+      terminal
+      | request_id: "another-request",
+        message_id: "another-answer",
+        payload: %{body: "Newer terminal"}
+    }
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_processing, :active)
+      Process.put(:chat_host_history_events, [create, terminal, live_terminal])
+      state
+    end)
+
+    init(ctx, %{conversation_id: "conversation-1"})
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert Enum.count(chat.state.messages, &(&1.id == "persisted-assistant")) == 1
+
+    assert Enum.any?(
+             chat.state.messages,
+             &(&1.content == "Newer terminal" and &1.status == "complete")
+           )
+
+    refute Enum.any?(chat.state.messages, &(&1.content == "STALE"))
+    refute chat.state.typing
+  end
+
+  test "persisted references arriving after create collapse history/live duplicates", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+
+    create =
+      ChatHost.response(%{request_id: "old"}, :message_create, "conversation-1", %{body: ""})
+
+    ChatHost.publish(context, create)
+    _ = render(ctx.view)
+
+    terminal = %{
+      create
+      | type: :message_complete,
+        payload: %{
+          body: "Saved answer",
+          assistant_message_id: "persisted-assistant",
+          user_message_id: "persisted-user"
+        }
+    }
+
+    ChatHost.publish(context, terminal)
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert Enum.count(chat.state.messages, &(&1.role == "assistant")) == 1
+    assert Enum.count(chat.state.messages, &(&1.role == "user")) == 1
+    assert chat.streams[create.message_id].status == :terminal
+    ChatHost.publish(context, %{terminal | request_id: "wrong", payload: %{body: "WRONG"}})
+    refute render(ctx.view) =~ "WRONG"
+  end
+
+  test "inactive typing clears recovery progress; first failed terminal is safe", ctx do
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_processing, :active)
+      state
+    end)
+
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+    typing = ChatHost.response(%{request_id: "old"}, :typing, "conversation-1", %{active: false})
+    ChatHost.publish(context, typing)
+    refute :sys.get_state(ctx.view.pid).socket.assigns.chat.state.typing
+
+    failed =
+      ChatHost.response(%{request_id: "other-tab"}, :message_failed, "conversation-1", %{
+        body: "Public recovery",
+        error: "PRIVATE_TRACE"
+      })
+
+    ChatHost.publish(context, failed)
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    assert Enum.any?(
+             chat.state.messages,
+             &(&1.id == failed.message_id and &1.status == "failed" and
+                 &1.error == "Public recovery")
+           )
+
+    refute render(ctx.view) =~ "PRIVATE_TRACE"
+  end
+
+  test "unknown processing does not invent an assistant or a submission spinner", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert chat.streams == %{}
+    assert length(chat.state.messages) == 2
+    refute chat.state.typing
+    refute chat.blocked
+    assert chat.pending_submission == nil
+  end
+
+  test "other-tab receipts and errors cannot settle or block local submissions", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      put_in(state.socket.assigns.chat.pending_submission, "local-request")
+    end)
+
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    for type <- [:status, :conversation_created, :error] do
+      response =
+        ChatHost.response(%{request_id: "another-tab"}, type, "conversation-1", %{
+          accepted: true,
+          created: false,
+          code: :timeout,
+          outcome: :unknown
+        })
+
+      send(
+        ctx.view.pid,
+        {:web_response, if(type == :error, do: "response.error", else: "response.message.create"),
+         response}
+      )
+    end
+
+    assert :sys.get_state(ctx.view.pid).socket.assigns.chat == before
+    assert before.pending_submission == "local-request"
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      put_in(state.socket.assigns.chat.pending_submission, nil)
+    end)
+
+    render_event(ctx.view, "widget.submit", %{text: "no answer"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "no answer"}, ^context, _}
+  end
+
+  test "revocation rejects old-request events on the stable recipient before broadcast cleanup",
+       ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+    now = System.system_time(:second)
+
+    assert {:ok, _, true} =
+             BindingStore.revoke_user("parent", ctx.id, "visitor", Ecto.UUID.generate(), now, now)
+
+    terminal =
+      ChatHost.response(%{request_id: "previous-page"}, :message_complete, "conversation-1", %{
+        body: "REVOKED ANSWER"
+      })
+
+    ChatHost.publish(context, terminal)
+    assert_push_event(ctx.view, "widget.authentication.required", %{reason: "backend_revoked"})
+    refute render(ctx.view) =~ "REVOKED ANSWER"
   end
 
   test "rejects absent proof, claimed-user mismatch and foreign resume", ctx do
@@ -336,7 +626,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     render_event(ctx.view, "widget.submit", %{text: "instant"}, %{ok: true})
   end
 
-  test "a restored conversation refreshes authorized history on its terminal event", ctx do
+  test "a restored conversation applies an authorized old-request terminal directly", ctx do
     conn =
       put_connect_params(ctx.conn, %{
         "identity_token" => token(ctx),
@@ -348,7 +638,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     terminal =
       ChatHost.response(%{request_id: "resumed-request"}, :message_complete, "conversation-1", %{
-        body: "Untrusted terminal body"
+        body: "Authorized terminal body"
       })
 
     ChatHost.publish(context, %{terminal | conversation_id: "foreign"})
@@ -358,11 +648,12 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     ChatHost.publish(context, terminal)
 
-    assert_receive {:shared_request,
-                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+    assert render(view) =~ "Authorized terminal body"
 
-    assert render(view) =~ "Saved answer"
-    refute render(view) =~ "Untrusted terminal body"
+    assert Enum.any?(
+             :sys.get_state(view.pid).socket.assigns.chat.state.messages,
+             &(&1.content == "Saved answer")
+           )
 
     ChatHost.publish(context, terminal)
     refute_receive {:shared_request, %{type: :conversation_history}, _, _}
@@ -383,7 +674,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     assert render(ctx.view) =~ "Saved answer"
   end
 
-  test "restored independent terminals each refresh history once without applying their bodies",
+  test "restored independent terminals each bind once and reject late edits",
        ctx do
     init(ctx, %{conversation_id: "conversation-1"})
     assert_receive {:shared_request, %{type: :conversation_history}, context, _}
@@ -391,22 +682,24 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     for message <- ["old-one", "old-two"] do
       terminal =
         ChatHost.response(%{request_id: "previous-page"}, :message_complete, "conversation-1", %{
-          body: "UNTRUSTED"
+          body: "Recovered answer"
         })
 
       terminal = %{terminal | message_id: message}
       ChatHost.publish(context, terminal)
-      assert_receive {:shared_request, %{type: :conversation_history}, _, _}
+      assert render(ctx.view) =~ "Recovered answer"
       ChatHost.publish(context, terminal)
+      ChatHost.publish(context, %{terminal | type: :message_edit, payload: %{body: "LATE"}})
       refute_receive {:shared_request, %{type: :conversation_history}, _, _}
     end
 
     chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
-    assert MapSet.size(chat.restored_terminals) == 2
-    refute Enum.any?(chat.state.messages, &(&1.content == "UNTRUSTED"))
+    assert map_size(chat.streams) == 2
+    assert Enum.count(chat.state.messages, &(&1.content == "Recovered answer")) == 2
+    refute Enum.any?(chat.state.messages, &(&1.content == "LATE"))
   end
 
-  test "history recovery never overwrites a current independent live stream", ctx do
+  test "an old-request terminal never overwrites a current independent live stream", ctx do
     init(ctx, %{conversation_id: "conversation-1"})
     assert_receive {:shared_request, %{type: :conversation_history}, _, _}
     render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})
@@ -414,13 +707,18 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
 
     terminal =
       ChatHost.response(%{request_id: "previous-page"}, :message_complete, "conversation-1", %{
-        body: "UNTRUSTED"
+        body: "Recovered answer"
       })
 
     ChatHost.publish(context, terminal)
     chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
-    assert chat.history_refresh_pending
-    assert List.last(chat.state.messages).status == "running"
+
+    assert Enum.any?(
+             chat.state.messages,
+             &(&1.id == "assistant-" <> request.request_id and &1.status == "running")
+           )
+
+    assert Enum.any?(chat.state.messages, &(&1.content == "Recovered answer"))
     refute_receive {:shared_request, %{type: :conversation_history}, _, _}
 
     ChatHost.publish(
@@ -428,9 +726,9 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
       ChatHost.response(request, :message_complete, "conversation-1", %{body: "Current final"})
     )
 
-    assert_receive {:shared_request, %{type: :conversation_history}, _, _}
     chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
-    refute chat.history_refresh_pending
+    refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+    assert Enum.any?(chat.state.messages, &(&1.content == "Current final"))
     assert Enum.any?(chat.state.messages, &(&1.content == "Saved answer"))
   end
 
@@ -764,8 +1062,7 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     for forged <- [
           %{one | conversation_id: "foreign", payload: %{body: "INJECTED"}},
           %{one | request_id: second.request_id, payload: %{body: "INJECTED"}},
-          %{one | protocol_version: 1, payload: %{body: "INJECTED"}},
-          %{one | message_id: "before-create", payload: %{body: "INJECTED"}}
+          %{one | protocol_version: 1, payload: %{body: "INJECTED"}}
         ] do
       ChatHost.publish(context, forged)
     end
@@ -899,6 +1196,27 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     )
 
     refute :sys.get_state(ctx.view.pid).socket.assigns.chat.state.typing
+  end
+
+  test "historical duplicate terminals preserve another running stream under the same request",
+       ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    render_event(ctx.view, "widget.submit", %{text: "stream"}, %{ok: true})
+    assert_receive {:shared_request, %{content: "stream"} = request, context, _}
+
+    historical =
+      ChatHost.response(request, :message_complete, "conversation-1", %{
+        body: "Saved answer",
+        assistant_message_id: "persisted-assistant"
+      })
+
+    historical = %{historical | message_id: "historical-transport"}
+    ChatHost.publish(context, historical)
+    ChatHost.publish(context, historical)
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert chat.state.typing
+    assert chat.streams["assistant-" <> request.request_id].status == :running
+    assert Enum.count(chat.state.messages, &(&1.content == "Saved answer")) == 1
   end
 
   defp init(ctx, params \\ %{}) do

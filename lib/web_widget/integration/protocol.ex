@@ -102,7 +102,7 @@ defmodule WebWidget.Integration.Protocol do
            page_id: Map.get(verified, :page_id),
            runtime_ref: runtime_ref,
            owner: self(),
-           topic: session_topic(Map.get(verified, :page_id))
+           topic: nil
          })
        )}
     else
@@ -116,27 +116,42 @@ defmodule WebWidget.Integration.Protocol do
     _, _ -> {:error, :unauthorized}
   end
 
-  defp session_topic(page_id) when is_binary(page_id) and byte_size(page_id) > 0,
-    do: "web_widget:session:" <> page_id
+  def bind_delivery(
+        session,
+        %{
+          protocol_version: 2,
+          consumer: :widget,
+          channel_config_id: id,
+          topic: topic,
+          events: events
+        } = binding
+      ) do
+    if id == session.channel_config_id and valid_topic?(topic) and valid_events?(events) and
+         (is_nil(session.delivery_binding) or session.delivery_binding == binding) do
+      {:ok, %{session | topic: topic, delivery_binding: binding}}
+    else
+      {:error, :invalid_delivery_binding}
+    end
+  end
 
-  defp session_topic(_),
-    do:
-      "web_widget:session:" <>
-        Base.url_encode64(:crypto.strong_rand_bytes(32), padding: false)
+  def bind_delivery(_, _), do: {:error, :invalid_delivery_binding}
+
+  defp valid_topic?(topic) when is_binary(topic),
+    do: byte_size(topic) in 1..255 and String.valid?(topic) and String.trim(topic) == topic
+
+  defp valid_topic?(_), do: false
+
+  defp valid_events?(events) when is_map(events),
+    do: Enum.all?(@events, fn {key, value} -> Map.get(events, key) == value end)
+
+  defp valid_events?(_), do: false
 
   @doc false
   def dispatch(integration, event, session) do
     hooks = integration.hooks
 
     with {:ok, payload} <- payload(hooks, event),
-         {:ok, delivery} <-
-           hooks.delivery.new(%{
-             protocol_version: 2,
-             consumer: :widget,
-             channel_config_id: hooks.widget_id,
-             topic: session.topic,
-             events: @events
-           }),
+         {:ok, delivery} <- delivery(event, session),
          {:ok, context} <-
            hooks.context.new(nil,
              consumer: :widget,
@@ -152,6 +167,10 @@ defmodule WebWidget.Integration.Protocol do
   catch
     _, _ -> {:error, :unavailable}
   end
+
+  defp delivery(%{type: "widget.init"}, session), do: {:ok, session.delivery_binding}
+  defp delivery(_, %Session{delivery_binding: nil}), do: {:error, :delivery_binding_required}
+  defp delivery(_, session), do: {:ok, session.delivery_binding}
 
   defp profile_context(%Session{profile: nil}), do: nil
 

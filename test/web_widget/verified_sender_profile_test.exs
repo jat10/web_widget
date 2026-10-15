@@ -2,9 +2,9 @@ defmodule WebWidget.VerifiedSenderProfileTest do
   use ExUnit.Case, async: false
 
   alias WebWidget.Connector.RuntimeConfig
-  alias WebWidget.Integration.{BindingStore, SignedIdentity}
+  alias WebWidget.Integration.{BindingStore, Protocol, SignedIdentity}
   alias WebWidget.Runtime
-  alias WebWidget.TestIntegration.Host
+  alias WebWidget.TestIntegration.{ChatHost, Host}
 
   @profile %{full_name: "Ada Example", email: "ada@example.com", phone: "+33123456789"}
 
@@ -33,6 +33,7 @@ defmodule WebWidget.VerifiedSenderProfileTest do
       )
 
     assert {:ok, session} = authenticate(ctx, proof)
+    session = bind_delivery(session)
 
     for event <- events() do
       assert {:ok, :received} = Runtime.dispatch(event, session)
@@ -217,11 +218,25 @@ defmodule WebWidget.VerifiedSenderProfileTest do
   end
 
   defp assert_delivery(session, profile, event \\ hd(events())) do
+    session = bind_delivery(session)
     assert {:ok, :received} = Runtime.dispatch(event, session)
     assert_receive {:ingress, _payload, context}
     assert context.options.sender_id == session.sender_id
     assert context.options.channel_config_id == session.channel_config_id
     assert context.options.profile_context == envelope(session, profile)
+  end
+
+  defp bind_delivery(session) do
+    {:ok, session} =
+      Protocol.bind_delivery(
+        session,
+        ChatHost.delivery(%{
+          channel_config_id: session.channel_config_id,
+          sender_id: session.sender_id
+        })
+      )
+
+    session
   end
 
   defp assert_blocked(session) do

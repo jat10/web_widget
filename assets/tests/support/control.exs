@@ -94,7 +94,7 @@ defmodule WebWidget.E2EControl do
                 authentication_pending: assigns.authentication_pending,
                  conversation_id: chat.conversation_id,
                  pending_submission: chat.pending_submission, streams: chat.streams,
-                restore_on_terminal: chat.restore_on_terminal,
+                 recovered_processing: chat.recovered_processing,
                 response_subscribed: Enum.any?(Registry.lookup(server, topic), fn {p, _} -> p == pid end),
                 revocation_subscribed: Enum.any?(Registry.lookup(server, revocation_topic), fn {p, _} -> p == pid end),
                 state: inspect(chat.state)}]

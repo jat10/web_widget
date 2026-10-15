@@ -51,7 +51,24 @@ defmodule WebWidget.SharedProtocolSmokeTest do
         payload: %{created: false}
       })
 
-    response
+    {:ok, delivery} =
+      Delivery.new(%{
+        protocol_version: 2,
+        consumer: :widget,
+        channel_config_id: 42,
+        topic: "web_widget:recipient:42:fixture-person",
+        events: %{
+          typing: "response.typing",
+          message_create: "response.message.create",
+          message_edit: "response.message.edit",
+          message_step: "response.message.step",
+          message_complete: "response.message.complete",
+          message_failed: "response.message.failed",
+          error: "response.error"
+        }
+      })
+
+    %{response: response, delivery_binding: delivery}
   end
 
   def ingress(%{id: 42}, %Message{mode: :sync} = message,
@@ -182,8 +199,10 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     Host.await_runtime(config.id)
     assert {:ok, session} = Runtime.authenticate("42", :fixture_session)
 
-    assert %Response{type: :widget_initialized, conversation_id: nil} =
-             Runtime.dispatch(%{type: "widget.init", request_id: "init"}, session)
+    assert session.delivery_binding == nil
+
+    assert {:ok, %Response{type: :widget_initialized, conversation_id: nil}, session} =
+             Runtime.initialize(%{type: "widget.init", request_id: "init"}, session)
 
     for params <- [
           %{},
