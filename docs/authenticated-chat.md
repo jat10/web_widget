@@ -43,12 +43,12 @@ backend-sourced profile:
 
 The JWT claim is `profile` with those string-keyed fields. Never populate it from
 unverified browser input. Missing fields may be omitted or nil; user-ID-only tokens
-remain supported. The host retrieves the verified profile server-side through
-`WebWidget.HostAdapter.fetch_profile(sender_id, %{channel_config_id: connector_id})`
-on the runtime node, including during the initial sink call. See the
+remain supported. Init and message requests carry the verified profile in the
+trusted Context option `:profile_context`, bound to the authenticated sender and
+connector. No profile means nil. The host relays this opaque envelope to WebBridge
+for normalization and People enrichment; no runtime-local lookup is needed. See the
 [profile contract](adapter-contract.md#verified-sender-profiles) for validation,
-refresh ordering, revocation, and ZAQ's People enrichment boundary. Profile changes
-should use a strictly later `iat` second than the previous snapshot.
+session renewal, revocation, and ZAQ's People enrichment boundary.
 
 Expose a same-origin authenticated `GET /api/widget-token` on the embedding website. Return `{"identity_token":"<JWT>"}` and `Cache-Control: no-store`. The installation script can fetch it through `data-token-url="/api/widget-token"`. It puts the first token in the iframe URL fragment; the iframe removes the fragment before LiveView connects. The public parent API is `zaq.widget.connect()`. `zaq.widget.init({identity_token})` remains a deprecated direct-token alias; unsigned `user_id` works only in standalone mock fixtures.
 

@@ -181,8 +181,7 @@ defmodule WebWidget.Runtime do
            delivery_config(widget_id),
          {:ok, session} <-
            Protocol.authenticate(integration, proof, runtime_ref, page_id, expected_sender),
-         {:ok, _config} <- session_config(session),
-         :ok <- retain_profile(session) do
+         {:ok, _config} <- session_config(session) do
       {:ok, session}
     else
       {:error, :store_unavailable} -> {:error, :store_unavailable}
@@ -218,26 +217,6 @@ defmodule WebWidget.Runtime do
   end
 
   def renew(_, _), do: {:error, :unauthorized}
-
-  @doc false
-  def fetch_profile(widget_id, sender_id) do
-    with {:ok, entry, runtime_ref} <- call_widget(widget_id, {:fetch_profile, sender_id}),
-         true <- is_map(entry.profile),
-         :ok <- BindingStore.authorized?(entry.claims, entry.page_id),
-         {:ok, %{runtime_ref: ^runtime_ref}} <- delivery_config(widget_id) do
-      {:ok, entry.profile}
-    else
-      _ -> {:error, :not_found}
-    end
-  end
-
-  defp retain_profile(%Session{binding_claims: nil, profile: nil}), do: :ok
-
-  defp retain_profile(%Session{binding_claims: claims} = session) when is_map(claims) do
-    call_widget(session.widget_id, {:retain_profile, session})
-  end
-
-  defp retain_profile(_), do: {:error, :unauthorized}
 
   @doc "Dispatches an internal request using a verified, process-bound session."
   def dispatch(event, session) do
@@ -320,10 +299,6 @@ defmodule WebWidget.Runtime do
       |> Map.put(:runtime_ref, make_ref())
       |> Map.put(:infrastructure_generation, infrastructure.generation)
       |> Map.put(:infrastructure_monitor, Process.monitor(infrastructure.owner))
-      |> Map.put(:profiles, %{})
-      |> Map.put(:profile_retention, infrastructure.authentication[:token_ttl_seconds])
-
-    Process.send_after(self(), :prune_profiles, 60_000)
 
     Enum.reduce_while(config.widgets, {:ok, config}, fn widget, acc ->
       case Registry.register(
@@ -340,21 +315,6 @@ defmodule WebWidget.Runtime do
   @impl true
   def handle_info({:DOWN, ref, :process, _pid, _reason}, %{infrastructure_monitor: ref} = config),
     do: {:stop, :shutdown, config}
-
-  def handle_info(:prune_profiles, config) do
-    now = System.system_time(:second)
-
-    profiles =
-      config.profiles
-      |> Enum.reject(fn {_sender, entry} -> entry.retain_until <= now end)
-      |> Map.new(fn {sender, entry} ->
-        entry = if entry.claims.exp <= now, do: %{entry | profile: nil}, else: entry
-        {sender, entry}
-      end)
-
-    Process.send_after(self(), :prune_profiles, 60_000)
-    {:noreply, %{config | profiles: profiles}}
-  end
 
   defp infrastructure_matches(config, infrastructure) do
     generation = Map.get(config, :infrastructure_generation, infrastructure.generation)
@@ -383,35 +343,6 @@ defmodule WebWidget.Runtime do
     ]
 
     {:reply, {:ok, Map.take(config, fields)}, config}
-  end
-
-  def handle_call({:retain_profile, session}, {owner, _}, config) do
-    if session.owner == owner and session.runtime_ref == config.runtime_ref and
-         session.channel_config_id == config.channel_config_id and
-         BindingStore.authorized?(session.binding_claims, session.page_id) == :ok do
-      entry = %{
-        profile: session.profile,
-        claims: session.binding_claims,
-        page_id: session.page_id,
-        retain_until: session.binding_claims.iat + config.profile_retention,
-        conflict: false
-      }
-
-      profiles = Map.update(config.profiles, session.sender_id, entry, &newer_profile(&1, entry))
-      {:reply, :ok, %{config | profiles: profiles}}
-    else
-      {:reply, {:error, :unauthorized}, config}
-    end
-  end
-
-  def handle_call({:fetch_profile, sender}, _from, config) do
-    result =
-      case Map.fetch(config.profiles, sender) do
-        {:ok, entry} -> {:ok, entry, config.runtime_ref}
-        :error -> {:error, :not_found}
-      end
-
-    {:reply, result, config}
   end
 
   def handle_call({:fetch_widget, widget_id}, _from, config) do
@@ -446,19 +377,6 @@ defmodule WebWidget.Runtime do
   end
 
   defp readiness_identity(_), do: nil
-
-  # JWT iat is second-resolution: conflicting snapshots in the same second have
-  # no trustworthy order. Hide the profile until a later issuance resolves it.
-  defp newer_profile(current, incoming) do
-    cond do
-      incoming.claims.iat > current.claims.iat -> incoming
-      incoming.claims.iat < current.claims.iat -> current
-      current.conflict -> current
-      incoming.profile != current.profile -> %{current | profile: nil, conflict: true}
-      incoming.claims.exp > current.claims.exp -> incoming
-      true -> current
-    end
-  end
 
   @doc false
   def prepare(%{integration: %Protocol{} = integration, channel_config_id: id} = config) do

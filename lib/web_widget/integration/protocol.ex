@@ -142,6 +142,7 @@ defmodule WebWidget.Integration.Protocol do
              consumer: :widget,
              channel_config_id: hooks.widget_id,
              sender_id: session.sender_id,
+             profile_context: profile_context(session),
              delivery: delivery
            ) do
       invoke(hooks.sink_mfa, [payload, [context: context]])
@@ -150,6 +151,16 @@ defmodule WebWidget.Integration.Protocol do
     _ -> {:error, :unavailable}
   catch
     _, _ -> {:error, :unavailable}
+  end
+
+  defp profile_context(%Session{profile: nil}), do: nil
+
+  defp profile_context(%Session{} = session) do
+    %{
+      sender_id: session.sender_id,
+      channel_config_id: session.channel_config_id,
+      profile: session.profile
+    }
   end
 
   defp payload(hooks, %{type: type} = event)
