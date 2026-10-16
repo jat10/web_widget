@@ -236,23 +236,42 @@ defmodule WebWidget.Runtime do
   @doc "Initializes the private host delivery binding for an authenticated caller."
   def initialize(%{type: "widget.init", request_id: request} = event, session) do
     with {:ok, config} <- session_config(session),
-         %{response: response, delivery_binding: binding} <-
-           Protocol.dispatch(config.integration, event, session),
-         :ok <- Response.validate_version(response),
-         true <- Response.correlated?(response, request),
-         %{type: :widget_initialized, conversation_id: conversation, payload: %{created: false}} <-
-           response,
-         true <- conversation == Map.get(event, :conversation_id),
-         {:ok, bound} <- Protocol.bind_delivery(session, binding),
+         {:ok, response, bound} <-
+           initialize_result(
+             Protocol.dispatch(config.integration, event, session),
+             request,
+             Map.get(event, :conversation_id),
+             session
+           ),
          true <- authorized?(bound) do
       {:ok, response, bound}
     else
-      {:error, :unsupported_protocol_version} = error -> error
-      _ -> {:error, :invalid_initialization}
+      {:error, :unauthorized} -> {:error, :session_unauthorized}
+      {:error, _} = error -> error
+      _ -> {:error, :session_unauthorized}
     end
   end
 
   def initialize(_, _), do: {:error, :invalid_initialization}
+
+  defp initialize_result(result, request, conversation, session) do
+    response = if is_map(result), do: Map.get(result, :response, result), else: result
+
+    with :ok <- Response.validate_command(response, request, conversation, :initialization),
+         %{type: :widget_initialized, payload: %{created: false}} <- response,
+         {:ok, binding} <- initialization_binding(result),
+         {:ok, bound} <- Protocol.bind_delivery(session, binding) do
+      {:ok, response, bound}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_host_response}
+    end
+  end
+
+  defp initialization_binding(%{delivery_binding: binding}) when not is_nil(binding),
+    do: {:ok, binding}
+
+  defp initialization_binding(_), do: {:error, :delivery_binding_missing}
 
   @doc "Subscribes the verified caller before its first question; no conversation ID is needed."
   def subscribe(session) do

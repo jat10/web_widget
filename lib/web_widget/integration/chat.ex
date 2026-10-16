@@ -105,8 +105,8 @@ defmodule WebWidget.Integration.Chat do
   def update_context(chat, attrs) when is_map(attrs) do
     with {:ok, context} <-
            InitClaims.normalize(Map.put(attrs, :user_id, chat.session.sender_id)),
-         true <- is_nil(chat.pending_submission),
-         true <- Runtime.authorized?(chat.session) do
+         {:pending, nil} <- {:pending, chat.pending_submission},
+         {:authorized, true} <- {:authorized, Runtime.authorized?(chat.session)} do
       requested = context.conversation_id
 
       cond do
@@ -120,14 +120,16 @@ defmodule WebWidget.Integration.Chat do
           resume(chat, requested)
 
         true ->
-          {:error, :invalid_context}
+          {:error, :conversation_required}
       end
     else
-      _ -> {:error, :invalid_context}
+      {:error, :invalid_init_claims} -> {:error, :invalid_context_fields}
+      {:pending, _} -> {:error, :submission_pending}
+      {:authorized, false} -> {:error, :session_unauthorized}
     end
   end
 
-  def update_context(_, _), do: {:error, :invalid_context}
+  def update_context(_, _), do: {:error, :invalid_context_fields}
 
   defp resume(chat, requested) do
     request = id()
@@ -137,9 +139,9 @@ defmodule WebWidget.Integration.Chat do
              %{type: "widget.init", request_id: request, conversation_id: requested, params: %{}},
              chat.session
            ),
-         true <- Runtime.authorized?(chat.session),
+         {:authorized, true} <- {:authorized, Runtime.authorized?(chat.session)},
          {:ok, state, positions} <- history(chat.session, requested),
-         true <- Runtime.authorized?(chat.session) do
+         {:authorized, true} <- {:authorized, Runtime.authorized?(chat.session)} do
       {:ok,
        %{
          chat
@@ -157,7 +159,8 @@ defmodule WebWidget.Integration.Chat do
            history_revision: chat.history_revision + 1
        }}
     else
-      _ -> {:error, :invalid_context}
+      {:authorized, false} -> {:error, :session_unauthorized}
+      {:error, _} = error -> error
     end
   end
 
@@ -544,13 +547,15 @@ defmodule WebWidget.Integration.Chat do
         session
       )
 
-    with true <- Response.correlated?(response, request),
-         %{conversation_id: ^conversation} <- response,
+    with {:authorized, true} <- {:authorized, Runtime.authorized?(session)},
+         :ok <- Response.validate_command(response, request, conversation, :history),
          {:ok, encoded, positions} <- Response.history(response, session.widget_id) do
       state = State.apply_event(State.new(), encoded)
       {:ok, %{state | typing: response.payload[:processing] == :active}, positions}
     else
-      _ -> {:error, :history_unavailable}
+      {:authorized, false} -> {:error, :session_unauthorized}
+      {:error, :invalid_history} -> {:error, :invalid_history_response}
+      {:error, _} = error -> error
     end
   end
 

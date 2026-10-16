@@ -554,6 +554,32 @@ authentication state. The package retains no credential in durable
 conversation metadata. Standalone demo fixtures remain separate from the
 integrated ZAQ runtime.
 
+### Context-update failures
+
+`widget.context.update` accepts `prompt_context: null`; callers need not supply
+prompt context when selecting a conversation. Failed updates return
+`%{ok: false, reason: safe_code, error: predefined_message}` without replacing the
+current Chat. The same reply reaches parent `zaq.widget.result`, and the SDK uses
+`error` as the rejected `updateContext()` promise's message.
+
+| Safe reason | Meaning |
+| --- | --- |
+| `invalid_context_fields` | Unsupported fields or invalid conversation/prompt values |
+| `submission_pending` | A local submission acknowledgement is still pending |
+| `authentication_required`, `session_unauthorized` | Authentication is absent or the current Session is no longer authorized |
+| `conversation_required` | A context update omitted the selection needed for an existing/blocked Chat |
+| `conversation_unavailable` | The host denied the requested conversation; nonexistent, deleted, unbound and foreign conversations share this response |
+| `host_unavailable`, `host_initialization_rejected` | Host initialization was unavailable or rejected |
+| `invalid_host_response`, `unsupported_protocol_version` | Initialization response shape/correlation or protocol validation failed |
+| `delivery_binding_missing`, `invalid_delivery_binding`, `delivery_binding_changed` | The private host delivery binding was missing, invalid or differed from the existing binding |
+| `history_unavailable`, `invalid_history_response` | History dispatch was unavailable/rejected, or its response was malformed/uncorrelated |
+
+Only closed error categories and fixed messages cross the browser boundary.
+Validate semantic host-error protocol/correlation before classifying its allowlisted
+code. Unknown host codes receive a generic stage-specific failure; raw host payloads,
+exception details, topics, Person IDs and delivery descriptors are never echoed.
+These errors do not settle submissions, change authentication policy or trigger retries.
+
 A separate `web_widget_api("/widget-api")` router macro mounts package-owned,
 stateless backend controls outside the browser route pipeline. Its disconnect
 operation is `POST /widget-api/:widget_id/disconnect`. A backend proof is an

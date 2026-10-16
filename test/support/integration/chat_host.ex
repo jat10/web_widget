@@ -8,10 +8,16 @@ defmodule WebWidget.TestIntegration.ChatHost do
 
     failure = Process.get(:chat_host_failure)
 
-    if failure && Map.get(request, :type) == failure do
-      response(request, :error, request.conversation_id, %{code: :unavailable})
-    else
-      dispatch(request, context)
+    result =
+      if failure && Map.get(request, :type) == failure do
+        response(request, :error, request.conversation_id, %{code: :unavailable})
+      else
+        dispatch(request, context)
+      end
+
+    case Process.get(:chat_host_transform) do
+      transform when is_function(transform, 2) -> transform.(request, result)
+      _ -> result
     end
   end
 

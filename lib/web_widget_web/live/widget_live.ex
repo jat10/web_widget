@@ -4,7 +4,7 @@ defmodule WebWidgetWeb.WidgetLive do
   alias WebWidget.Adapter
   alias WebWidget.Conversation.State, as: Conversation
   alias WebWidget.Embedding.{Session, Settings}
-  alias WebWidget.Integration.{BindingStore, Chat}
+  alias WebWidget.Integration.{BindingStore, Chat, ContextError}
   alias WebWidget.Protocol.Events
   alias WebWidget.Protocol.Response
   alias WebWidget.Runtime
@@ -318,13 +318,9 @@ defmodule WebWidgetWeb.WidgetLive do
         %{assigns: %{integrated: true, chat: chat}} = socket
       )
       when not is_nil(chat) do
-    with true <- is_nil(socket.assigns.pending_reply),
-         true <- Enum.all?(Map.keys(params), &(&1 in ["conversation_id", "prompt_context"])),
-         {:ok, updated} <-
-           Chat.update_context(chat, %{
-             conversation_id: Map.get(params, "conversation_id"),
-             prompt_context: Map.get(params, "prompt_context")
-           }) do
+    with {:pending, nil} <- {:pending, socket.assigns.pending_reply},
+         {:ok, context} <- context_params(params),
+         {:ok, updated} <- Chat.update_context(chat, context) do
       socket =
         socket
         |> assign_chat(updated)
@@ -339,12 +335,13 @@ defmodule WebWidgetWeb.WidgetLive do
 
       {:reply, %{ok: true, conversation_id: updated.conversation_id}, socket}
     else
-      _ -> {:reply, %{ok: false, reason: "invalid_context"}, socket}
+      {:pending, _} -> {:reply, ContextError.reply(:submission_pending), socket}
+      {:error, reason} -> {:reply, ContextError.reply(reason), socket}
     end
   end
 
   def handle_event("widget.context.update", _params, socket) do
-    {:reply, %{ok: false, reason: "authentication_required"}, socket}
+    {:reply, ContextError.reply(:authentication_required), socket}
   end
 
   def handle_event("widget.context", params, %{assigns: %{integrated: true}} = socket) do
@@ -439,6 +436,20 @@ defmodule WebWidgetWeb.WidgetLive do
   def handle_event("widget.submit", _params, socket) do
     {:reply, %{ok: false, error: ui(socket, "Enter a text message.")}, socket}
   end
+
+  defp context_params(params) when is_map(params) do
+    if Enum.all?(Map.keys(params), &(&1 in ["conversation_id", "prompt_context"])) do
+      {:ok,
+       %{
+         conversation_id: Map.get(params, "conversation_id"),
+         prompt_context: Map.get(params, "prompt_context")
+       }}
+    else
+      {:error, :invalid_context_fields}
+    end
+  end
+
+  defp context_params(_), do: {:error, :invalid_context_fields}
 
   defp recover_chat(socket, params) do
     case Chat.open(

@@ -126,11 +126,15 @@ defmodule WebWidget.Integration.Protocol do
           events: events
         } = binding
       ) do
-    if id == session.channel_config_id and valid_topic?(topic) and valid_events?(events) and
-         (is_nil(session.delivery_binding) or session.delivery_binding == binding) do
-      {:ok, %{session | topic: topic, delivery_binding: binding}}
-    else
-      {:error, :invalid_delivery_binding}
+    cond do
+      id != session.channel_config_id or not valid_topic?(topic) or not valid_events?(events) ->
+        {:error, :invalid_delivery_binding}
+
+      not is_nil(session.delivery_binding) and session.delivery_binding != binding ->
+        {:error, :delivery_binding_changed}
+
+      true ->
+        {:ok, %{session | topic: topic, delivery_binding: binding}}
     end
   end
 

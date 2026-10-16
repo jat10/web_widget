@@ -1,6 +1,6 @@
 defmodule WebWidget.Integration.Response do
   @moduledoc false
-  alias WebWidget.Integration.Diagnostics
+  alias WebWidget.Integration.{ContextError, Diagnostics}
   alias WebWidget.Protocol.Response, as: UIResponse
 
   @events %{
@@ -25,6 +25,35 @@ defmodule WebWidget.Integration.Response do
       do: String.valid?(id) and String.trim(id) != ""
 
   def correlated?(_, _), do: false
+
+  def validate_command({:error, reason}, _request, _conversation, operation),
+    do: ContextError.from_host(reason, operation)
+
+  def validate_command(%{protocol_version: _} = response, request, conversation, operation) do
+    with :ok <- validate_version(response),
+         true <- correlated?(response, request),
+         true <- command_conversation?(response, conversation) do
+      command_status(response, operation)
+    else
+      {:error, :unsupported_protocol_version} = error -> error
+      _ -> ContextError.invalid_response(operation)
+    end
+  end
+
+  def validate_command(_, _request, _conversation, operation),
+    do: ContextError.invalid_response(operation)
+
+  defp command_conversation?(%{type: :error} = response, conversation),
+    do: Map.get(response, :conversation_id) in [nil, conversation]
+
+  defp command_conversation?(response, conversation),
+    do: Map.get(response, :conversation_id) == conversation
+
+  defp command_status(%{type: :error, payload: payload}, operation) when is_map(payload),
+    do: ContextError.from_host(Map.get(payload, :code), operation)
+
+  defp command_status(%{type: :error}, operation), do: ContextError.invalid_response(operation)
+  defp command_status(_, _), do: :ok
 
   def encode(
         event,
@@ -69,6 +98,8 @@ defmodule WebWidget.Integration.Response do
       {:error, :unsupported_protocol_version} = error -> error
       _ -> {:error, :invalid_history}
     end
+  rescue
+    _ -> {:error, :invalid_history}
   end
 
   def error_text(%{payload: %{code: :timeout}}),

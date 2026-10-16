@@ -1219,6 +1219,180 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     assert Enum.count(chat.state.messages, &(&1.content == "Saved answer")) == 1
   end
 
+  test "context update accepts an explicit null prompt when selecting a conversation", ctx do
+    init(ctx)
+    conversation = "5eee64ff-5ed9-4940-90a5-df15ebe70855"
+
+    render_hook(ctx.view, "widget.context.update", %{
+      conversation_id: conversation,
+      prompt_context: nil
+    })
+
+    assert_reply(ctx.view, %{ok: true, conversation_id: ^conversation})
+
+    assert_receive {:shared_request, %{type: :conversation_init, conversation_id: ^conversation},
+                    _, _}
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: ^conversation}, _, _}
+  end
+
+  test "context errors distinguish invalid fields, pending submissions and expired sessions",
+       ctx do
+    init(ctx)
+    assert_receive {:shared_request, %{type: :conversation_init}, _, _}
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    assert_context_error(
+      ctx.view,
+      %{conversation_id: 123, prompt_context: nil},
+      "invalid_context_fields"
+    )
+
+    assert_context_error(
+      ctx.view,
+      %{conversation_id: "conversation-1", profile: "PRIVATE"},
+      "invalid_context_fields"
+    )
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      put_in(state.socket.assigns.pending_reply, %{request_id: "local"})
+    end)
+
+    assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, "submission_pending")
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      state = put_in(state.socket.assigns.pending_reply, nil)
+      put_in(state.socket.assigns.chat.pending_submission, "local")
+    end)
+
+    assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, "submission_pending")
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      state = put_in(state.socket.assigns.chat, before)
+      put_in(state.socket.assigns.chat.session.expires_at, 0)
+    end)
+
+    assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, "session_unauthorized")
+    refute_receive {:shared_request, _, _, _}
+  end
+
+  test "context errors hide conversation ownership and preserve the selected state", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    replies =
+      for conversation <- ["foreign", "deleted", "unauthorized"] do
+        assert_context_error(
+          ctx.view,
+          %{conversation_id: conversation},
+          "conversation_unavailable"
+        )
+      end
+
+    assert Enum.uniq(replies) |> length() == 1
+    assert :sys.get_state(ctx.view.pid).socket.assigns.chat == before
+    assert_context_error(ctx.view, %{prompt_context: nil}, "conversation_required")
+  end
+
+  test "context errors identify initialization and history availability separately", ctx do
+    init(ctx)
+
+    for {operation, reason} <- [
+          {:conversation_init, "host_unavailable"},
+          {:conversation_history, "history_unavailable"}
+        ] do
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.put(:chat_host_failure, operation)
+        state
+      end)
+
+      assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, reason)
+    end
+  end
+
+  test "context errors distinguish missing, invalid and changed delivery bindings", ctx do
+    init(ctx)
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    for {failure, reason} <- [
+          {:missing, "delivery_binding_missing"},
+          {:invalid, "invalid_delivery_binding"},
+          {:changed, "delivery_binding_changed"}
+        ] do
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.put(:chat_host_binding, failure)
+        state
+      end)
+
+      assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, reason)
+      assert :sys.get_state(ctx.view.pid).socket.assigns.chat == before
+      refute_receive {:shared_request, %{type: :conversation_history}, _, _}
+    end
+  end
+
+  test "context errors expose safe protocol categories, never raw host details", ctx do
+    init(ctx)
+
+    for {operation, transform, reason} <- [
+          {:conversation_init, fn reply -> put_in(reply.response.protocol_version, 1) end,
+           "unsupported_protocol_version"},
+          {:conversation_init, fn reply -> put_in(reply.response.request_id, "wrong-request") end,
+           "invalid_host_response"},
+          {:conversation_init,
+           fn _ -> {:error, {:PRIVATE_TRACE, "person-id", "web_widget:recipient:private"}} end,
+           "host_initialization_rejected"},
+          {:conversation_init,
+           fn reply ->
+             %{
+               reply.response
+               | type: :error,
+                 payload: %{code: :missing_delivery_descriptor, error: "PRIVATE_TRACE"}
+             }
+           end, "delivery_binding_missing"},
+          {:conversation_history, fn reply -> %{reply | request_id: "wrong-request"} end,
+           "invalid_history_response"},
+          {:conversation_history,
+           fn reply -> %{reply | payload: %{messages: "PRIVATE_TRACE"}} end,
+           "invalid_history_response"},
+          {:conversation_history,
+           fn reply ->
+             %{
+               reply
+               | payload: %{
+                   messages: [
+                     %{
+                       message_id: %{private: "PRIVATE_TRACE"},
+                       role: "assistant",
+                       content: "Answer"
+                     }
+                   ]
+                 }
+             }
+           end, "invalid_history_response"}
+        ] do
+      :sys.replace_state(ctx.view.pid, fn state ->
+        Process.put(:chat_host_transform, fn request, reply ->
+          if request[:type] == operation, do: transform.(reply), else: reply
+        end)
+
+        state
+      end)
+
+      reply = assert_context_error(ctx.view, %{conversation_id: "conversation-1"}, reason)
+      refute inspect(reply) =~ "PRIVATE_TRACE"
+      refute inspect(reply) =~ "person-id"
+      refute inspect(reply) =~ "web_widget:recipient:"
+    end
+  end
+
+  defp assert_context_error(view, params, reason) do
+    render_hook(view, "widget.context.update", params)
+    assert_reply(view, %{ok: false, reason: ^reason, error: message} = reply)
+    assert is_binary(message) and byte_size(message) > 0
+    reply
+  end
+
   defp init(ctx, params \\ %{}) do
     render_event(ctx.view, "widget.context", %{identity_token: token(ctx)}, %{
       ok: true
