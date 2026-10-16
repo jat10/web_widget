@@ -6,7 +6,7 @@ export function WorkingIndicator({ label }: { label: string }) {
 
 export function ConversationProgress({ isTyping, label }: { isTyping: boolean; label: string }) {
   const hasRunningAssistant = useAuiState(state => state.thread.messages.some(message =>
-    message.role === "assistant" && message.status?.type === "running"));
+    message.role === "assistant" && message.status?.type === "running" && message.metadata.isOptimistic !== true));
   if (!isTyping || hasRunningAssistant) return null;
   return <WorkingIndicator label={label} />;
 }

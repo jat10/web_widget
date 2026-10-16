@@ -22,7 +22,8 @@ const history = Object.freeze([
 
 function RuntimeIndicator() {
   const running = useAuiState(state => state.message.status?.type === "running");
-  return running ? createElement(WorkingIndicator, { label: "Existing runtime indicator" }) : null;
+  const optimistic = useAuiState(state => state.message.metadata.isOptimistic === true);
+  return running && !optimistic ? createElement(WorkingIndicator, { label: "Existing runtime indicator" }) : null;
 }
 
 function RuntimeConversation({ isTyping, messages, isRunning }) {
@@ -46,12 +47,14 @@ function RuntimeConversation({ isTyping, messages, isRunning }) {
     createElement(ConversationProgress, { isTyping, label }));
 }
 
-test("real assistant-ui optimistic rows suppress the fallback during local submission", () => {
+test("optimistic placeholders are hidden while known-active typing shows only the presentation fallback", () => {
   const messages = [{ id: "local-user", role: "user", content: "Hello" }];
   const html = renderToStaticMarkup(createElement(RuntimeConversation, { isTyping: true, isRunning: true, messages }));
   assert.equal((html.match(/class="zaq-working"/g) || []).length, 1);
-  assert.match(html, /Existing runtime indicator/);
-  assert.doesNotMatch(html, /Préparation de votre réponse/);
+  assert.doesNotMatch(html, /Existing runtime indicator/);
+  assert.match(html, /Préparation de votre réponse/);
+  const noAnswer = renderToStaticMarkup(createElement(RuntimeConversation, { isTyping: false, isRunning: true, messages }));
+  assert.equal(noAnswer, "");
 });
 
 test("active recovery without an assistant create uses the existing localized working indicator", () => {

@@ -66,7 +66,8 @@ defmodule WebWidget.E2ESharedHost do
         Agent.update(@requests, &Map.put(&1, {:conversation, context.sender_id}, %{id: conversation, messages: messages}))
         host = WebWidget.TestIntegration.ChatHost
         receipt = host.response(request, if(request.conversation_id, do: :status, else: :conversation_created), conversation,
-          %{accepted: true, created: is_nil(request.conversation_id)})
+          %{accepted: true, created: is_nil(request.conversation_id), user_message: Enum.at(messages, -2)})
+        host.publish(context, %{receipt | type: :user_message})
         stream = %{receipt | message_id: Ecto.UUID.generate()}
         host.publish(context, %{stream | type: :message_create, payload: %{body: ""}})
         host.publish(context, %{stream | type: :message_complete, payload: %{body: answer}})
@@ -124,7 +125,8 @@ defmodule WebWidget.E2ESharedHost do
     conversation = request.conversation_id || "conversation-1"
     created = is_nil(request.conversation_id)
     receipt = host.response(request, if(created, do: :conversation_created, else: :status),
-      conversation, %{accepted: true, created: created})
+      conversation, %{accepted: true, created: created, user_message: %{message_id: "held-user", position: 1, role: "user", content: request.content, provider_sent_at: nil}})
+    host.publish(context, %{receipt | type: :user_message})
     stream = %{receipt | message_id: Ecto.UUID.generate()}
     Agent.update(@requests, &Map.put(&1, {:held_stream, context.sender_id},
       %{status: :running, receipt: receipt, stream: stream, context: context}))

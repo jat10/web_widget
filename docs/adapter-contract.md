@@ -686,10 +686,11 @@ Shared constructors validate the definitive fields and constraints.
 ZAQ resolves the verified sender and connector into a Person. Only the host issues
 the private Delivery descriptor for `consumer: :widget`, the trusted integer
 configuration ID and its normalized `web_widget:recipient:<connector>:<person>`
-topic, with all seven mappings:
+topic, with all eight mappings:
 
 ```elixir
 %{
+  user_message: "response.user_message",
   typing: "response.typing",
   message_create: "response.message.create",
   message_edit: "response.message.edit",
@@ -699,6 +700,11 @@ topic, with all seven mappings:
   error: "response.error"
 }
 ```
+
+New bindings include `user_message`. Existing explicitly trusted descriptors without
+that mapping remain valid for enriched direct receipts only; the widget does not
+subscribe to or invent an alternative user-message route. If present, the mapping
+must be exactly `"response.user_message"`.
 
 Build Context with nil actor, `consumer: :widget`, verified `sender_id`, integer
 `channel_config_id` and the host-issued Delivery unchanged. Bootstrap initialization
@@ -743,12 +749,51 @@ the widget dispatch boundary preserves the direct result without publishing it a
 
 Acceptance acknowledges successful submission dispatch, not execution completion or
 input consumption. It requires `protocol_version: 2`, the original `request_id`, an
-authorized `conversation_id`, and `%{accepted: true, created: boolean}`. An async
+authorized `conversation_id`, and `%{accepted: true, created: boolean,
+user_message: canonical_public_row}` for the widget's async path. The saved row is
+`%{message_id: canonical_id, position: positive_integer, role: "user", content:
+saved_string, provider_sent_at: DateTime_or_nil}`, with optional existing public
+history fields. ZAQ projects native external input roles to public `"user"` without
+changing persistence. An async
 fresh-chat receipt is `:conversation_created` with `created: true`; a resumed-chat
 receipt is `:status` with `created: false`. Its `message_id` is absent or nil.
 Neither receipt reserves an assistant ID. Submission `:error` also has absent/nil
 `message_id` and settles only that submission. An unknown submission outcome blocks
 resending until explicit authorized recovery, without failing existing assistants.
+Legacy host sync behavior is unchanged.
+
+After saving and successful routing, the host publishes a version-2 `:user_message`
+Response on `"response.user_message"`, with the originating request ID, authorized
+conversation ID, nil top-level message ID, and the exact same acceptance payload as
+the direct receipt. The canonical nested user ID, never a locally fabricated ID,
+identifies the displayed input. Direct receipts, live user events and history converge
+through one idempotent canonical-user reducer. Position orders saved rows; a fast
+assistant's persisted `user_message_id` or original request binding keeps it behind
+its input when that canonical record arrives later. Conflicting IDs/positions and
+user/assistant transport-ID collisions fail closed.
+
+If the exact captured input cannot be recovered after routing, the host returns
+`:acknowledgement_unavailable` with `outcome: :unknown` and any known conversation ID.
+This is not a definitive rejection. The widget retains the draft, blocks duplicate
+resubmission and retains that ID only as a restoration hint, requiring authorized
+initialization/history before enabling an explicitly recovered Chat. A matching
+saved-user broadcast may reconcile this tab's retained unknown request, including
+establishing its first conversation when `created: true`. Another tab's event never
+selects or switches conversations. A bounded process-local queue retains assistant
+events for that unknown first request until the saved-user acknowledgement arrives;
+no persistent stream snapshot store is introduced.
+
+The composer retains its exact typed draft while sending, disables editing/send and
+uses localized “Sending…” until acknowledgement. Only the originating tab's matching
+acknowledgement clears the still-matching submitted draft. Other tabs receive the saved
+user row but keep their independent draft and submission state. A tab-local
+`submission_id` travels only over LiveView for late-ack correlation; it never replaces
+the server-generated host request/message IDs or enters shared Context/Response.
+Definitive rejection retains the draft and permits retry; timeout/disconnect or an
+unknown outcome retains it and blocks resubmission until reconciliation. Neither
+steering/no-answer receipts nor assistant-ui optimistic placeholders create a visible
+pending assistant. Existing real assistant streams and known-active recovery indicators
+remain independent from submission acknowledgement.
 
 ## Widget initialization
 
@@ -773,7 +818,8 @@ Retain parent context until the first actual Message. ZAQ persists it as ordinar
 user history when creating that conversation. Resume/later questions do not reseed.
 An accepted resumed question returns `:status`, `accepted: true`, `created: false`.
 
-Only a matching receipt establishes a new active conversation. Wait for its ID
+Only a matching receipt or the matching saved-user recovery described above establishes
+a new active conversation. Wait for its ID
 before another submission. Clear the pending submission on the receipt, even if no
 assistant event ever follows. Once accepted, later submissions can proceed while
 earlier independent assistant messages continue streaming. Live events
@@ -804,8 +850,10 @@ establishes an assistant binding. Later events must retain that request and any
 persisted references; steps alone never invent a row. Multiple independent streams
 may share a request. Terminal states never regress, and duplicate/late events are
 ignored per message. Unsolicited events cannot select or switch conversations.
-Receipts/submission errors settle only the local direct submission callback, never
-another tab's send. UI output retains the `response.*` namespace.
+Receipts/submission errors settle only their local submission; a matching canonical
+saved-user event may reconcile that same local unknown request, never another tab's
+send. User events bypass assistant stream correlation and never choose an assistant ID.
+UI output retains the `response.*` namespace.
 
 Subscribe before history so concurrent events queue in the LiveView mailbox.
 Reconcile them after the authorized snapshot using persisted assistant/user refs,
@@ -830,6 +878,7 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:conversation_created` | `response.conversation.created`; direct correlated receipt establishes the conversation |
 | `:conversation_history` | `response.conversation.history`; ordered public messages and separately retained pagination positions |
 | `:status` with accepted true | Direct resumed receipt (or sync no-answer acknowledgement), not assistant text or an assistant terminal |
+| `:user_message` | Canonical saved input; deduplicated with its direct receipt/history, with no assistant transport message ID |
 | `:typing` | `response.typing`, boolean `active` |
 | `:message_create`, `:message_edit`, `:message_complete` | Corresponding `response.message.*`; top-level transport `message_id` becomes UI payload `id`, public `body` becomes `content` |
 | `:message_step` | `response.message.step`; public `step_id` and message ID, safe label; `:activity/:running` maps to `status/started` or `updated` for an existing step |

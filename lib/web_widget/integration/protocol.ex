@@ -146,7 +146,9 @@ defmodule WebWidget.Integration.Protocol do
   defp valid_topic?(_), do: false
 
   defp valid_events?(events) when is_map(events),
-    do: Enum.all?(@events, fn {key, value} -> Map.get(events, key) == value end)
+    do:
+      Enum.all?(@events, fn {key, value} -> Map.get(events, key) == value end) and
+        Map.get(events, :user_message, "response.user_message") == "response.user_message"
 
   defp valid_events?(_), do: false
 

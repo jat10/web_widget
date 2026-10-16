@@ -96,6 +96,12 @@ defmodule WebWidget.TestIntegration.ChatHost do
 
       :valid ->
         %{response: public, delivery_binding: binding}
+
+      :legacy ->
+        %{
+          response: public,
+          delivery_binding: %{binding | events: Map.delete(binding.events, :user_message)}
+        }
     end
   end
 
@@ -108,8 +114,12 @@ defmodule WebWidget.TestIntegration.ChatHost do
         request,
         if(created, do: :conversation_created, else: :status),
         conversation,
-        %{accepted: true, created: created}
+        acceptance(request, created)
       )
+
+    if not Process.get(:chat_host_suppress_user, false) and
+         Map.has_key?(context.delivery.events, :user_message),
+       do: publish(context, %{receipt | type: :user_message})
 
     stream = %{receipt | message_id: "assistant-" <> request.request_id}
 
@@ -134,8 +144,12 @@ defmodule WebWidget.TestIntegration.ChatHost do
         request,
         if(created, do: :conversation_created, else: :status),
         conversation,
-        %{accepted: true, created: created}
+        acceptance(request, created)
       )
+
+    if not Process.get(:chat_host_suppress_user, false) and
+         Map.has_key?(context.delivery.events, :user_message),
+       do: publish(context, %{receipt | type: :user_message})
 
     stream = %{receipt | message_id: "assistant-" <> request.request_id}
 
@@ -192,6 +206,7 @@ defmodule WebWidget.TestIntegration.ChatHost do
       channel_config_id: context.channel_config_id,
       topic: "web_widget:recipient:#{context.channel_config_id}:#{person(context.sender_id)}",
       events: %{
+        user_message: "response.user_message",
         typing: "response.typing",
         message_create: "response.message.create",
         message_edit: "response.message.edit",
@@ -199,6 +214,20 @@ defmodule WebWidget.TestIntegration.ChatHost do
         message_complete: "response.message.complete",
         message_failed: "response.message.failed",
         error: "response.error"
+      }
+    }
+  end
+
+  def acceptance(request, created) do
+    %{
+      accepted: true,
+      created: created,
+      user_message: %{
+        message_id: Ecto.UUID.generate(),
+        position: System.unique_integer([:positive, :monotonic]),
+        role: "user",
+        content: request.content,
+        provider_sent_at: nil
       }
     }
   end

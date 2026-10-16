@@ -212,3 +212,9 @@ msgid "%{count} step completed"
 msgid_plural "%{count} steps completed"
 msgstr[0] "%{count} step completed"
 msgstr[1] "%{count} steps completed"
+
+msgid "Sending…"
+msgstr "Sending…"
+
+msgid "Submission outcome is unknown. Restore the conversation before sending again."
+msgstr "Submission outcome is unknown. Restore the conversation before sending again."

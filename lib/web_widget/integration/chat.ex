@@ -2,7 +2,7 @@ defmodule WebWidget.Integration.Chat do
   @moduledoc false
   alias WebWidget.{Adapter, Runtime}
   alias WebWidget.Conversation.State
-  alias WebWidget.Integration.{Diagnostics, InitClaims, Response}
+  alias WebWidget.Integration.{Diagnostics, InitClaims, Response, UserMessages}
 
   def open(widget_id, params, page_id \\ nil, requested_id \\ nil, expected_sender \\ nil)
 
@@ -68,6 +68,13 @@ defmodule WebWidget.Integration.Chat do
          auth_generation: generation,
          conversation_id: requested,
          pending_submission: nil,
+         local_submissions: %{},
+         submission_request: nil,
+         deferred_events: [],
+         acknowledged_submission: nil,
+         recovery_conversation_id: nil,
+         user_requests: %{},
+         message_positions: UserMessages.positions(state.messages, positions),
          accepted_requests: MapSet.new(),
          streams: %{},
          typing_requests: MapSet.new(),
@@ -156,7 +163,12 @@ defmodule WebWidget.Integration.Chat do
            streams: %{},
            typing_requests: MapSet.new(),
            recovered_processing: state.typing,
-           history_revision: chat.history_revision + 1
+           history_revision: chat.history_revision + 1,
+           user_requests:
+             if(chat.conversation_id == requested, do: chat.user_requests, else: %{}),
+           message_positions: UserMessages.positions(state.messages, positions),
+           recovery_conversation_id: nil,
+           deferred_events: []
        }}
     else
       {:authorized, false} -> {:error, :session_unauthorized}
@@ -185,10 +197,24 @@ defmodule WebWidget.Integration.Chat do
     )
   end
 
-  def submit(%{pending_submission: nil, blocked: false} = chat, text) do
+  def submit(chat, text, submission_id \\ nil)
+
+  def submit(%{pending_submission: nil, blocked: false} = chat, text, submission_id) do
     request = id()
-    message = %{id: request, content: text, timestamp: DateTime.to_iso8601(DateTime.utc_now())}
-    chat = %{chat | pending_submission: request}
+    message = %{id: request, content: text}
+
+    local = %{
+      submission_id: submission_id,
+      conversation_id: chat.conversation_id,
+      status: :pending
+    }
+
+    chat = %{
+      chat
+      | pending_submission: request,
+        submission_request: request,
+        local_submissions: Map.put(chat.local_submissions, request, local)
+    }
 
     result =
       Runtime.dispatch(
@@ -206,48 +232,41 @@ defmodule WebWidget.Integration.Chat do
       )
 
     case result do
-      {:ok, receipt} -> accept(chat, receipt, request, message)
+      {:ok, receipt} -> accept(chat, receipt, request)
       %{type: :error} = error -> reject(chat, error, request)
       _ -> unknown_submission(chat)
     end
   end
 
-  def submit(chat, _),
+  def submit(chat, _, _),
     do: {:error, chat, "Wait for the submission acknowledgement or restore the conversation."}
 
-  defp accept(chat, receipt, request, message) do
+  defp accept(chat, receipt, request) do
     with true <- Response.correlated?(receipt, request),
          %{conversation_id: conversation, payload: %{accepted: true}} <-
            receipt,
          true <- identifier?(conversation) and is_nil(Map.get(receipt, :message_id)),
          true <- valid_receipt?(chat.conversation_id, receipt),
-         true <- Runtime.authorized?(chat.session) do
-      {:ok,
-       %{
-         chat
-         | conversation_id: conversation,
-           prompt_context: nil,
-           pending_submission: nil,
-           accepted_requests: MapSet.put(chat.accepted_requests, request),
-           state:
-             chat.state
-             |> State.submit(message)
-             |> State.acknowledge(request)
-             |> Map.put(:typing, chat.state.typing)
-       }}
+         true <- Runtime.authorized?(chat.session),
+         {:ok, row} <- Response.saved_user(receipt, chat.session.widget_id),
+         {:ok, chat} <-
+           UserMessages.merge(
+             %{chat | conversation_id: conversation, prompt_context: nil},
+             row,
+             request
+           ) do
+      {:ok, acknowledge_user(chat, request, row.id)}
     else
       _ -> unknown_submission(chat, receipt)
     end
   end
 
   defp reject(chat, response, request) do
-    if Response.correlated?(response, request) and is_nil(Map.get(response, :message_id)) and
-         Map.get(response, :conversation_id) in [nil, chat.conversation_id] and
-         is_map(Map.get(response, :payload)) and Runtime.authorized?(chat.session) do
-      unknown =
-        Map.get(response.payload, :outcome) == :unknown or response.payload[:code] == :timeout
+    unknown = unknown_outcome?(response)
 
+    if valid_rejection?(chat, response, request) and error_conversation?(chat, response, unknown) do
       error = Response.error_text(response)
+      chat = mark_submission(chat, if(unknown, do: :unknown, else: :rejected))
 
       {:error,
        %{
@@ -255,11 +274,30 @@ defmodule WebWidget.Integration.Chat do
          | pending_submission: nil,
            blocked: unknown,
            outcome: if(unknown, do: :unknown),
+           recovery_conversation_id: if(unknown, do: Map.get(response, :conversation_id)),
            state: State.submission_error(chat.state, error)
        }, error}
     else
       unknown_submission(chat, response)
     end
+  end
+
+  defp unknown_outcome?(%{payload: payload}) when is_map(payload),
+    do:
+      payload[:outcome] == :unknown or payload[:code] in [:timeout, :acknowledgement_unavailable]
+
+  defp unknown_outcome?(_), do: false
+
+  defp valid_rejection?(chat, response, request),
+    do:
+      Response.correlated?(response, request) and is_nil(Map.get(response, :message_id)) and
+        is_map(Map.get(response, :payload)) and Runtime.authorized?(chat.session)
+
+  defp error_conversation?(chat, response, unknown) do
+    conversation = Map.get(response, :conversation_id)
+
+    conversation in [nil, chat.conversation_id] or
+      (unknown and is_nil(chat.conversation_id) and identifier?(conversation))
   end
 
   defp unknown_submission(chat, response \\ nil) do
@@ -268,6 +306,8 @@ defmodule WebWidget.Integration.Chat do
            Response.validate_version(response) == {:error, :unsupported_protocol_version},
          do: "Unsupported host protocol version. This widget requires version 2.",
          else: "Submission outcome is unknown. Restore the conversation before sending again."
+
+    chat = mark_submission(chat, :unknown)
 
     {:error,
      %{
@@ -279,10 +319,150 @@ defmodule WebWidget.Integration.Chat do
      }, error}
   end
 
-  def receive_response(chat, event, %{request_id: _} = response),
-    do: receive_correlated(chat, event, response)
+  defp mark_submission(chat, status) do
+    locals =
+      Map.update!(chat.local_submissions, chat.pending_submission, &Map.put(&1, :status, status))
+
+    %{chat | local_submissions: locals}
+  end
+
+  defp acknowledge_user(chat, request, canonical_id) do
+    case chat.local_submissions[request] do
+      %{status: status} = local when status in [:pending, :unknown] ->
+        chat = %{
+          chat
+          | local_submissions:
+              Map.put(chat.local_submissions, request, %{
+                local
+                | status: :accepted,
+                  conversation_id: chat.conversation_id
+              }),
+            accepted_requests: MapSet.put(chat.accepted_requests, request)
+        }
+
+        if chat.submission_request == request do
+          %{
+            chat
+            | acknowledged_submission: %{
+                submission_id: local.submission_id,
+                message_id: canonical_id
+              },
+              pending_submission: nil,
+              blocked: false,
+              outcome: nil,
+              recovery_conversation_id: nil,
+              state: %{chat.state | error: nil}
+          }
+        else
+          chat
+        end
+
+      _ ->
+        chat
+    end
+  end
+
+  def receive_response(chat, event, %{type: :user_message, request_id: request} = response) do
+    with true <- Runtime.authorized?(chat.session),
+         "response.user_message" <- event,
+         ^event <- Map.get(chat.session.delivery_binding.events, :user_message),
+         true <- Response.correlated?(response, request),
+         true <- user_conversation?(chat, response),
+         {:ok, row} <- Response.saved_user(response, chat.session.widget_id),
+         {:ok, updated} <- UserMessages.merge(chat, row, request) do
+      updated =
+        if is_nil(chat.conversation_id),
+          do: %{updated | conversation_id: response.conversation_id, prompt_context: nil},
+          else: updated
+
+      updated |> acknowledge_user(request, row.id) |> drain_events()
+    else
+      _ -> chat
+    end
+  end
+
+  def receive_response(chat, event, %{request_id: request} = response) do
+    if is_nil(chat.conversation_id) and
+         match?(%{status: :unknown}, chat.local_submissions[request]) do
+      defer_event(chat, event, response)
+    else
+      receive_correlated(chat, event, response)
+    end
+  end
 
   def receive_response(chat, _, _), do: chat
+
+  defp defer_event(chat, event, response) do
+    with true <- Runtime.authorized?(chat.session),
+         true <- Response.correlated?(response, response.request_id),
+         true <- identifier?(Map.get(response, :conversation_id)),
+         true <- chat.recovery_conversation_id in [nil, response.conversation_id],
+         {:ok, _} <- Response.encode(event, response, chat.session.widget_id),
+         true <- response.type != :error do
+      %{chat | deferred_events: buffer_event(chat.deferred_events, event, response)}
+    else
+      _ -> chat
+    end
+  end
+
+  defp buffer_event(events, event, response) do
+    same_message = fn previous ->
+      Map.get(previous, :message_id) == Map.get(response, :message_id)
+    end
+
+    terminal_seen =
+      Enum.any?(events, fn {_, previous} ->
+        same_message.(previous) and previous.type in [:message_complete, :message_failed]
+      end)
+
+    if terminal_seen do
+      events
+    else
+      retained =
+        Enum.reject(events, fn {_, previous} ->
+          same_message.(previous) and
+            (response.type in [:message_complete, :message_failed] or
+               deferred_key(previous) == deferred_key(response))
+        end)
+
+      if length(retained) < 128, do: retained ++ [{event, response}], else: events
+    end
+  end
+
+  defp deferred_key(%{type: :message_step, payload: payload}),
+    do: {:message_step, payload[:step_id]}
+
+  defp deferred_key(response), do: response.type
+
+  defp drain_events(chat) do
+    events = chat.deferred_events
+
+    Enum.reduce(events, %{chat | deferred_events: []}, fn {event, response}, current ->
+      receive_correlated(current, event, response)
+    end)
+  end
+
+  defp user_conversation?(%{conversation_id: conversation} = chat, %{
+         conversation_id: conversation,
+         request_id: request
+       })
+       when is_binary(conversation) do
+    case chat.local_submissions[request] do
+      %{conversation_id: expected} -> expected in [nil, conversation]
+      _ -> true
+    end
+  end
+
+  defp user_conversation?(%{conversation_id: nil} = chat, %{
+         request_id: request,
+         payload: %{created: true},
+         conversation_id: conversation
+       }) do
+    identifier?(conversation) and
+      match?(%{status: :unknown, conversation_id: nil}, chat.local_submissions[request])
+  end
+
+  defp user_conversation?(_, _), do: false
 
   defp receive_correlated(chat, event, response) do
     with true <- Runtime.authorized?(chat.session),
@@ -383,6 +563,7 @@ defmodule WebWidget.Integration.Chat do
         state: %{state | typing: recovered or MapSet.size(typing) > 0},
         persisted_refs: retain_refs(chat.persisted_refs, response)
     }
+    |> UserMessages.order()
   end
 
   defp ensure_message(state, %{type: type, message_id: message})
@@ -468,11 +649,12 @@ defmodule WebWidget.Integration.Chat do
   defp consistent_stream?(_chat, %{type: :typing}), do: true
 
   defp consistent_stream?(chat, %{message_id: message, request_id: request}) do
-    case Map.get(chat.streams, message) do
-      nil -> true
-      %{request_id: ^request} -> true
-      _ -> false
-    end
+    not Enum.any?(chat.state.messages, &(&1.id == message and &1.role != "assistant")) and
+      case Map.get(chat.streams, message) do
+        nil -> true
+        %{request_id: ^request} -> true
+        _ -> false
+      end
   end
 
   defp consistent_stream?(_, _), do: true

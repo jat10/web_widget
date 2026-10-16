@@ -81,6 +81,7 @@ defmodule WebWidget.Integration.ProtocolTest do
     assert delivery.protocol_version == 2
 
     assert delivery.events == %{
+             user_message: "response.user_message",
              typing: "response.typing",
              message_create: "response.message.create",
              message_edit: "response.message.edit",

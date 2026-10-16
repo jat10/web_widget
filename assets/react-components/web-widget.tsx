@@ -2,7 +2,6 @@ import { createContext, useContext, useEffect, useId, useRef, useState, useSyncE
 import { useLiveReact } from "live_react";
 import {
   AssistantRuntimeProvider,
-  ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
   TextMessagePartProvider,
@@ -15,6 +14,8 @@ import remarkGfm from "remark-gfm";
 import "../css/widget.css";
 import { connectionSnapshot, subscribeConnection } from "../js/widget-connection";
 import { ConversationProgress, WorkingIndicator } from "./working-indicator";
+import { SubmissionController } from "../js/submission";
+import { AcknowledgedComposer } from "./acknowledged-composer";
 
 type Mode = "launcher" | "conversation";
 type Step = {
@@ -79,9 +80,39 @@ export function WebWidget({ mode, messages, isRunning, submissionPending = isRun
   const { pushEvent } = useLiveReact();
   const t = config.strings;
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
-  const [submitting, setSubmitting] = useState(false);
-  const [submissionUnknown, setSubmissionUnknown] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const runtimeRef = useRef<ReturnType<typeof useExternalStoreRuntime> | null>(null);
+  const sendOptions = useRef({ pushEvent, t });
+  sendOptions.current = { pushEvent, t };
+  const submissionRef = useRef<SubmissionController | null>(null);
+  if (!submissionRef.current) submissionRef.current = new SubmissionController({
+    getDraft: () => runtimeRef.current?.thread.composer.getState().text ?? "",
+    setDraft: text => runtimeRef.current?.thread.composer.setText(text),
+    send: (text, id, reply) => sendOptions.current.pushEvent("widget.submit", { text, submission_id: id }, value => reply({
+      ok: value.ok === true, error: typeof value.error === "string" ? value.error : undefined,
+      outcome: typeof value.ok === "boolean" ? value.outcome : "unknown",
+    })),
+    unknownMessage: t["Submission outcome is unknown. Restore the conversation before sending again."],
+    timeoutMessage: t["Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."],
+  });
+  const controller = submissionRef.current;
+  const submission = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const submitting = submission.pending != null;
+  const submissionUnknown = submission.pending?.status === "unknown";
+  const sendDraft = () => {
+    if (submissionBlocked || authenticationPending || !connectionSnapshot().ready) return;
+    setError(null);
+    controller.submit();
+  };
+  useEffect(() => {
+    const acknowledge = (event: Event) => {
+      const id = (event as CustomEvent<{ submission_id: string }>).detail?.submission_id;
+      if (typeof id === "string") controller.acknowledge(id);
+    };
+    window.addEventListener("phx:widget.submission.ack", acknowledge);
+    return () => { window.removeEventListener("phx:widget.submission.ack", acknowledge); controller.dispose(); };
+  }, [controller]);
+  useEffect(() => { if (!connection.ready) controller.disconnected(); }, [connection.ready, controller]);
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   useEffect(() => {
     const append = (event: Event) => {
@@ -136,38 +167,11 @@ export function WebWidget({ mode, messages, isRunning, submissionPending = isRun
         .join("\n")
         .trim();
       if (!text) return;
-      if (submissionBlocked || submissionUnknown || !connectionSnapshot().ready) {
-        runtime.thread.composer.setText(text);
-        return;
-      }
-      setSubmitting(true);
-      setError(null);
-      try {
-        await new Promise<void>((resolve, reject) => {
-           const timeout = window.setTimeout(() => {
-             setSubmissionUnknown(true);
-             reject(new Error(t["Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."]));
-           }, 300000);
-          try {
-            pushEvent("widget.submit", { text }, (reply) => {
-               window.clearTimeout(timeout);
-               setSubmissionUnknown(false);
-              if (reply.ok) resolve();
-              else reject(new Error(reply.error));
-            });
-          } catch (cause) {
-            window.clearTimeout(timeout);
-            reject(cause);
-          }
-        });
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : t["Unable to send. Please try again."]);
-        runtime.thread.composer.setText(text);
-      } finally {
-        setSubmitting(false);
-      }
+      if (!runtimeRef.current?.thread.composer.getState().text) runtimeRef.current?.thread.composer.setText(text);
+      sendDraft();
     },
   });
+  runtimeRef.current = runtime;
 
   useEffect(() => {
     if (window.parent === window || !root.current) return;
@@ -194,7 +198,7 @@ export function WebWidget({ mode, messages, isRunning, submissionPending = isRun
     if (previousConversation.current !== conversationId) {
       // Initial host binding may accompany a rejected first submission. Keep its
       // restored draft and error; explicit switches away from a chat reset them.
-      if (previousConversation.current !== null) {
+      if (previousConversation.current !== null && !controller.getSnapshot().pending) {
         runtime.thread.composer.setText("");
         setError(null);
       }
@@ -216,7 +220,7 @@ export function WebWidget({ mode, messages, isRunning, submissionPending = isRun
         <div className="zaq-chat-main" key="chat-main">
         {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
-        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending} recoveringResponse={submitting || submissionPending || isRunning} error={error || responseError || null} />
+        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending} sending={submitting} draftLocked={submitting} onSend={sendDraft} recoveringResponse={submitting || submissionPending || isRunning} error={submission.error || error || responseError || null} />
         </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider></I18n.Provider>
@@ -235,7 +239,7 @@ function ConversationSidebar({ conversations, selectedId, disabled, onSelect, on
   </aside>;
 }
 
-function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { mode: Mode; config: Config; busy: boolean; recoveringResponse: boolean; error: string | null }) {
+function FloatingComposer({ mode, config, busy, sending, draftLocked, onSend, recoveringResponse, error }: { mode: Mode; config: Config; busy: boolean; sending: boolean; draftLocked: boolean; onSend: () => void; recoveringResponse: boolean; error: string | null }) {
   const { strings: t } = useI18n();
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   return (
@@ -248,17 +252,9 @@ function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { m
         </p>
       </div>}
       {error && <p className="zaq-widget-error" role="alert">{error}</p>}
-      <ComposerPrimitive.Root className="zaq-composer">
-        <ComposerPrimitive.Input
-          aria-label={t["Message"]}
-          placeholder={mode === "launcher" ? config.placeholder : config.follow_up_placeholder}
-          maxLength={config.max_length}
-          className="zaq-composer-input"
-        />
-        <ComposerPrimitive.Send className="zaq-composer-send" disabled={busy || !connection.ready} aria-label={t["Send message"]}>
-          {busy && connection.ready ? t["Working…"] : t["Send"]}
-        </ComposerPrimitive.Send>
-      </ComposerPrimitive.Root>
+      <AcknowledgedComposer ready={connection.ready} busy={busy} sending={sending} draftLocked={draftLocked} onSend={onSend}
+        placeholder={mode === "launcher" ? config.placeholder : config.follow_up_placeholder} maxLength={config.max_length}
+        labels={{ input: t["Message"], send: t["Send"], sending: t["Sending…"], working: t["Working…"], sendMessage: t["Send message"] }} />
       <div className="zaq-widget-signature" dir="ltr">
         <a href="https://www.zaq.ai/open-source" target="_blank" rel="noopener noreferrer">
           Powered by <span>ZAQ.AI</span>
@@ -310,9 +306,11 @@ function AssistantMessage() {
   const error = useAuiState((s) => s.message.metadata.custom.error) as string | null | undefined;
   const running = useAuiState((s) => s.message.status?.type === "running");
   const hasContent = useAuiState((s) => s.message.metadata.custom.hasContent) as boolean;
+  const optimistic = useAuiState(s => s.message.metadata.isOptimistic === true);
   const toolSteps = steps?.filter(step => step.kind === "tool_call" || step.kind === "tool_result");
   const activeTools = toolSteps?.some(step =>
     (step.state === "started" || step.state === "updated"));
+  if (optimistic) return null;
   return (
     <><MessageDate />
     <MessagePrimitive.Root className="zaq-message zaq-message-assistant" data-role="assistant" data-running={running}>

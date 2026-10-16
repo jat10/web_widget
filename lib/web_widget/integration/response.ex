@@ -4,6 +4,7 @@ defmodule WebWidget.Integration.Response do
   alias WebWidget.Protocol.Response, as: UIResponse
 
   @events %{
+    user_message: "response.user_message",
     typing: "response.typing",
     message_create: "response.message.create",
     message_edit: "response.message.edit",
@@ -25,6 +26,44 @@ defmodule WebWidget.Integration.Response do
       do: String.valid?(id) and String.trim(id) != ""
 
   def correlated?(_, _), do: false
+
+  def saved_user(
+        %{
+          payload: %{
+            accepted: true,
+            created: created,
+            user_message:
+              %{message_id: id, position: position, role: "user", content: content} = row
+          }
+        } = response,
+        widget
+      )
+      when is_boolean(created) and is_integer(position) and position > 0 and is_binary(id) and
+             is_binary(content) do
+    with :ok <- validate_version(response),
+         true <-
+           is_nil(Map.get(response, :message_id)) and String.valid?(id) and
+             byte_size(id) in 1..255 and String.valid?(content),
+         {:ok, normalized} <-
+           UIResponse.normalize(%{
+             type: "response.conversation.history",
+             widget_id: widget,
+             conversation_id: response.conversation_id,
+             payload: %{
+               messages: [
+                 history_message(Map.take(row, [:message_id, :role, :content, :provider_sent_at]))
+               ]
+             }
+           }) do
+      {:ok, normalized.payload.messages |> hd() |> Map.put(:position, position)}
+    else
+      _ -> {:error, :invalid_user_message}
+    end
+  rescue
+    _ -> {:error, :invalid_user_message}
+  end
+
+  def saved_user(_, _), do: {:error, :invalid_user_message}
 
   def validate_command({:error, reason}, _request, _conversation, operation),
     do: ContextError.from_host(reason, operation)
@@ -105,6 +144,12 @@ defmodule WebWidget.Integration.Response do
   def error_text(%{payload: %{code: :timeout}}),
     do:
       "The submission acknowledgement timed out. Its outcome is unknown. Reload known conversation history before trying again."
+
+  def error_text(%{payload: %{outcome: :unknown}}),
+    do: "Submission outcome is unknown. Restore the conversation before sending again."
+
+  def error_text(%{payload: %{code: :acknowledgement_unavailable}}),
+    do: "Submission outcome is unknown. Restore the conversation before sending again."
 
   def error_text(_), do: "Unable to complete this request."
 

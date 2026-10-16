@@ -215,3 +215,9 @@ msgstr[1] "%{count} étapes terminées"
 
 msgid "Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."
 msgstr "Le délai d’accusé de réception de l’envoi est dépassé. Son résultat est inconnu. Restaurez la conversation avant d’envoyer un autre message."
+
+msgid "Sending…"
+msgstr "Envoi…"
+
+msgid "Submission outcome is unknown. Restore the conversation before sending again."
+msgstr "Le résultat de l’envoi est inconnu. Restaurez la conversation avant d’envoyer un autre message."

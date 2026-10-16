@@ -1386,6 +1386,369 @@ defmodule WebWidgetWeb.IntegratedWidgetLiveTest do
     end
   end
 
+  test "accepted canonical user reaches both tabs once and acknowledges only its origin", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, other, _} = live(conn, "/widget/#{ctx.id}")
+
+    foreign_conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx, %{user_id: "other-person"}),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, foreign, _} = live(foreign_conn, "/widget/#{ctx.id}")
+
+    :sys.replace_state(other.pid, fn state ->
+      put_in(state.socket.assigns.chat.pending_submission, "other-local-request")
+    end)
+
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "sender-draft"})
+    assert_reply(ctx.view, %{ok: true})
+
+    assert_push_event(ctx.view, "widget.submission.ack", %{
+      submission_id: "sender-draft",
+      message_id: saved
+    })
+
+    first = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    second = :sys.get_state(other.pid).socket.assigns.chat
+    assert Enum.count(first.state.messages, &(&1.id == saved and &1.content == "no answer")) == 1
+    assert Enum.count(second.state.messages, &(&1.id == saved and &1.content == "no answer")) == 1
+    assert second.pending_submission == "other-local-request"
+    assert second.acknowledged_submission == nil
+    refute first.state.typing
+    assert first.streams == %{}
+
+    refute Enum.any?(
+             :sys.get_state(foreign.pid).socket.assigns.chat.state.messages,
+             &(&1.id == saved)
+           )
+  end
+
+  test "fast assistant is reordered behind its late canonical user without duplicates", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+    request = %{request_id: "remote-request", content: "Saved input"}
+    payload = ChatHost.acceptance(request, false)
+
+    assistant =
+      ChatHost.response(request, :message_complete, "conversation-1", %{
+        body: "Fast answer",
+        user_message_id: payload.user_message.message_id
+      })
+
+    ChatHost.publish(context, assistant)
+    _ = render(ctx.view)
+    user = ChatHost.response(request, :user_message, "conversation-1", payload)
+    ChatHost.publish(context, user)
+    ChatHost.publish(context, user)
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert Enum.map(Enum.take(chat.state.messages, -2), & &1.role) == ["user", "assistant"]
+    assert Enum.count(chat.state.messages, &(&1.id == payload.user_message.message_id)) == 1
+    assert chat.streams[assistant.message_id].status == :terminal
+  end
+
+  test "matching broadcast reconciles unknown first acknowledgement but another tab cannot select it",
+       ctx do
+    init(ctx)
+    conn = put_connect_params(ctx.conn, %{"identity_token" => token(ctx)})
+    {:ok, unselected, _} = live(conn, "/widget/#{ctx.id}")
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_transform, fn request, reply ->
+        if Map.has_key?(request, :content),
+          do:
+            ChatHost.response(
+              request,
+              :error,
+              reply |> elem(1) |> Map.fetch!(:conversation_id),
+              %{code: :acknowledgement_unavailable, outcome: :unknown}
+            ),
+          else: reply
+      end)
+
+      state
+    end)
+
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "uncertain-draft"})
+
+    assert_reply(ctx.view, %{
+      ok: false,
+      outcome: :unknown,
+      recovery_conversation_id: "conversation-1"
+    })
+
+    assert_push_event(ctx.view, "widget.submission.ack", %{submission_id: "uncertain-draft"})
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    refute chat.blocked
+    assert chat.conversation_id == "conversation-1"
+    assert [%{role: "user", content: "no answer"}] = chat.state.messages
+    assert :sys.get_state(unselected.pid).socket.assigns.chat.conversation_id == nil
+    assert :sys.get_state(unselected.pid).socket.assigns.chat.state.messages == []
+  end
+
+  test "missing saved acknowledgement retains a known conversation only as an authorized recovery hint",
+       ctx do
+    init(ctx)
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_suppress_user, true)
+
+      Process.put(:chat_host_transform, fn request, reply ->
+        if Map.has_key?(request, :content),
+          do:
+            ChatHost.response(request, :error, "conversation-1", %{
+              code: :acknowledgement_unavailable,
+              outcome: :unknown
+            }),
+          else: reply
+      end)
+
+      state
+    end)
+
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "unknown"})
+
+    assert_reply(ctx.view, %{
+      ok: false,
+      outcome: :unknown,
+      recovery_conversation_id: "conversation-1"
+    })
+
+    state = :sys.get_state(ctx.view.pid).socket.assigns
+    assert state.chat.conversation_id == nil
+    assert state.chat.blocked
+    assert state.chat.state.messages == []
+    assert state.requested_conversation_id == "conversation-1"
+    render_event(ctx.view, "widget.submit", %{text: "blocked"}, %{ok: false})
+    refute_receive {:shared_request, %{content: "blocked"}, _, _}
+
+    render_event(ctx.view, "widget.context.update", %{conversation_id: "conversation-1"}, %{
+      ok: true
+    })
+
+    assert_receive {:shared_request,
+                    %{type: :conversation_history, conversation_id: "conversation-1"}, _, _}
+  end
+
+  test "legacy trusted descriptors accept the canonical direct receipt without a user event mapping",
+       ctx do
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_binding, :legacy)
+      state
+    end)
+
+    init(ctx)
+    render_event(ctx.view, "widget.submit", %{text: "no answer"}, %{ok: true})
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    refute Map.has_key?(chat.session.delivery_binding.events, :user_message)
+    assert [%{role: "user", content: "no answer", position: position}] = chat.state.messages
+    assert position > 0
+    assert chat.pending_submission == nil
+  end
+
+  test "user events retain authentication, conversation, protocol and message namespace checks",
+       ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    assert_receive {:shared_request, %{type: :conversation_history}, context, _}
+    request = %{request_id: "remote", content: "PRIVATE USER"}
+
+    response =
+      ChatHost.response(
+        request,
+        :user_message,
+        "conversation-1",
+        ChatHost.acceptance(request, false)
+      )
+
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    for invalid <- [
+          %{response | conversation_id: "foreign"},
+          %{response | protocol_version: 1},
+          %{response | message_id: "assistant"},
+          put_in(response.payload.user_message.role, "external")
+        ] do
+      ChatHost.publish(context, invalid)
+    end
+
+    send(ctx.view.pid, {:web_response, "response.message.create", response})
+
+    collision = %{
+      ChatHost.response(request, :message_complete, "conversation-1", %{
+        body: "COLLISION",
+        assistant_message_id: "persisted-assistant"
+      })
+      | message_id: "persisted-user"
+    }
+
+    ChatHost.publish(context, collision)
+    assert :sys.get_state(ctx.view.pid).socket.assigns.chat == before
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      put_in(state.socket.assigns.chat.local_submissions, %{
+        "remote" => %{conversation_id: "foreign", status: :unknown, submission_id: "keep-draft"}
+      })
+    end)
+
+    scoped = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    ChatHost.publish(context, response)
+    assert :sys.get_state(ctx.view.pid).socket.assigns.chat == scoped
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      put_in(state.socket.assigns.chat.session.expires_at, 0)
+    end)
+
+    ChatHost.publish(context, response)
+    assert_push_event(ctx.view, "widget.authentication.required", %{reason: "expired"})
+    refute render(ctx.view) =~ "PRIVATE USER"
+  end
+
+  test "fast first answer waits for matching saved-user recovery after an unknown callback",
+       ctx do
+    init(ctx)
+    parent = self()
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_suppress_user, true)
+
+      Process.put(:chat_host_transform, fn request, reply ->
+        if Map.has_key?(request, :content) do
+          {:ok, receipt} = reply
+          send(parent, {:saved_receipt, receipt})
+
+          ChatHost.response(request, :error, receipt.conversation_id, %{
+            code: :acknowledgement_unavailable,
+            outcome: :unknown
+          })
+        else
+          reply
+        end
+      end)
+
+      state
+    end)
+
+    render_hook(ctx.view, "widget.submit", %{text: "instant", submission_id: "fast-unknown"})
+    assert_reply(ctx.view, %{ok: false, outcome: :unknown})
+    assert_receive {:shared_request, %{content: "instant"}, context, _}
+    assert_receive {:saved_receipt, receipt}
+    before = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert before.conversation_id == nil
+    assert before.state.messages == []
+    assert before.deferred_events != []
+
+    late =
+      ChatHost.response(
+        %{request_id: receipt.request_id},
+        :message_edit,
+        receipt.conversation_id,
+        %{body: "LATE"}
+      )
+
+    for _ <- 1..140, do: ChatHost.publish(context, late)
+    ChatHost.publish(context, %{receipt | type: :user_message})
+    assert_push_event(ctx.view, "widget.submission.ack", %{submission_id: "fast-unknown"})
+    chat = :sys.get_state(ctx.view.pid).socket.assigns.chat
+
+    assert [
+             %{role: "user", content: "instant"},
+             %{role: "assistant", content: "Immediate answer", status: "complete"}
+           ] = chat.state.messages
+
+    assert chat.deferred_events == []
+    assert has_element?(ctx.view, "#widget-state[data-mode=conversation]")
+  end
+
+  test "two sending tabs converge canonical inputs while retaining independent acknowledgement ownership",
+       ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+
+    conn =
+      put_connect_params(ctx.conn, %{
+        "identity_token" => token(ctx),
+        "conversation_id" => "conversation-1"
+      })
+
+    {:ok, other, _} = live(conn, "/widget/#{ctx.id}")
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "first-draft"})
+    assert_reply(ctx.view, %{ok: true})
+    assert_receive {:shared_request, %{content: "no answer"} = first_request, _, _}
+    refute Map.has_key?(first_request, :submission_id)
+    render_hook(other, "widget.submit", %{text: "no answer", submission_id: "second-draft"})
+    assert_reply(other, %{ok: true})
+    assert_receive {:shared_request, %{content: "no answer"} = second_request, _, _}
+    first = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    second = :sys.get_state(other.pid).socket.assigns.chat
+
+    inputs = fn chat ->
+      chat.state.messages
+      |> Enum.filter(&(&1.role == "user" and &1.content == "no answer"))
+      |> Enum.map(&{&1.id, &1.position})
+    end
+
+    assert length(inputs.(first)) == 2
+    assert inputs.(first) == inputs.(second)
+    assert first.acknowledged_submission.submission_id == "first-draft"
+    assert second.acknowledged_submission.submission_id == "second-draft"
+    assert MapSet.member?(first.accepted_requests, first_request.request_id)
+    refute MapSet.member?(first.accepted_requests, second_request.request_id)
+    assert MapSet.member?(second.accepted_requests, second_request.request_id)
+    refute MapSet.member?(second.accepted_requests, first_request.request_id)
+  end
+
+  test "a late saved acknowledgement cannot settle a newer uncertain local submission", ctx do
+    init(ctx, %{conversation_id: "conversation-1"})
+    parent = self()
+
+    :sys.replace_state(ctx.view.pid, fn state ->
+      Process.put(:chat_host_suppress_user, true)
+
+      Process.put(:chat_host_transform, fn request, reply ->
+        if Map.has_key?(request, :content) do
+          {:ok, receipt} = reply
+          send(parent, {:saved_ack, receipt})
+
+          ChatHost.response(request, :error, receipt.conversation_id, %{
+            code: :acknowledgement_unavailable,
+            outcome: :unknown
+          })
+        else
+          reply
+        end
+      end)
+
+      state
+    end)
+
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "old"})
+    assert_reply(ctx.view, %{ok: false, outcome: :unknown})
+    assert_receive {:saved_ack, first}
+    assert_receive {:shared_request, %{content: "no answer"}, context, _}
+
+    render_event(ctx.view, "widget.context.update", %{conversation_id: "conversation-1"}, %{
+      ok: true
+    })
+
+    render_hook(ctx.view, "widget.submit", %{text: "no answer", submission_id: "new"})
+    assert_reply(ctx.view, %{ok: false, outcome: :unknown})
+    assert_receive {:saved_ack, second}
+    ChatHost.publish(context, %{first | type: :user_message})
+    old = :sys.get_state(ctx.view.pid).socket.assigns.chat
+    assert old.blocked
+    assert old.acknowledged_submission == nil
+    ChatHost.publish(context, %{second | type: :user_message})
+    assert_push_event(ctx.view, "widget.submission.ack", %{submission_id: "new"})
+    refute :sys.get_state(ctx.view.pid).socket.assigns.chat.blocked
+  end
+
   defp assert_context_error(view, params, reason) do
     render_hook(view, "widget.context.update", params)
     assert_reply(view, %{ok: false, reason: ^reason, error: message} = reply)

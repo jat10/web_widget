@@ -395,9 +395,16 @@ defmodule WebWidgetWeb.WidgetLive do
     {:reply, %{ok: false, error: "Authentication renewal is required before sending."}, socket}
   end
 
-  def handle_event("widget.submit", %{"text" => text}, %{assigns: %{integrated: true}} = socket)
+  def handle_event(
+        "widget.submit",
+        %{"text" => text} = params,
+        %{assigns: %{integrated: true}} = socket
+      )
       when is_binary(text) do
     cond do
+      not valid_submission_id?(Map.get(params, "submission_id")) ->
+        {:reply, %{ok: false, error: "Invalid submission identifier."}, socket}
+
       Runtime.backend_revoked?(socket.assigns.chat.session) ->
         {:reply, %{ok: false, reason: "backend_revoked"}, backend_revoke_chat(socket)}
 
@@ -406,7 +413,7 @@ defmodule WebWidgetWeb.WidgetLive do
          expire_chat(socket, "store_unavailable")}
 
       true ->
-        submit_integrated(socket, String.trim(text))
+        submit_integrated(socket, String.trim(text), Map.get(params, "submission_id"))
     end
   end
 
@@ -489,10 +496,17 @@ defmodule WebWidgetWeb.WidgetLive do
     end
   end
 
-  defp submit_integrated(socket, text) do
+  defp valid_submission_id?(nil), do: true
+
+  defp valid_submission_id?(id) when is_binary(id),
+    do: String.valid?(id) and byte_size(id) in 1..255 and String.trim(id) == id
+
+  defp valid_submission_id?(_), do: false
+
+  defp submit_integrated(socket, text, submission_id) do
     if text != "" and String.length(text) <= socket.assigns.config.max_length and
          socket.assigns.chat do
-      case Chat.submit(socket.assigns.chat, text) do
+      case Chat.submit(socket.assigns.chat, text, submission_id) do
         {:ok, chat} ->
           {:reply, %{ok: true},
            socket
@@ -501,8 +515,13 @@ defmodule WebWidgetWeb.WidgetLive do
            |> push_event("widget.conversation", %{conversation_id: chat.conversation_id})}
 
         {:error, chat, error} ->
-          {:reply, %{ok: false, error: error},
-           socket |> assign_chat(chat) |> assign(error: error)}
+          {:reply,
+           %{
+             ok: false,
+             error: error,
+             outcome: chat.outcome,
+             recovery_conversation_id: chat.recovery_conversation_id
+           }, socket |> assign_chat(chat) |> assign(error: error)}
       end
     else
       {:reply, %{ok: false, error: "Enter a message of 1–2000 characters."}, socket}
@@ -530,7 +549,18 @@ defmodule WebWidgetWeb.WidgetLive do
   def handle_info({:web_response, event, response}, %{assigns: %{chat: chat}} = socket)
       when not is_nil(chat) do
     if Runtime.authorized?(chat.session) do
-      {:noreply, assign_chat(socket, Chat.receive_response(chat, event, response))}
+      updated = Chat.receive_response(chat, event, response)
+      socket = assign_chat(socket, updated)
+
+      socket =
+        if updated.conversation_id != chat.conversation_id and is_binary(updated.conversation_id),
+          do:
+            socket
+            |> restore_mode(updated.conversation_id)
+            |> push_event("widget.conversation", %{conversation_id: updated.conversation_id}),
+          else: socket
+
+      {:noreply, socket}
     else
       cond do
         Runtime.backend_revoked?(chat.session) ->
@@ -595,7 +625,7 @@ defmodule WebWidgetWeb.WidgetLive do
       |> assign_state(chat.state)
       |> assign(
         chat: chat,
-        requested_conversation_id: chat.conversation_id,
+        requested_conversation_id: chat.recovery_conversation_id || chat.conversation_id,
         authentication_pending: false,
         accepted_context: %{
           user_id: chat.session.sender_id,
@@ -603,17 +633,25 @@ defmodule WebWidgetWeb.WidgetLive do
         }
       )
 
-    if previous && previous.history_revision != chat.history_revision do
-      socket
-      |> stream(
-        :ui_messages,
-        Localization.messages(chat.state.messages, socket.assigns.config.locale),
-        reset: true
-      )
-      |> push_event("widget.message.reset", %{all: true})
-    else
-      socket
-    end
+    socket =
+      if previous && previous.history_revision != chat.history_revision do
+        socket
+        |> stream(
+          :ui_messages,
+          Localization.messages(chat.state.messages, socket.assigns.config.locale),
+          reset: true
+        )
+        |> push_event("widget.message.reset", %{all: true})
+      else
+        socket
+      end
+
+    ack = chat.acknowledged_submission
+
+    if ack && is_binary(ack.submission_id) &&
+         (is_nil(previous) or previous.acknowledged_submission != ack),
+       do: push_event(socket, "widget.submission.ack", ack),
+       else: socket
   end
 
   defp backend_revoke_chat(socket) do

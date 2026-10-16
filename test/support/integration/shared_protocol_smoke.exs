@@ -58,6 +58,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
         channel_config_id: 42,
         topic: "web_widget:recipient:42:fixture-person",
         events: %{
+          user_message: "response.user_message",
           typing: "response.typing",
           message_create: "response.message.create",
           message_edit: "response.message.edit",
@@ -104,7 +105,7 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     assert delivery.consumer == :widget
     assert delivery.channel_config_id == 42
     assert delivery.protocol_version == 2
-    assert map_size(delivery.events) == 7
+    assert map_size(delivery.events) == 8
 
     {:ok, response} =
       Response.new(%{
@@ -112,7 +113,17 @@ defmodule WebWidget.SharedProtocolSmokeTest do
         request_id: message.request_id,
         type: :conversation_created,
         conversation_id: "fixture-chat",
-        payload: %{created: true, accepted: true}
+        payload: %{
+          created: true,
+          accepted: true,
+          user_message: %{
+            message_id: Ecto.UUID.generate(),
+            position: 1,
+            role: "user",
+            content: message.content,
+            provider_sent_at: nil
+          }
+        }
       })
 
     {:ok, terminal} =

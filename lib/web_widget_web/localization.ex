@@ -15,6 +15,12 @@ defmodule WebWidgetWeb.Localization do
         "Reconnecting to recover the response…" =>
           dgettext("widget", "Reconnecting to recover the response…"),
         "Working…" => dgettext("widget", "Working…"),
+        "Sending…" => dgettext("widget", "Sending…"),
+        "Submission outcome is unknown. Restore the conversation before sending again." =>
+          dgettext(
+            "widget",
+            "Submission outcome is unknown. Restore the conversation before sending again."
+          ),
         "Send" => dgettext("widget", "Send"),
         "Open conversation" => dgettext("widget", "Open conversation"),
         "Conversations" => dgettext("widget", "Conversations"),

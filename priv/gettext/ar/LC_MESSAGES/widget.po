@@ -219,3 +219,9 @@ msgstr[5] "اكتملت %{count} خطوة"
 
 msgid "Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."
 msgstr "انتهت مهلة تأكيد إرسال الرسالة. نتيجة الإرسال غير معروفة. استعد المحادثة قبل الإرسال مجددًا."
+
+msgid "Sending…"
+msgstr "جارٍ الإرسال…"
+
+msgid "Submission outcome is unknown. Restore the conversation before sending again."
+msgstr "نتيجة الإرسال غير معروفة. استعد المحادثة قبل الإرسال مجددًا."
