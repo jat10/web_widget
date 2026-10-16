@@ -4,7 +4,6 @@ import {
   unregisterWidgetHandler, waitForStylesheet,
 } from "./widget-bootstrap";
 import { connectionLost, connectionReady, connectionRevoked } from "./widget-connection";
-import { widgetSessionEstablished, widgetSessionLost, widgetSessionStopped } from "./widget-session-connection";
 
 type Settings = { theme: "auto" | "light" | "dark"; language: "en" | "fr" | "ar" };
 // Module state belongs to this iframe document and survives LiveView remounts.
@@ -147,7 +146,6 @@ export class WidgetContext extends ViewHook {
   }
 
   mounted() {
-    widgetSessionEstablished();
     this.allowedDomains = JSON.parse(this.el.dataset.allowedDomains || "[]");
     this.accepted = this.el.dataset.authorized === "true";
     this.handleEvent("widget.conversation", data => {
@@ -166,7 +164,6 @@ export class WidgetContext extends ViewHook {
       setPublicReady(false);
       postToParent("zaq.widget.authentication.required", { reason: data.reason || "expired" });
       if (data.reason === "backend_revoked") {
-        widgetSessionStopped();
         connectionRevoked();
         const alert = document.createElement("div");
         alert.id = "widget-backend-revoked";
@@ -193,7 +190,6 @@ export class WidgetContext extends ViewHook {
   }
 
   disconnected() {
-    widgetSessionLost();
     this.connected = false;
     this.connectionGeneration++;
     if (this.el.dataset.authenticated === "true") this.accepted = false;
@@ -203,7 +199,6 @@ export class WidgetContext extends ViewHook {
   }
 
   reconnected() {
-    widgetSessionEstablished();
     this.connected = true;
     if (this.el.dataset.authenticated === "true") this.accepted = this.el.dataset.authorized === "true";
     postToParent("zaq.widget.bootstrap.ready");

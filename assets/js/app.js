@@ -30,7 +30,6 @@ import "./widget-demo"
 import {WidgetContext} from "./widget-context"
 import {currentConversationId, currentIdentityToken} from "./widget-bootstrap"
 import {widgetSessionToken} from "./widget-session"
-import {startWidgetSessionConnection} from "./widget-session-connection"
 
 let csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
 class WidgetTransportSocket extends Socket {
@@ -64,22 +63,14 @@ const sessionFailure = error => {
   const alert = document.getElementById("widget-session-error")
   if (alert) { alert.hidden = false; alert.dataset.reason = error.message || "session_bootstrap_failed" }
 }
-const prepareSession = async (verifyOnly, signal) => {
-  const token = await widgetSessionToken(sessionPath, {verifyOnly, signal})
-  if (signal.aborted) return
+const prepareSession = async () => {
+  const token = await widgetSessionToken(sessionPath)
   csrfToken = token
   document.querySelector("meta[name='csrf-token']").setAttribute("content", csrfToken)
 }
 
 if (sessionPath && document.getElementById("widget-context")) {
-  const connection = startWidgetSessionConnection({
-    prepare: prepareSession,
-    connect: () => liveSocket.connect(),
-    disconnect: () => liveSocket.disconnect(),
-    failure: sessionFailure,
-  })
-  liveSocket.getSocket().onError(() => connection.error())
-  liveSocket.getSocket().onClose(() => connection.lost())
+  prepareSession().then(() => liveSocket.connect()).catch(sessionFailure)
 } else if (!sessionPath) {
   // The standalone parent/demo retains its normal Phoenix session.
   liveSocket.connect()

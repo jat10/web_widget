@@ -4,6 +4,7 @@ defmodule WebWidget.Integration.ResponseTest do
 
   test "history uses persisted IDs and positions, preserves real timestamps and strips private data" do
     response = %{
+      protocol_version: 2,
       type: :conversation_history,
       conversation_id: "chat",
       payload: %{
@@ -42,6 +43,7 @@ defmodule WebWidget.Integration.ResponseTest do
 
   test "semantic mapping rejects event mismatches and keeps public activity only" do
     response = %{
+      protocol_version: 2,
       type: :message_step,
       conversation_id: "chat",
       message_id: "transport",
@@ -87,6 +89,7 @@ defmodule WebWidget.Integration.ResponseTest do
 
   test "failed responses display the public body without private error details" do
     response = %{
+      protocol_version: 2,
       type: :message_failed,
       conversation_id: "chat",
       message_id: "transport",
@@ -109,6 +112,7 @@ defmodule WebWidget.Integration.ResponseTest do
 
   test "failed responses without public text use the generic fallback" do
     response = %{
+      protocol_version: 2,
       type: :message_failed,
       conversation_id: "chat",
       message_id: "transport",
@@ -122,8 +126,39 @@ defmodule WebWidget.Integration.ResponseTest do
   end
 
   test "protocol version and request correlation are mandatory" do
-    refute Response.correlated?(%{protocol_version: 2, request_id: "r"}, "r")
-    refute Response.correlated?(%{protocol_version: 1, request_id: "other"}, "r")
-    assert Response.correlated?(%{protocol_version: 1, request_id: "r"}, "r")
+    refute Response.correlated?(%{protocol_version: 1, request_id: "r"}, "r")
+    refute Response.correlated?(%{protocol_version: 2, request_id: "other"}, "r")
+    assert Response.correlated?(%{protocol_version: 2, request_id: "r"}, "r")
+
+    assert Response.validate_version(%{protocol_version: 1}) ==
+             {:error, :unsupported_protocol_version}
+
+    assert {:error, :unsupported_protocol_version} =
+             Response.encode(
+               "response.message.create",
+               %{
+                 protocol_version: 1,
+                 type: :message_create,
+                 request_id: "r",
+                 conversation_id: "chat",
+                 message_id: "a",
+                 payload: %{body: "Unsupported"}
+               },
+               "12"
+             )
+  end
+
+  test "malformed shared responses and empty correlation never become UI events" do
+    for id <- [nil, "", " ", <<255>>, String.duplicate("x", 256)] do
+      refute Response.correlated?(%{protocol_version: 2, request_id: id}, id)
+    end
+
+    for response <- [
+          %{protocol_version: 2, type: :message_failed, payload: nil, conversation_id: "chat"},
+          %{protocol_version: 2, type: :message_failed, payload: %{body: "failed"}}
+        ] do
+      assert {:error, :invalid_response} =
+               Response.encode("response.message.failed", response, "12")
+    end
   end
 end

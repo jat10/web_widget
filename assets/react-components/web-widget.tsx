@@ -1,10 +1,10 @@
-import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, useSyncExternalStore, type ComponentPropsWithoutRef } from "react";
 import { useLiveReact } from "live_react";
 import {
   AssistantRuntimeProvider,
-  ComposerPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
+  TextMessagePartProvider,
   useAuiState,
   useExternalStoreRuntime,
   type ThreadMessageLike,
@@ -13,6 +13,9 @@ import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import remarkGfm from "remark-gfm";
 import "../css/widget.css";
 import { connectionSnapshot, subscribeConnection } from "../js/widget-connection";
+import { ConversationProgress, WorkingIndicator } from "./working-indicator";
+import { SubmissionController } from "../js/submission";
+import { AcknowledgedComposer } from "./acknowledged-composer";
 
 type Mode = "launcher" | "conversation";
 type Step = {
@@ -35,7 +38,7 @@ type Config = {
   max_length: number;
 };
 type ConversationSummary = { id: string; title: string };
-type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
+type Props = { canReopen?: boolean; conversations?: ConversationSummary[]; conversationId?: string | null; mode: Mode; messages: Message[]; isRunning: boolean; submissionPending?: boolean; submissionBlocked?: boolean; isTyping: boolean; authenticationPending?: boolean; responseError?: string | null; config: Config };
 type MessageDelta = { conversation_id: string; id: string; delta: string };
 type MessageReset = { all?: boolean; conversation_id?: string | null; id?: string };
 const messageKey = (conversationId: string | null, id: string) => JSON.stringify([conversationId, id]);
@@ -73,12 +76,43 @@ function dateLabel(timestamp: string, locale: string, t: Record<string, string>)
   return date.toLocaleDateString(locale, { month: "short", day: "numeric", year: "numeric" });
 }
 
-export function WebWidget({ mode, messages, isRunning, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
+export function WebWidget({ mode, messages, isRunning, submissionPending = isRunning, submissionBlocked = false, isTyping, authenticationPending = false, responseError, config, conversations = [], conversationId = null, canReopen = false }: Props) {
   const { pushEvent } = useLiveReact();
   const t = config.strings;
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
-  const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const runtimeRef = useRef<ReturnType<typeof useExternalStoreRuntime> | null>(null);
+  const sendOptions = useRef({ pushEvent, t });
+  sendOptions.current = { pushEvent, t };
+  const submissionRef = useRef<SubmissionController | null>(null);
+  if (!submissionRef.current) submissionRef.current = new SubmissionController({
+    getDraft: () => runtimeRef.current?.thread.composer.getState().text ?? "",
+    setDraft: text => runtimeRef.current?.thread.composer.setText(text),
+    send: (text, id, reply) => sendOptions.current.pushEvent("widget.submit", { text, submission_id: id }, value => reply({
+      ok: value.ok === true, error: typeof value.error === "string" ? value.error : undefined,
+      outcome: typeof value.ok === "boolean" ? value.outcome : "unknown",
+    })),
+    unknownMessage: t["Submission outcome is unknown. Restore the conversation before sending again."],
+    timeoutMessage: t["Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."],
+  });
+  const controller = submissionRef.current;
+  const submission = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
+  const submitting = submission.pending != null;
+  const submissionUnknown = submission.pending?.status === "unknown";
+  const sendDraft = () => {
+    if (submissionBlocked || authenticationPending || !connectionSnapshot().ready) return;
+    setError(null);
+    controller.submit();
+  };
+  useEffect(() => {
+    const acknowledge = (event: Event) => {
+      const id = (event as CustomEvent<{ submission_id: string }>).detail?.submission_id;
+      if (typeof id === "string") controller.acknowledge(id);
+    };
+    window.addEventListener("phx:widget.submission.ack", acknowledge);
+    return () => { window.removeEventListener("phx:widget.submission.ack", acknowledge); controller.dispose(); };
+  }, [controller]);
+  useEffect(() => { if (!connection.ready) controller.disconnected(); }, [connection.ready, controller]);
   const [deltas, setDeltas] = useState<Record<string, string>>({});
   useEffect(() => {
     const append = (event: Event) => {
@@ -125,7 +159,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
     messages: datedMessages,
     convertMessage: message => convertMessage(message, t["Unable to complete response"]),
     isRunning,
-    isSendDisabled: submitting || isRunning || authenticationPending || !connection.ready,
+    isSendDisabled: submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending || !connection.ready,
     onNew: async (message) => {
       const text = message.content
         .filter((part) => part.type === "text")
@@ -133,34 +167,11 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
         .join("\n")
         .trim();
       if (!text) return;
-      if (!connectionSnapshot().ready) {
-        runtime.thread.composer.setText(text);
-        return;
-      }
-      setSubmitting(true);
-      setError(null);
-      try {
-        await new Promise<void>((resolve, reject) => {
-          const timeout = window.setTimeout(() => reject(new Error(t["Connection interrupted. Please try again."])), 300000);
-          try {
-            pushEvent("widget.submit", { text }, (reply) => {
-              window.clearTimeout(timeout);
-              if (reply.ok) resolve();
-              else reject(new Error(reply.error));
-            });
-          } catch (cause) {
-            window.clearTimeout(timeout);
-            reject(cause);
-          }
-        });
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : t["Unable to send. Please try again."]);
-        runtime.thread.composer.setText(text);
-      } finally {
-        setSubmitting(false);
-      }
+      if (!runtimeRef.current?.thread.composer.getState().text) runtimeRef.current?.thread.composer.setText(text);
+      sendDraft();
     },
   });
+  runtimeRef.current = runtime;
 
   useEffect(() => {
     if (window.parent === window || !root.current) return;
@@ -187,7 +198,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
     if (previousConversation.current !== conversationId) {
       // Initial host binding may accompany a rejected first submission. Keep its
       // restored draft and error; explicit switches away from a chat reset them.
-      if (previousConversation.current !== null) {
+      if (previousConversation.current !== null && !controller.getSnapshot().pending) {
         runtime.thread.composer.setText("");
         setError(null);
       }
@@ -209,7 +220,7 @@ export function WebWidget({ mode, messages, isRunning, isTyping, authenticationP
         <div className="zaq-chat-main" key="chat-main">
         {mode === "conversation" && <Conversation isTyping={isTyping && connection.ready} onClose={() => { if (connection.ready) pushEvent("widget.close", {}); }} empty={messages.length === 0} />}
         {mode === "launcher" && canReopen && <button type="button" className="zaq-reopen" data-widget-reopen onClick={() => pushEvent("widget.open", {})}>{t["Open conversation"]}<span aria-hidden="true">↗</span></button>}
-        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || isRunning || authenticationPending} recoveringResponse={submitting || isRunning} error={error || responseError || null} />
+        <FloatingComposer key="composer" mode={mode} config={config} busy={submitting || submissionPending || submissionBlocked || submissionUnknown || authenticationPending} sending={submitting} draftLocked={submitting} onSend={sendDraft} recoveringResponse={submitting || submissionPending || isRunning} error={submission.error || error || responseError || null} />
         </div>
       </ThreadPrimitive.Root>
     </AssistantRuntimeProvider></I18n.Provider>
@@ -228,7 +239,7 @@ function ConversationSidebar({ conversations, selectedId, disabled, onSelect, on
   </aside>;
 }
 
-function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { mode: Mode; config: Config; busy: boolean; recoveringResponse: boolean; error: string | null }) {
+function FloatingComposer({ mode, config, busy, sending, draftLocked, onSend, recoveringResponse, error }: { mode: Mode; config: Config; busy: boolean; sending: boolean; draftLocked: boolean; onSend: () => void; recoveringResponse: boolean; error: string | null }) {
   const { strings: t } = useI18n();
   const connection = useSyncExternalStore(subscribeConnection, connectionSnapshot);
   return (
@@ -241,17 +252,9 @@ function FloatingComposer({ mode, config, busy, recoveringResponse, error }: { m
         </p>
       </div>}
       {error && <p className="zaq-widget-error" role="alert">{error}</p>}
-      <ComposerPrimitive.Root className="zaq-composer">
-        <ComposerPrimitive.Input
-          aria-label={t["Message"]}
-          placeholder={mode === "launcher" ? config.placeholder : config.follow_up_placeholder}
-          maxLength={config.max_length}
-          className="zaq-composer-input"
-        />
-        <ComposerPrimitive.Send className="zaq-composer-send" disabled={busy || !connection.ready} aria-label={t["Send message"]}>
-          {busy && connection.ready ? t["Working…"] : t["Send"]}
-        </ComposerPrimitive.Send>
-      </ComposerPrimitive.Root>
+      <AcknowledgedComposer ready={connection.ready} busy={busy} sending={sending} draftLocked={draftLocked} onSend={onSend}
+        placeholder={mode === "launcher" ? config.placeholder : config.follow_up_placeholder} maxLength={config.max_length}
+        labels={{ input: t["Message"], send: t["Send"], sending: t["Sending…"], working: t["Working…"], sendMessage: t["Send message"] }} />
       <div className="zaq-widget-signature" dir="ltr">
         <a href="https://www.zaq.ai/open-source" target="_blank" rel="noopener noreferrer">
           Powered by <span>ZAQ.AI</span>
@@ -275,6 +278,7 @@ function Conversation({ isTyping, onClose, empty }: { isTyping: boolean; onClose
         <div className="zaq-thread-content">
           {empty && <div className="zaq-empty-chat"><h2>{t["How can I help?"]}</h2><p>{t["Start a new conversation or choose one from your history."]}</p></div>}
           <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+          <ConversationProgress isTyping={isTyping} label={t["Preparing your answer"]} />
           <ThreadPrimitive.ScrollToBottom className="zaq-scroll-bottom">{t["Latest messages"]}</ThreadPrimitive.ScrollToBottom>
         </div>
       </ThreadPrimitive.Viewport>
@@ -286,8 +290,14 @@ function UserMessage() {
   return <><MessageDate /><MessagePrimitive.Root className="zaq-message zaq-message-user" data-role="user"><span className="zaq-user-content" dir="auto"><MessagePrimitive.Parts /></span><MessageTime /></MessagePrimitive.Root></>;
 }
 
+function MarkdownLink({ href, title, children }: ComponentPropsWithoutRef<"a">) {
+  return <a href={href} title={title} target="_blank" rel="noopener noreferrer">{children}</a>;
+}
+
+const markdownComponents = { a: MarkdownLink };
+
 function AssistantMarkdown() {
-  return <MarkdownTextPrimitive className="zaq-markdown" smooth={false} remarkPlugins={[remarkGfm]} />;
+  return <MarkdownTextPrimitive className="zaq-markdown" smooth={false} remarkPlugins={[remarkGfm]} components={markdownComponents} />;
 }
 
 function AssistantMessage() {
@@ -296,9 +306,11 @@ function AssistantMessage() {
   const error = useAuiState((s) => s.message.metadata.custom.error) as string | null | undefined;
   const running = useAuiState((s) => s.message.status?.type === "running");
   const hasContent = useAuiState((s) => s.message.metadata.custom.hasContent) as boolean;
+  const optimistic = useAuiState(s => s.message.metadata.isOptimistic === true);
   const toolSteps = steps?.filter(step => step.kind === "tool_call" || step.kind === "tool_result");
   const activeTools = toolSteps?.some(step =>
     (step.state === "started" || step.state === "updated"));
+  if (optimistic) return null;
   return (
     <><MessageDate />
     <MessagePrimitive.Root className="zaq-message zaq-message-assistant" data-role="assistant" data-running={running}>
@@ -309,7 +321,7 @@ function AssistantMessage() {
       </div>
       <MessageTime />
       {running && <WorkingIndicator label={hasContent ? t["Writing response"] : activeTools ? t["Working with tools"] : t["Preparing your answer"]} />}
-      {error && <div className="zaq-response-error" role="alert"><ActivityIcon kind="failed" /><div><strong>{t["Couldn't finish this response"]}</strong><p>{error}</p><span>{t["You can send another message below."]}</span></div></div>}
+      {error && <div className="zaq-response-error" role="alert"><ActivityIcon kind="failed" /><div><strong>{t["Couldn't finish this response"]}</strong><TextMessagePartProvider text={error}><AssistantMarkdown /></TextMessagePartProvider><span>{t["You can send another message below."]}</span></div></div>}
     </MessagePrimitive.Root></>
   );
 }
@@ -325,10 +337,6 @@ function MessageTime() {
   if (!timestamp) return null;
   const date = new Date(timestamp);
   return <time className="zaq-message-time" dateTime={timestamp} title={date.toLocaleString(locale)}>{date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" })}</time>;
-}
-
-function WorkingIndicator({ label }: { label: string }) {
-  return <div className="zaq-working" role="status"><span className="zaq-working-dots" aria-hidden="true"><i /><i /><i /></span><span>{label}</span></div>;
 }
 
 function ResponseActivity({ steps, running, failed }: { steps: Step[]; running: boolean; failed: boolean }) {

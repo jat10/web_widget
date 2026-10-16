@@ -2,6 +2,7 @@ defmodule WebWidget.Integration.ProtocolTest do
   use ExUnit.Case, async: false
 
   alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.Integration.Chat
   alias WebWidget.Runtime
   alias WebWidget.TestIntegration.Host
 
@@ -10,8 +11,13 @@ defmodule WebWidget.Integration.ProtocolTest do
     WebWidget.TestInfrastructure.setup(opts)
   end
 
-  setup_all do
-    start_supervised!({Phoenix.PubSub, name: WebWidget.TestIntegration.PubSub})
+  setup do
+    start_supervised!(
+      Supervisor.child_spec({Phoenix.PubSub, name: WebWidget.TestIntegration.PubSub},
+        id: WebWidget.TestIntegration.PubSub
+      )
+    )
+
     :ok
   end
 
@@ -24,7 +30,9 @@ defmodule WebWidget.Integration.ProtocolTest do
 
   defp session(config) do
     {:ok, session} = Runtime.authenticate(to_string(config.id), Host.proof(config.id))
-    session
+    {:ok, _, bound} = Runtime.initialize(%{type: "widget.init", request_id: "bootstrap"}, session)
+    assert_receive {:ingress, _, %{type: :conversation_init, request_id: "bootstrap"}, _, _}
+    bound
   end
 
   defp question do
@@ -53,7 +61,8 @@ defmodule WebWidget.Integration.ProtocolTest do
     assert widget_id == to_string(config.id)
     assert id == config.id
 
-    assert Runtime.dispatch(%{type: "widget.init", request_id: "init-1"}, session) == reply
+    assert {:ok, %{type: :widget_initialized}, ^session} =
+             Runtime.initialize(%{type: "widget.init", request_id: "init-1"}, session)
 
     assert_receive {:ingress, ^id, %{type: :conversation_init, request_id: "init-1"}, context,
                     caller}
@@ -65,12 +74,14 @@ defmodule WebWidget.Integration.ProtocolTest do
     assert context.options.channel_config_id == id
     refute Map.has_key?(context.options, :capabilities)
 
-    delivery = context.options.delivery.constructed
+    delivery = context.options.delivery
     assert delivery.topic == session.topic
     assert delivery.channel_config_id == id
     assert delivery.consumer == :widget
+    assert delivery.protocol_version == 2
 
     assert delivery.events == %{
+             user_message: "response.user_message",
              typing: "response.typing",
              message_create: "response.message.create",
              message_edit: "response.message.edit",
@@ -157,11 +168,16 @@ defmodule WebWidget.Integration.ProtocolTest do
           :widget_id,
           :channel_config_id,
           :topic,
+          :person_id,
+          :delivery_binding,
           :context,
           :capabilities,
           :selected_agent_id,
           :hooks,
           :sink_mfa,
+          :protocol_version,
+          :execution_id,
+          :root_request_id,
           "conversation_id"
         ] do
       assert Runtime.dispatch(Map.put(question(), key, "forged"), session) ==
@@ -195,15 +211,25 @@ defmodule WebWidget.Integration.ProtocolTest do
     refute_receive {:ingress, _, _, _, _}
   end
 
-  test "session destinations are isolated and exist before a conversation ID" do
+  test "host recipient destinations are stable across pages and isolate sender and connector" do
     {config, _} = runtime()
     first = session(config)
     second = session(config)
-    refute first.topic == second.topic
+    assert first.topic == second.topic
     assert {:ok, subscription} = Runtime.subscribe(first)
-    Phoenix.PubSub.broadcast(WebWidget.TestIntegration.PubSub, second.topic, :foreign)
+
+    {:ok, foreign} =
+      Runtime.authenticate(to_string(config.id), Host.proof(config.id, "another-person"))
+
+    {:ok, _, foreign} = Runtime.initialize(%{type: "widget.init", request_id: "foreign"}, foreign)
+    {other_config, _} = runtime()
+    other = session(other_config)
+    refute foreign.topic == first.topic
+    refute other.topic == first.topic
+    Phoenix.PubSub.broadcast(WebWidget.TestIntegration.PubSub, foreign.topic, :foreign)
+    Phoenix.PubSub.broadcast(WebWidget.TestIntegration.PubSub, other.topic, :foreign)
     refute_receive :foreign
-    Phoenix.PubSub.broadcast(WebWidget.TestIntegration.PubSub, first.topic, :own)
+    Phoenix.PubSub.broadcast(WebWidget.TestIntegration.PubSub, second.topic, :own)
     assert_receive :own
     assert :ok = WebWidget.Adapter.unsubscribe(subscription)
   end
@@ -229,11 +255,32 @@ defmodule WebWidget.Integration.ProtocolTest do
     refute_receive {:ingress, _, _, _, _}
   end
 
+  test "authentication alone cannot subscribe or send; subscription failure fails closed" do
+    {config, _} = runtime()
+    {:ok, unbound} = Runtime.authenticate(to_string(config.id), Host.proof(config.id))
+    assert unbound.topic == nil
+    assert {:error, :invalid_delivery_binding} = Runtime.subscribe(unbound)
+    assert {:error, :delivery_binding_required} = Runtime.dispatch(question(), unbound)
+    refute_receive {:ingress, _, _, _, _}
+
+    stop_supervised!(WebWidget.TestIntegration.PubSub)
+    before = Process.info(self(), :monitors)
+
+    assert {:error, :unavailable} =
+             Chat.open(to_string(config.id), %{
+               "identity_token" => Host.proof(config.id)
+             })
+
+    assert Process.info(self(), :monitors) == before
+    refute_receive {:ingress, _, %{type: :conversation_history}, _, _}
+  end
+
   test "keeps host rejection and semantic error shapes; contains callback failures" do
     for reply <- [
           {:error, :unauthorized},
           %{type: :error, payload: %{code: :conversation_not_found}},
-          %{type: :message_complete, payload: %{body: "Answer"}}
+          %{type: :message_complete, payload: %{body: "Answer"}},
+          %{type: :status, payload: %{accepted: true, created: false}, message_id: nil}
         ] do
       {config, spec} = runtime(reply)
       assert Runtime.dispatch(%{question() | mode: :sync}, session(config)) == reply

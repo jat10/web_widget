@@ -45,11 +45,55 @@ defmodule WebWidget.SharedProtocolSmokeTest do
 
     {:ok, response} =
       Response.new(%{
+        protocol_version: 2,
         request_id: command.request_id,
         type: :widget_initialized,
         payload: %{created: false}
       })
 
+    {:ok, delivery} =
+      Delivery.new(%{
+        protocol_version: 2,
+        consumer: :widget,
+        channel_config_id: 42,
+        topic: "web_widget:recipient:42:fixture-person",
+        events: %{
+          user_message: "response.user_message",
+          typing: "response.typing",
+          message_create: "response.message.create",
+          message_edit: "response.message.edit",
+          message_step: "response.message.step",
+          message_complete: "response.message.complete",
+          message_failed: "response.message.failed",
+          error: "response.error"
+        }
+      })
+
+    %{response: response, delivery_binding: delivery}
+  end
+
+  def ingress(%{id: 42}, %Message{mode: :sync} = message,
+        context: %Context{delivery: %Delivery{protocol_version: 2}}
+      ) do
+    attrs = %{
+      protocol_version: 2,
+      request_id: message.request_id,
+      conversation_id: message.conversation_id || "fixture-chat",
+      type: :status,
+      payload: %{accepted: true, created: is_nil(message.conversation_id)}
+    }
+
+    attrs =
+      if message.content == "Sync answer",
+        do:
+          Map.merge(attrs, %{
+            type: :message_complete,
+            message_id: "sync-assistant",
+            payload: %{body: "Sync answer"}
+          }),
+        else: attrs
+
+    {:ok, response} = Response.new(attrs)
     response
   end
 
@@ -60,19 +104,31 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     assert message.prompt_context == "Parent context"
     assert delivery.consumer == :widget
     assert delivery.channel_config_id == 42
-    assert map_size(delivery.events) == 7
+    assert delivery.protocol_version == 2
+    assert map_size(delivery.events) == 8
 
     {:ok, response} =
       Response.new(%{
+        protocol_version: 2,
         request_id: message.request_id,
         type: :conversation_created,
         conversation_id: "fixture-chat",
-        message_id: "transport-assistant",
-        payload: %{created: true, accepted: true}
+        payload: %{
+          created: true,
+          accepted: true,
+          user_message: %{
+            message_id: Ecto.UUID.generate(),
+            position: 1,
+            role: "user",
+            content: message.content,
+            provider_sent_at: nil
+          }
+        }
       })
 
     {:ok, terminal} =
       Response.new(%{
+        protocol_version: 2,
         request_id: message.request_id,
         type: :message_complete,
         conversation_id: "fixture-chat",
@@ -128,7 +184,8 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     chat = Chat.receive_response(chat, event, create)
     assert_receive {:web_response, event, terminal}
     chat = Chat.receive_response(chat, event, terminal)
-    assert chat.active == nil
+    assert chat.pending_submission == nil
+    assert chat.state.pending_reply == nil
     assert List.last(chat.state.messages).content == "Fixture answer"
     Chat.close(chat)
   end
@@ -153,8 +210,10 @@ defmodule WebWidget.SharedProtocolSmokeTest do
     Host.await_runtime(config.id)
     assert {:ok, session} = Runtime.authenticate("42", :fixture_session)
 
-    assert %Response{type: :widget_initialized, conversation_id: nil} =
-             Runtime.dispatch(%{type: "widget.init", request_id: "init"}, session)
+    assert session.delivery_binding == nil
+
+    assert {:ok, %Response{type: :widget_initialized, conversation_id: nil}, session} =
+             Runtime.initialize(%{type: "widget.init", request_id: "init"}, session)
 
     for params <- [
           %{},
@@ -196,6 +255,43 @@ defmodule WebWidget.SharedProtocolSmokeTest do
 
     assert_receive {:web_response, "response.message.complete",
                     %Response{request_id: "question", payload: %{body: "Fixture answer"}}}
+
+    assert_receive {:web_response, "response.message.create", %Response{protocol_version: 2}}
+
+    assert %Response{
+             protocol_version: 2,
+             type: :status,
+             message_id: nil,
+             payload: %{accepted: true}
+           } =
+             Runtime.dispatch(%{event | mode: :sync, conversation_id: "fixture-chat"}, session)
+
+    assert %Response{
+             protocol_version: 2,
+             type: :message_complete,
+             message_id: "sync-assistant",
+             payload: %{body: "Sync answer"}
+           } =
+             Runtime.dispatch(
+               %{
+                 event
+                 | mode: :sync,
+                   conversation_id: "fixture-chat",
+                   message: %{id: "sync-user", content: "Sync answer"}
+               },
+               session
+             )
+
+    refute_receive {:web_response, _, _}
+
+    assert {:error, {:invalid_field, :protocol_version}} =
+             Delivery.new(%{
+               consumer: :widget,
+               channel_config_id: 42,
+               topic: session.topic,
+               protocol_version: 1,
+               events: %{}
+             })
 
     assert {:error, {:invalid_field, :timestamp}} =
              Runtime.dispatch(%{event | timestamp: "not-a-DateTime"}, session)

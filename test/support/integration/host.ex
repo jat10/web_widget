@@ -2,6 +2,7 @@ defmodule WebWidget.TestIntegration.Host do
   @moduledoc false
 
   alias WebWidget.Connector.RuntimeConfig
+  alias WebWidget.TestIntegration.ChatHost
 
   # Recording constructors deliberately avoid implementing another host schema.
   def new(attrs), do: {:ok, %{constructed: attrs}}
@@ -25,6 +26,23 @@ defmodule WebWidget.TestIntegration.Host do
   def receive_request(config, test_pid, %{constructed: attrs}, context: context) do
     send(test_pid, {:ingress, config.id, attrs, context, self()})
 
+    if attrs[:type] == :conversation_init do
+      %{
+        response: %{
+          protocol_version: 2,
+          type: :widget_initialized,
+          request_id: attrs.request_id,
+          conversation_id: attrs[:conversation_id],
+          payload: %{created: false}
+        },
+        delivery_binding: ChatHost.delivery(context.options)
+      }
+    else
+      reply(config)
+    end
+  end
+
+  defp reply(config) do
     case Map.get(config, :reply) do
       :raise -> raise "private sink failure"
       :throw -> throw(:private_sink_failure)

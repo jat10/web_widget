@@ -66,9 +66,11 @@ defmodule WebWidget.E2ESharedHost do
         Agent.update(@requests, &Map.put(&1, {:conversation, context.sender_id}, %{id: conversation, messages: messages}))
         host = WebWidget.TestIntegration.ChatHost
         receipt = host.response(request, if(request.conversation_id, do: :status, else: :conversation_created), conversation,
-          %{accepted: true, created: is_nil(request.conversation_id)})
-        host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
-        host.publish(context, %{receipt | type: :message_complete, payload: %{body: answer}})
+          %{accepted: true, created: is_nil(request.conversation_id), user_message: Enum.at(messages, -2)})
+        host.publish(context, %{receipt | type: :user_message})
+        stream = %{receipt | message_id: Ecto.UUID.generate()}
+        host.publish(context, %{stream | type: :message_create, payload: %{body: ""}})
+        host.publish(context, %{stream | type: :message_complete, payload: %{body: answer}})
         {:ok, receipt}
 
       %{type: type, conversation_id: "e2e-" <> _ = conversation} when type in [:conversation_init, :conversation_history] ->
@@ -77,7 +79,8 @@ defmodule WebWidget.E2ESharedHost do
         case saved do
           %{id: ^conversation, messages: messages} ->
             if type == :conversation_init,
-              do: host.response(request, :widget_initialized, conversation, %{created: false}),
+              do: %{response: host.response(request, :widget_initialized, conversation, %{created: false}),
+                delivery_binding: host.delivery(context)},
               else: host.response(request, :conversation_history, conversation, %{messages: messages})
           _ -> host.response(request, :error, conversation, %{code: :conversation_not_found})
         end
@@ -113,7 +116,7 @@ defmodule WebWidget.E2ESharedHost do
   defp schedule_response(context, receipt, delay, type, body) do
     # Keep the destination accepted with the request, just as an in-flight host job does.
     {:ok, _timer} = :timer.apply_after(delay, WebWidget.TestIntegration.ChatHost, :publish, [
-      context, %{receipt | type: type, payload: %{body: body}}
+      context, %{receipt | message_id: "assistant-" <> receipt.request_id, type: type, payload: %{body: body}}
     ])
   end
 
@@ -122,23 +125,31 @@ defmodule WebWidget.E2ESharedHost do
     conversation = request.conversation_id || "conversation-1"
     created = is_nil(request.conversation_id)
     receipt = host.response(request, if(created, do: :conversation_created, else: :status),
-      conversation, %{accepted: true, created: created})
+      conversation, %{accepted: true, created: created, user_message: %{message_id: "held-user", position: 1, role: "user", content: request.content, provider_sent_at: nil}})
+    host.publish(context, %{receipt | type: :user_message})
+    stream = %{receipt | message_id: Ecto.UUID.generate()}
     Agent.update(@requests, &Map.put(&1, {:held_stream, context.sender_id},
-      %{status: :running, receipt: receipt, context: context}))
+      %{status: :running, receipt: receipt, stream: stream, context: context}))
     host.publish(context, %{receipt | type: :typing, payload: %{active: true}})
-    host.publish(context, %{receipt | type: :message_create, payload: %{body: ""}})
-    host.publish(context, %{receipt | type: :message_edit, payload: %{body: "**Partial**"}})
+    host.publish(context, %{stream | type: :message_create, payload: %{body: ""}})
+    host.publish(context, %{stream | type: :message_edit, payload: %{body: "**Partial**"}})
     {:ok, receipt}
   end
 
   defp held_history(request, held) do
+    user = %{message_id: "held-user", position: 1, role: "user", content: "held stream", provider_sent_at: nil}
+    assistant = %{message_id: "held-assistant", position: 2, role: "assistant", content: "**Finished**", provider_sent_at: nil}
+    running = held.status == :running
+
+    if running do
+      # Model the next full-body live edit racing history, not an unfinished persisted row.
+      WebWidget.TestIntegration.ChatHost.publish(held.context,
+        %{held.stream | type: :message_edit, payload: %{body: "**Partial**", user_message_id: "held-user"}})
+    end
+
     WebWidget.TestIntegration.ChatHost.response(request, :conversation_history,
-      request.conversation_id, %{messages: [
-        %{message_id: "held-user", position: 1, role: "user", content: "held stream", provider_sent_at: nil},
-        %{message_id: "held-assistant", position: 2, role: "assistant",
-          content: if(held.status == :running, do: "**Partial**", else: "**Finished**"),
-          provider_sent_at: nil}
-      ]})
+      request.conversation_id, %{processing: if(running, do: :active, else: :idle),
+        messages: if(running, do: [user], else: [user, assistant])})
   end
 
   def release_stream(user_id) do
@@ -151,7 +162,8 @@ defmodule WebWidget.E2ESharedHost do
     end)
     if held do
       WebWidget.TestIntegration.ChatHost.publish(held.context,
-        %{held.receipt | type: :message_complete, payload: %{body: "**Finished**"}})
+        %{held.stream | type: :message_complete, payload: %{body: "**Finished**",
+          assistant_message_id: "held-assistant", user_message_id: "held-user"}})
     end
     held != nil
   end
@@ -162,7 +174,7 @@ defmodule WebWidget.E2ESharedHost do
         nil -> %{status: :missing}
         held -> %{status: held.status, topic: held.context.delivery.topic,
           request_id: held.receipt.request_id, conversation_id: held.receipt.conversation_id,
-          message_id: held.receipt.message_id}
+          message_id: held.stream.message_id}
       end
     end)
   end
@@ -171,7 +183,7 @@ defmodule WebWidget.E2ESharedHost do
   def probe_stream(user_id) do
     held = Agent.get(@requests, &Map.fetch!(&1, {:held_stream, user_id}))
     WebWidget.TestIntegration.ChatHost.publish(held.context,
-      %{held.receipt | type: :message_edit, payload: %{body: "UNAUTHORIZED EXPIRY PROBE"}})
+      %{held.stream | type: :message_edit, payload: %{body: "UNAUTHORIZED EXPIRY PROBE"}})
   end
 
   def request_count(user_id, content) do

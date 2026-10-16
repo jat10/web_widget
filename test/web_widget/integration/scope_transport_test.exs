@@ -2,7 +2,7 @@ defmodule WebWidget.Integration.ScopeTransportTest do
   use ExUnit.Case, async: false
   alias WebWidget.HostAdapter
   alias WebWidget.Integration.{ControlProof, SignedIdentity}
-  alias WebWidget.TestHost.{ScopedEndpoint, TLSProxy}
+  alias WebWidget.TestHost.{NormalizingScopedEndpoint, ScopedEndpoint, TLSProxy}
   alias WebWidget.TestIntegration.Host
 
   setup do
@@ -249,7 +249,135 @@ defmodule WebWidget.Integration.ScopeTransportTest do
     assert map_size(direct.resp_cookies) == 0
   end
 
-  defp assert_proxy_scope(ctx, forwarding) do
+  test "host normalization precedes secure cookies and preserves rejection boundaries", ctx do
+    endpoint = start_normalizing_endpoint()
+
+    WebWidget.TestInfrastructure.replace(
+      pubsub_server: WebWidget.PubSub,
+      scope: "/channels",
+      session: [partitioned: true],
+      transport: [endpoint: endpoint]
+    )
+
+    Host.await_runtime(ctx.config.id)
+
+    for path <- [ctx.path, ctx.path <> "/session"] do
+      direct = endpoint.call(Plug.Test.conn(:get, path), [])
+      assert {direct.status, direct.resp_body} == {503, "https_required"}
+      assert direct.resp_cookies == %{}
+
+      forwarded = forwarded_conn(path)
+      accepted = endpoint.call(forwarded, [])
+      assert accepted.status == 200
+      assert accepted.scheme == :https
+
+      if String.ends_with?(path, "/session") do
+        cookie = accepted.resp_cookies["_web_widget_session"]
+        assert cookie.secure
+        assert cookie.extra =~ "Partitioned"
+      end
+
+      untrusted = endpoint.call(%{forwarded | remote_ip: {198, 51, 100, 1}}, [])
+      assert untrusted.status == 503
+      assert untrusted.resp_cookies == %{}
+
+      # The same headers never opt the default endpoint into host normalization.
+      default = ScopedEndpoint.call(forwarded, [])
+      assert default.status == 503
+      assert default.scheme == :http
+
+      https = endpoint.call(Plug.Test.conn(:get, "https://localhost" <> path), [])
+      assert https.status == 200
+    end
+
+    for path <- [ctx.path, ctx.path <> "/session", ctx.path <> "/live/websocket"],
+        values <- [["https", "https"], ["https,http"]] do
+      conn = forwarded_conn(path) |> Plug.Conn.delete_req_header("x-forwarded-proto")
+
+      conn = %{
+        conn
+        | req_headers: Enum.map(values, &{"x-forwarded-proto", &1}) ++ conn.req_headers
+      }
+
+      conn =
+        Plug.Conn.put_req_header(conn, "cookie", "_web_widget_session=a; _web_widget_session=b")
+
+      rejected = endpoint.call(conn, [])
+      assert {rejected.status, rejected.resp_body} == {400, "invalid_host_forwarding"}
+      assert rejected.halted
+      assert rejected.resp_cookies == %{}
+    end
+
+    WebWidget.TestInfrastructure.replace(
+      pubsub_server: WebWidget.PubSub,
+      scope: "/channels",
+      proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: "https://localhost"]
+    )
+
+    Host.await_runtime(ctx.config.id)
+
+    for path <- [ctx.path, ctx.path <> "/session", ctx.path <> "/live/websocket"] do
+      conflict =
+        forwarded_conn(path)
+        |> Plug.Conn.put_req_header("x-forwarded-host", "evil.example")
+        |> Plug.Conn.put_req_header("cookie", "_web_widget_session=a; _web_widget_session=b")
+
+      rejected = endpoint.call(conflict, [])
+      assert {rejected.status, rejected.resp_body} == {400, "invalid_widget_proxy"}
+      assert rejected.resp_cookies == %{}
+
+      ambiguous =
+        forwarded_conn(path)
+        |> Plug.Conn.put_req_header("cookie", "_web_widget_session=a; _web_widget_session=b")
+
+      rejected = endpoint.call(ambiguous, [])
+      assert {rejected.status, rejected.resp_body} == {400, "ambiguous_widget_cookie"}
+      assert rejected.halted
+      assert rejected.resp_cookies == %{}
+    end
+  end
+
+  @tag :tmp_dir
+  test "host normalization supports real HTTPS bootstrap and WSS before Phoenix dispatch", ctx do
+    endpoint = start_normalizing_endpoint(server: true, http: [ip: {127, 0, 0, 1}, port: 0])
+    {:ok, {_, port}} = endpoint.server_info(:http)
+    assert_proxy_scope(%{ctx | port: port}, :explicit, endpoint)
+  end
+
+  defp forwarded_conn(path) do
+    Plug.Test.conn(:get, path)
+    |> Plug.Conn.put_req_header("x-forwarded-proto", "https")
+    |> Plug.Conn.put_req_header("x-forwarded-host", "localhost")
+    |> Map.put(:remote_ip, {127, 0, 0, 1})
+  end
+
+  defp start_normalizing_endpoint(opts \\ []) do
+    endpoint = NormalizingScopedEndpoint
+    previous = Application.get_env(:web_widget, endpoint)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:web_widget, endpoint, previous),
+        else: Application.delete_env(:web_widget, endpoint)
+    end)
+
+    config = Application.fetch_env!(:web_widget, ScopedEndpoint)
+
+    Application.put_env(
+      :web_widget,
+      endpoint,
+      Keyword.merge(config,
+        server: false,
+        force_ssl: [rewrite_on: [:x_forwarded_proto, :x_forwarded_host, :x_forwarded_port]]
+      )
+      |> Keyword.merge(opts)
+    )
+
+    start_supervised!(endpoint)
+    endpoint
+  end
+
+  defp assert_proxy_scope(ctx, forwarding, endpoint \\ ScopedEndpoint) do
     {cert, key, ca} = TLSProxy.certificates(ctx.tmp_dir)
     proxy_opts = [backend_port: ctx.port, certfile: cert, keyfile: key]
 
@@ -267,8 +395,12 @@ defmodule WebWidget.Integration.ScopeTransportTest do
       pubsub_server: WebWidget.PubSub,
       scope: "/channels",
       session: [partitioned: true],
-      transport: [endpoint: ScopedEndpoint],
-      proxy: [trusted_proxies: [{127, 0, 0, 1}], public_origin: origin]
+      transport: [endpoint: endpoint],
+      proxy:
+        if(endpoint == NormalizingScopedEndpoint,
+          do: nil,
+          else: [trusted_proxies: [{127, 0, 0, 1}], public_origin: origin]
+        )
     )
 
     Host.await_runtime(ctx.config.id)

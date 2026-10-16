@@ -4,7 +4,8 @@
   "scripts": {
     "dev": "vite --host localhost --strictPort",
     "build": "tsc && vite build && vite build --config vite.embed.config.js",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:unit": "node --test unit/*.test.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",

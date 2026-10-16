@@ -15,6 +15,12 @@ defmodule WebWidgetWeb.Localization do
         "Reconnecting to recover the response…" =>
           dgettext("widget", "Reconnecting to recover the response…"),
         "Working…" => dgettext("widget", "Working…"),
+        "Sending…" => dgettext("widget", "Sending…"),
+        "Submission outcome is unknown. Restore the conversation before sending again." =>
+          dgettext(
+            "widget",
+            "Submission outcome is unknown. Restore the conversation before sending again."
+          ),
         "Send" => dgettext("widget", "Send"),
         "Open conversation" => dgettext("widget", "Open conversation"),
         "Conversations" => dgettext("widget", "Conversations"),
@@ -61,6 +67,11 @@ defmodule WebWidgetWeb.Localization do
         "Unable to complete response" => dgettext("widget", "Unable to complete response"),
         "Connection interrupted. Please try again." =>
           dgettext("widget", "Connection interrupted. Please try again."),
+        "Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again." =>
+          dgettext(
+            "widget",
+            "Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again."
+          ),
         "Unable to send. Please try again." =>
           dgettext("widget", "Unable to send. Please try again."),
         "Unable to change conversations." =>

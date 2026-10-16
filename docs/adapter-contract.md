@@ -2,11 +2,11 @@
 
 ## Status and source of truth
 
-Decision recorded in wiring milestone 0, 2026-10-05. This document defines the
-selected ZAQ integration against shared web protocol **version 1** at
-[`c38e7e4e5`](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/services/web-bridge.md).
-ZAQ's [installation handoff](https://github.com/www-zaq-ai/zaq/blob/c38e7e4e5/docs/guides/web-widget-integration.md)
-and published constructors own the host protocol. This document owns the widget's
+The submission/message lifecycle migration (2026-10-12), coordinated with
+[ZAQ PR #836](https://github.com/www-zaq-ai/zaq/pull/836), selects shared web protocol
+**version 2**. Version 1 responses are explicitly unsupported; this is a coordinated
+host/package upgrade, not an automatic compatibility fallback. ZAQ's published
+constructors own the host protocol. This document owns the widget's
 integration decisions and presentation mapping, not a second shared schema.
 
 The package implements the milestone 2 authenticated chat path and the issue #14
@@ -43,6 +43,8 @@ Generic hosts register `WebWidget.HostAdapter`. Its public callbacks are:
 `build_runtime_specs(config, hooks) -> {:ok, {state_spec_or_nil, listeners}}`,
 `ingress_status(config, opts \\ []) -> {:ok, channel_status_map}`, and
 `installation(config_or_id, base_url, opts \\ []) -> {:ok, snippet}`.
+Verified sender enrichment travels as a trusted Context option;
+see [verified sender profiles](#verified-sender-profiles).
 Construction errors are redacted. Infrastructure specs represent the shared
 singleton, never connector children. Runtime specs carry the independent connector
 supervisor; recovery remains inside that stable connector, not in host coordination.
@@ -199,7 +201,7 @@ to its head. Credentials and non-HTTP(S) URLs are rejected. Omitting the attribu
 uses bundled styles; runtime `stylesheet_url` no longer supplies a stylesheet.
 This presentation message does not change signed identity, settings or host commands.
 Theme and language remain parent-owned. Start with `multiple_conversations: false`;
-ZAQ v1 does not provide the current widget's eager conversation-list contract.
+   ZAQ does not provide the current widget's eager conversation-list contract.
 
 The local ZAQ install mounts the package router on its existing endpoint.
 Released Git tags contain the built bundle in `web_widget/priv/static/assets`.
@@ -271,11 +273,14 @@ The independently signed LiveView page remains the JWT binding identity. Stable
 page, installation and transport URLs do not gain instance IDs or redirects.
 
 Browser locks may be storage-partitioned even where cookies are shared. Only the
-initial document bootstrap may initialize a cookie. Subsequent token resynchronization
-is read-only and has a document-lifetime attempt limit. Initial LiveView establishment
-and each transient reconnect have finite deadlines; opening a transport alone does
-not reset them. Failure stops recovery and offers explicit reload, never automatic
-reload or cookie-writing recovery. Cookie policy changes require a fresh page load.
+initial document bootstrap may initialize a cookie. Transient failures of the initial
+session HTTP request retry with capped backoff; each attempt is time-bounded but the
+outage has no terminal deadline. Successful session initialization is not repeated on
+socket errors. Confirmed cookie rejection or invalid configuration offers explicit reload.
+Phoenix owns initial transport connection, reconnection and channel rejoin without
+widget deadlines or retry budgets.
+The widget observes connectivity for presentation and uses existing authentication and
+history restoration after rejoin. Cookie policy changes require a fresh page load.
 
 Canonical `config.settings["same_site"]` accepts exactly `"None"`, `"Lax"`,
 `"Strict"`; missing, nil/blank/invalid values reject runtime construction. Every
@@ -383,6 +388,16 @@ addresses. No dedicated widget TLS listener is required.
 The package endpoint macro validates forwarding before delegating into the
 normal Phoenix endpoint plug pipeline, including endpoint `force_ssl`. Trusted
 header conflicts still reject if the incoming connection is already marked HTTPS.
+Hosts needing earlier normalization may implement the endpoint callback
+`web_widget_normalize/1` installed by `web_widget_socket/1,2`. Its default is the
+identity function. The supported endpoint-wide order is host normalization,
+widget Proxy, widget CookieGuard, then Phoenix (including socket dispatch and
+`force_ssl`). A halted connection stops at each boundary. Hosts do not override
+`call/2`. The callback is trusted host code, not automatic forwarding opt-in:
+it must validate immediate-peer trust and reject ambiguous forwarding before
+rewriting, preserve the physical peer for the widget Proxy, and retain headers
+needed by that guard. Merely configuring Phoenix `force_ssl` does not activate
+this callback or widget proxy trust.
 Any earlier external scheme/host rewriter must enforce the same immediate-peer
 trust boundary: stripping headers cannot reconstruct a physical HTTP scheme that
 an upstream component already changed. Keep the backend restricted to ingress;
@@ -480,7 +495,7 @@ with the lifetime constraint. The public parent API is
 `zaq.widget.connect`; a temporary deprecated `init` alias may use the same
 path. A new JWT is bound to the same verified page, widget and user, then
 authorization expiry and generation-tagged timers change in place. Renewal
-must preserve the subscription, active request, selected conversation,
+must preserve the subscription, submission correlation, independent assistant streams, selected conversation,
 streaming deltas, messages, React component, draft and presentation settings.
 The old binding remains usable by its page until its original expiry, so a
 lost acknowledgement cannot strand a still-authorized session. Failed
@@ -491,7 +506,7 @@ is independent from authentication renewal. A message with unknown outcome
 is never automatically resent.
 
 Recovery retires the old Chat's process/topic registrations, runtime monitor,
-and expiry timer before opening its replacement on the same page-stable topics.
+and expiry timer before opening its replacement on the host-authorized recipient topic.
 Phoenix PubSub registrations are not reference-counted Chat handles: closing an
 old Chat after subscribing its replacement would remove the replacement too.
 Successful recovery reauthorizes the selected conversation and loads history
@@ -539,6 +554,32 @@ authentication state. The package retains no credential in durable
 conversation metadata. Standalone demo fixtures remain separate from the
 integrated ZAQ runtime.
 
+### Context-update failures
+
+`widget.context.update` accepts `prompt_context: null`; callers need not supply
+prompt context when selecting a conversation. Failed updates return
+`%{ok: false, reason: safe_code, error: predefined_message}` without replacing the
+current Chat. The same reply reaches parent `zaq.widget.result`, and the SDK uses
+`error` as the rejected `updateContext()` promise's message.
+
+| Safe reason | Meaning |
+| --- | --- |
+| `invalid_context_fields` | Unsupported fields or invalid conversation/prompt values |
+| `submission_pending` | A local submission acknowledgement is still pending |
+| `authentication_required`, `session_unauthorized` | Authentication is absent or the current Session is no longer authorized |
+| `conversation_required` | A context update omitted the selection needed for an existing/blocked Chat |
+| `conversation_unavailable` | The host denied the requested conversation; nonexistent, deleted, unbound and foreign conversations share this response |
+| `host_unavailable`, `host_initialization_rejected` | Host initialization was unavailable or rejected |
+| `invalid_host_response`, `unsupported_protocol_version` | Initialization response shape/correlation or protocol validation failed |
+| `delivery_binding_missing`, `invalid_delivery_binding`, `delivery_binding_changed` | The private host delivery binding was missing, invalid or differed from the existing binding |
+| `history_unavailable`, `invalid_history_response` | History dispatch was unavailable/rejected, or its response was malformed/uncorrelated |
+
+Only closed error categories and fixed messages cross the browser boundary.
+Validate semantic host-error protocol/correlation before classifying its allowlisted
+code. Unknown host codes receive a generic stage-specific failure; raw host payloads,
+exception details, topics, Person IDs and delivery descriptors are never echoed.
+These errors do not settle submissions, change authentication policy or trigger retries.
+
 A separate `web_widget_api("/widget-api")` router macro mounts package-owned,
 stateless backend controls outside the browser route pipeline. Its disconnect
 operation is `POST /widget-api/:widget_id/disconnect`. A backend proof is an
@@ -566,6 +607,66 @@ HTTP(S)-only stylesheet URL validation remain required. Settings remain
 separate from identity, and neither settings nor parent context can select a
 host topic, connector or internal agent.
 
+## Verified sender profiles
+
+The backend identity JWT may additionally contain `profile`, a closed object with
+`full_name`, `email`, and `phone`. It is covered by the existing HS256 signature,
+widget/user/issuer/audience checks, binding, expiry and revocation policy. No
+unsigned parent setting, init parameter, message or prompt context can override it.
+Missing/null/empty profiles preserve user-ID-only authentication. Invalid profiles
+reject the credential before binding; unknown fields reject rather than being copied.
+
+Fields are optional strings or null. Strings must be valid UTF-8, nonblank,
+already trimmed and free of ASCII control characters. `full_name` is at most 255
+bytes; `email` is at most 254 bytes, with one `@`, a dotted domain and no whitespace;
+`phone` is canonical international form (`+`, a nonzero leading digit, 7–15 digits
+total). Values are preserved, not case-folded or matched by the widget. Signing
+asserts the backend's profile provenance; it does not independently prove ownership
+of an email address or phone number. Backends must source these fields from their
+authenticated account records, not arbitrary request parameters.
+
+The validated profile is retained only in the authenticated Session for request
+transport. Before invoking the sink, the shared init, message and history preparation
+path supplies the host Context constructor with the trusted option `:profile_context`:
+
+```elixir
+%{
+  sender_id: verified_sender,
+  channel_config_id: connector_id,
+  profile: %{full_name: "Ada Example", email: "ada@example.com", phone: nil}
+}
+```
+
+When the profile is absent, `profile_context` is nil. The envelope contains only
+the three shown keys, and its profile has the three atom keys with nil for omitted
+fields. Sender and positive integer connector ID come from the authorized Session,
+never the event. Browser `profile`/`profile_context` fields are rejected as unknown
+request fields. JWTs, signing keys, claims, page IDs and session handles are excluded.
+
+Every dispatch retains the existing process ownership, expiry, binding/revocation
+and runtime/infrastructure generation authorization checks. Successful renewal
+replaces the Session's profile; omission/null/empty clears it. Failed or cross-sender
+renewal leaves the current Session unchanged. There is no sender-global snapshot,
+issuance watermark, same-second conflict rule, profile cache, lookup API or replicated
+profile store. Independent still-authorized sessions carry their own signed assertions,
+including reconnects using older unexpired credentials. Runtime replacement invalidates
+old Sessions as before; reauthentication establishes a fresh Session.
+
+This supersedes the earlier runtime-local `HostAdapter.fetch_profile/2` contract;
+that API is removed. ZAQ's optional Web.Context.profile_context carries the envelope
+through Engine and IdentityResolver unchanged to Channels.Api `:fetch_profile`.
+WebBridge alone interprets it, validates the sender/connector binding, maps `full_name`
+to `display_name`, and pins `channel_id` to the requested sender. Missing enrichment
+allows the legacy user-ID-only path. The self-contained assertion can travel to any
+Channels node without an ingress-node lookup. This is trusted in-process/distributed
+host context, not a browser-supplied capability or a replacement for authentication.
+
+ZAQ's existing IdentityResolver enrichment and `People.find_or_create_from_channel/2`
+own email/phone matching. People is the only durable profile store. No profile fields
+are added to Incoming, web Message, host commands, browser responses or conversation
+metadata; the package introduces no compile-time ZAQ dependency. JWTs remain
+browser-carried signed credentials, not encrypted containers.
+
 ## Inbound communication: web_widget -> ZAQ
 
 Use the host constructor modules supplied in trusted hooks. Unknown wire events
@@ -582,11 +683,14 @@ is a routing selector, not authority to select an internal agent. Do not send
 capabilities, supplied history, actors, internal IDs or dispatch choices in messages.
 Shared constructors validate the definitive fields and constraints.
 
-Build Delivery for `consumer: :widget`, trusted integer configuration ID and an
-authorized session topic, with all seven mappings:
+ZAQ resolves the verified sender and connector into a Person. Only the host issues
+the private Delivery descriptor for `consumer: :widget`, the trusted integer
+configuration ID and its normalized `web_widget:recipient:<connector>:<person>`
+topic, with all eight mappings:
 
 ```elixir
 %{
+  user_message: "response.user_message",
   typing: "response.typing",
   message_create: "response.message.create",
   message_edit: "response.message.edit",
@@ -597,8 +701,15 @@ authorized session topic, with all seven mappings:
 }
 ```
 
+New bindings include `user_message`. Existing explicitly trusted descriptors without
+that mapping remain valid for enriched direct receipts only; the widget does not
+subscribe to or invent an alternative user-message route. If present, the mapping
+must be exactly `"response.user_message"`.
+
 Build Context with nil actor, `consumer: :widget`, verified `sender_id`, integer
-`channel_config_id` and Delivery. Nil actor grants no capability. Do not supply
+`channel_config_id` and the host-issued Delivery unchanged. Bootstrap initialization
+uses nil Delivery; a subsequent initialization may carry the existing descriptor.
+Nil actor grants no capability. Do not supply
 BO bypasses, agent selection, history or content-filter overrides.
 
 Invoke the published config-bound sink with its argument prefix:
@@ -616,13 +727,73 @@ it, its bound config, constructor modules or Context.
 | Operation | Sink result |
 | --- | --- |
 | Command | Semantic Response directly, including semantic `:error` on command failure |
-| Async message accepted | `{:ok, Response}` creation/status receipt; terminal comes later |
-| Sync message | One terminal Response directly; no duplicate live terminal |
+| Async message accepted | `{:ok, Response}` creation/status receipt; no assistant answer is promised |
+| Sync message | One status acknowledgement for a no-answer submission, or one terminal Response directly; no duplicate live terminal |
 | Failure before acceptance | May return `{:error, reason}` |
 
+Successful `:conversation_init` is the one private command-envelope exception:
+`%{response: existing_public_response, delivery_binding: host_delivery}`. Unwrap it
+only server-side, validate the response and subscription fields, and retain the
+opaque host descriptor in Session. Its conversation/message IDs are nil and it
+remains stable across selections. Neither the descriptor, its topic nor Person ID
+may enter public Response.payload, LiveView props or parent postMessage. The widget
+does not derive a destination from sender ID or interpret the topic's Person ID.
+Missing/invalid bindings and initialization/subscription failures fail closed with
+no page-topic, sender-topic, broad-topic or random-topic fallback.
+
 Do not wrap all responses as `{:ok, map}` or reduce accepted receipts to `:ok`.
-Distinguish valid semantic errors from success. Keep request, conversation and
-message correlation through result handling and UI encoding.
+Distinguish valid semantic errors from success. Keep request and conversation
+correlation through result handling and UI encoding. Assistant events additionally
+carry their own stable transport message ID. ZAQ alone owns synchronous waiting;
+the widget dispatch boundary preserves the direct result without publishing it again.
+
+Acceptance acknowledges successful submission dispatch, not execution completion or
+input consumption. It requires `protocol_version: 2`, the original `request_id`, an
+authorized `conversation_id`, and `%{accepted: true, created: boolean,
+user_message: canonical_public_row}` for the widget's async path. The saved row is
+`%{message_id: canonical_id, position: positive_integer, role: "user", content:
+saved_string, provider_sent_at: DateTime_or_nil}`, with optional existing public
+history fields. ZAQ projects native external input roles to public `"user"` without
+changing persistence. An async
+fresh-chat receipt is `:conversation_created` with `created: true`; a resumed-chat
+receipt is `:status` with `created: false`. Its `message_id` is absent or nil.
+Neither receipt reserves an assistant ID. Submission `:error` also has absent/nil
+`message_id` and settles only that submission. An unknown submission outcome blocks
+resending until explicit authorized recovery, without failing existing assistants.
+Legacy host sync behavior is unchanged.
+
+After saving and successful routing, the host publishes a version-2 `:user_message`
+Response on `"response.user_message"`, with the originating request ID, authorized
+conversation ID, nil top-level message ID, and the exact same acceptance payload as
+the direct receipt. The canonical nested user ID, never a locally fabricated ID,
+identifies the displayed input. Direct receipts, live user events and history converge
+through one idempotent canonical-user reducer. Position orders saved rows; a fast
+assistant's persisted `user_message_id` or original request binding keeps it behind
+its input when that canonical record arrives later. Conflicting IDs/positions and
+user/assistant transport-ID collisions fail closed.
+
+If the exact captured input cannot be recovered after routing, the host returns
+`:acknowledgement_unavailable` with `outcome: :unknown` and any known conversation ID.
+This is not a definitive rejection. The widget retains the draft, blocks duplicate
+resubmission and retains that ID only as a restoration hint, requiring authorized
+initialization/history before enabling an explicitly recovered Chat. A matching
+saved-user broadcast may reconcile this tab's retained unknown request, including
+establishing its first conversation when `created: true`. Another tab's event never
+selects or switches conversations. A bounded process-local queue retains assistant
+events for that unknown first request until the saved-user acknowledgement arrives;
+no persistent stream snapshot store is introduced.
+
+The composer retains its exact typed draft while sending, disables editing/send and
+uses localized “Sending…” until acknowledgement. Only the originating tab's matching
+acknowledgement clears the still-matching submitted draft. Other tabs receive the saved
+user row but keep their independent draft and submission state. A tab-local
+`submission_id` travels only over LiveView for late-ack correlation; it never replaces
+the server-generated host request/message IDs or enters shared Context/Response.
+Definitive rejection retains the draft and permits retry; timeout/disconnect or an
+unknown outcome retains it and blocks resubmission until reconciliation. Neither
+steering/no-answer receipts nor assistant-ui optimistic placeholders create a visible
+pending assistant. Existing real assistant streams and known-active recovery indicators
+remain independent from submission acknowledgement.
 
 ## Widget initialization
 
@@ -634,8 +805,10 @@ without replacement creation.
 The first-question sequence is:
 
 ```text
-verify parent session -> readiness (conversation_id nil)
-  -> subscribe to authorized session destination
+authenticate parent session -> host initialize -> bind private Delivery
+  -> subscribe to host-authorized recipient destination
+  -> authorized selected-conversation history/status (when resuming)
+  -> enable sends (conversation_id nil for a fresh widget)
   -> submit first async question with retained optional prompt_context
   <- accepted conversation_created receipt with new conversation ID
   <- live typing / assistant events on the pre-existing subscription
@@ -645,38 +818,57 @@ Retain parent context until the first actual Message. ZAQ persists it as ordinar
 user history when creating that conversation. Resume/later questions do not reseed.
 An accepted resumed question returns `:status`, `accepted: true`, `created: false`.
 
-Only a matching receipt establishes a new active conversation. Wait for its ID
-before another submission and preserve the active-response guard. Live events
+Only a matching receipt or the matching saved-user recovery described above establishes
+a new active conversation. Wait for its ID
+before another submission. Clear the pending submission on the receipt, even if no
+assistant event ever follows. Once accepted, later submissions can proceed while
+earlier independent assistant messages continue streaming. Live events
 may queue before the callback returns; process them only after acceptance is
 bound. If dispatch moves to another process, explicitly buffer this race.
 
 ## Outbound communication: ZAQ -> web_widget
 
-Subscribe on the configured host PubSub server before the first question using
-a server-derived destination scoped to the verified root `socket.id`. It must
-exist without a conversation ID. Renewal and ordinary reconnect reuse that
-page's destination after verification; an iframe reload receives a new root
-socket ID and destination. The topic is not an authorization credential: verify
-the session and correlate every response before applying it. Integrations
-without a verified page ID retain a fresh random destination per session.
+After authenticated host initialization, subscribe on the configured host PubSub
+server using the returned private binding, before history or the first question.
+Every tab/page initializes independently; the same connector/Person receives the
+same destination, including after full reload. This replaces page-isolated delivery.
+Page/JWT binding, expiry, renewal, revocation and runtime-generation authorization
+remain independent security controls. A topic is not an authorization credential.
 
 ZAQ publishes `{:web_response, adapter_event_name, shared_response}`. Consume that
 single ingress and encode once into widget UI events; do not republish into the
-old broad conversation topic. ZAQ keeps no LiveView PID. Its RequestOwner's internal
-reply topic is separate from the adapter session destination.
+old broad conversation topic. ZAQ keeps no LiveView PID. The widget knows only the
+private recipient destination, local submission correlation and assistant transport IDs;
+execution, root/child/receipt IDs, queued/steer/native runtime states and execution
+management never enter widget state or UI events.
 
-Check protocol version, trusted event mapping, request ID, accepted conversation
-and transport message ID before applying events. Widget ID and sender come from
-the session. Reject stale/foreign responses; unsolicited events cannot switch
-conversations. UI output retains the `response.*` namespace.
-After a connected remount, the accepted request IDs from the former LiveView are
-gone. A valid terminal event for the already authorized conversation may trigger
-a fresh authorized history request; its payload is never applied as a stream
-event without the original request correlation.
+Check protocol version, trusted event mapping, the selected authorized conversation
+and assistant transport message/request IDs before applying message events. Local
+accepted-request membership is not required: authorized host-topic events may come
+from an old page or another tab. Create, first full-body edit, or first terminal
+establishes an assistant binding. Later events must retain that request and any
+persisted references; steps alone never invent a row. Multiple independent streams
+may share a request. Terminal states never regress, and duplicate/late events are
+ignored per message. Unsolicited events cannot select or switch conversations.
+Receipts/submission errors settle only their local submission; a matching canonical
+saved-user event may reconcile that same local unknown request, never another tab's
+send. User events bypass assistant stream correlation and never choose an assistant ID.
+UI output retains the `response.*` namespace.
+
+Subscribe before history so concurrent events queue in the LiveView mailbox.
+Reconcile them after the authorized snapshot using persisted assistant/user refs,
+including refs first learned after create. Existing canonical history rows suppress
+duplicate live rows and stale snapshots. Do not replace a newer terminal or a live
+independent stream with another history refresh. Missed-create full-body events
+need no separate stream snapshot store. Missed terminals are recovered by authorized
+history on reconnect; old-request terminals arriving later apply directly.
+Canonical assistant history rows are finalized, never unfinished stream snapshots.
+An active history response may therefore contain only the persisted user row while
+the assistant's next full-body edit or terminal arrives through the subscription.
 
 ## Outbound payloads
 
-Shared Response uses semantic `type`, `protocol_version: 1`, `request_id`, optional
+Shared Response uses semantic `type`, `protocol_version: 2`, `request_id`, optional
 `conversation_id`/`message_id` and public `payload`. Map this into the existing UI
 vocabulary while preserving correlation; do not make ZAQ emit widget-private maps.
 
@@ -685,12 +877,23 @@ vocabulary while preserving correlation; do not make ZAQ emit widget-private map
 | `:widget_initialized` | `response.widget.initialized`; readiness with optional ID; displayed user comes from verified session |
 | `:conversation_created` | `response.conversation.created`; direct correlated receipt establishes the conversation |
 | `:conversation_history` | `response.conversation.history`; ordered public messages and separately retained pagination positions |
-| `:status` with accepted true | Direct resumed receipt, not assistant text or a terminal |
+| `:status` with accepted true | Direct resumed receipt (or sync no-answer acknowledgement), not assistant text or an assistant terminal |
+| `:user_message` | Canonical saved input; deduplicated with its direct receipt/history, with no assistant transport message ID |
 | `:typing` | `response.typing`, boolean `active` |
 | `:message_create`, `:message_edit`, `:message_complete` | Corresponding `response.message.*`; top-level transport `message_id` becomes UI payload `id`, public `body` becomes `content` |
 | `:message_step` | `response.message.step`; public `step_id` and message ID, safe label; `:activity/:running` maps to `status/started` or `updated` for an existing step |
 | `:message_failed` | `response.message.failed`; correlated message ID and public `body` as UI error text, with a generic fallback when `body` is absent or blank; do not expose raw error details |
-| `:error` | `response.error`; correlated request and safe code/text; retain timeout `outcome: :unknown` |
+| `:error` | Submission error; correlated request and safe code/text, nil/absent message ID; retain timeout `outcome: :unknown`, never fail unrelated assistant messages |
+
+Public failure bodies use the same safe Markdown/link rendering as assistant text;
+raw HTML and executable URL schemes are not enabled. The host owns public wording
+and recovery URLs. Rendered content links open in a new tab with `target="_blank"`
+and `rel="noopener noreferrer"`, never replacing the widget iframe or parent page.
+This applies equally to ordinary assistant responses and public failure bodies.
+An accepted execution that fails before streaming still sends
+`:message_create` before `:message_failed` with the same transport message ID;
+it is not a submission rejection. An optional inactive typing hint may precede the
+terminal failure. True submission rejection remains `:error` without an assistant.
 
 ZAQ streaming edits are cumulative snapshots. LiveView keeps the full content,
 but sends only the new suffix to React when an edit extends a running message
@@ -702,10 +905,16 @@ The assistant transport ID is stable across create/edit/step/terminal and may di
 from persisted assistant/user message references. Retain those references separately.
 Never expose BO traces, private reasoning, raw tool calls or agent metadata.
 
-Live ordering is typing active -> assistant create -> optional edits/steps -> typing
-inactive -> one correlated terminal. A create precedes subsequent assistant events.
-Update steps by step ID; terminal message/step states cannot regress. Ignore duplicate
-or late terminals and typing resets from earlier requests.
+The host normally emits create before edits/steps and one terminal per stream;
+the widget can recover from a missed create using a full-body edit or terminal.
+Interleaving across streams is allowed. Update steps by step ID; terminal message/step
+states cannot regress. Ignore duplicate creates, duplicate/late terminals and late
+edits/steps per message, not per chat. `:typing` is optional public presentation only;
+it neither acknowledges submission nor promises an assistant. Aggregate correlated
+typing hints without letting another request's inactive hint clear current progress.
+Typing after a request's known streams have all terminated is ignored. No-answer
+acceptance needs no typing or terminal. A later independent create can still carry
+the original host request ID, without a local submission.
 
 ## Conversation ownership and history
 
@@ -728,14 +937,29 @@ roles and timestamps. Never invent timestamps for untimestamped history. Preserv
 message creation times during streaming; format dates in the selected language and
 browser time zone.
 
-PubSub offers no durable replay or exactly-once execution. Timeout is an unknown
-outcome, not cancellation or permission to retry. Accepted work can finish later.
+The same public history response adds `payload.processing: :active | :idle | :unknown`.
+The host performs its authorized native-runtime lookup; no native IDs, PIDs or
+execution records enter the widget. `:active` shows the existing processing indicator
+without inventing an assistant, pending submission or per-send spinner.
+Before an actual running assistant row is available, the conversation also shows
+the existing localized “Preparing your answer” working indicator as presentation
+only. It disappears when a real running row takes over, without adding a message
+ID or changing submission state. Terminal
+events or inactive typing clear recovered progress; independent active typing hints
+remain aggregated. `:unknown` is uncertainty, not completion or cancellation, and
+does not manufacture a terminal. No-answer/steering receipts retain their ordinary
+submission-only semantics. No additional command or browser connection is introduced.
+
+PubSub offers no durable replay or exactly-once execution. A display timeout concerns
+only an outstanding transport submission receipt, never a promised assistant or an
+accepted execution. Timeout is an unknown outcome, not cancellation or permission
+to retry. Accepted assistant streams can finish later and are not timed out by the widget.
 Recover through authorized history when the conversation ID is known. If an initial
 timeout returns no ID, surface unresolved outcome rather than inventing an ID or
 silently resending. Consult the host contract for timeout bounds.
 
 Multiple-conversation listing/sidebar integration is deferred. The existing mock's
-`include_conversations` response is not part of the shared ZAQ v1 history command.
+`include_conversations` response is not part of the shared ZAQ history command.
 
 ## Parent-owned presentation settings
 

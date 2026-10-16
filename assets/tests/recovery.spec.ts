@@ -73,10 +73,10 @@ test("application submission watchdog times out after five minutes and restores 
   await expect(widget.getByRole("button", { name: "Send message" })).toBeDisabled();
 
   await page.clock.fastForward(2000);
-  await expect(widget.getByRole("alert")).toHaveText("Connection interrupted. Please try again.");
+  await expect(widget.getByRole("alert")).toHaveText("Submission acknowledgement timed out. Its outcome is unknown. Restore the conversation before sending again.");
   await expect(input).toHaveValue("Wait for acceptance");
   await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-reconnecting", "false");
-  await expect(widget.getByRole("button", { name: "Send message" })).toBeEnabled();
+  await expect(widget.getByRole("button", { name: "Send message" })).toBeDisabled();
   expect((await events(request, id)).filter(event => event.type === "message.create")).toHaveLength(0);
 });
 

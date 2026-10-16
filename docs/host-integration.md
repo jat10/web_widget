@@ -421,6 +421,48 @@ their infrastructure remains responsible for private backend access and sanitize
 forwarding. Neither local readiness nor an endpoint HTTPS URL establishes that
 trust or proves the public proxy is healthy.
 
+### Host normalization before widget guards
+
+`web_widget_socket/1,2` installs the overridable endpoint callback
+`web_widget_normalize/1`. The supported order is:
+
+```text
+web_widget_normalize(conn) -> widget Proxy -> widget CookieGuard -> Phoenix
+```
+
+Phoenix includes its socket dispatch and ordinary endpoint plugs/`force_ssl`.
+Each stage stops on a halted connection. The callback defaults to identity and
+runs once per endpoint request, including BO and assets, regardless of how many
+widget sockets are mounted. Existing integrations need no callback.
+
+Hosts with an existing trusted ingress normalizer can invoke it here:
+
+```elixir
+import WebWidget.Endpoint
+web_widget_socket("/widget", scope: "/channels")
+
+@impl WebWidget.Endpoint
+def web_widget_normalize(conn) do
+  MyHostWeb.TrustedIngress.call(conn, MyHostWeb.TrustedIngress.init([]))
+end
+```
+
+`MyHostWeb.TrustedIngress` is host-owned. Before applying `Plug.RewriteOn`, it
+must establish immediate-peer trust or rely on a private backend restricted to
+ingress that strips and overwrites forwarding headers. Reject repeated,
+comma-separated or conflicting forwarding values; preserve the physical
+`remote_ip` and forwarding headers for any configured widget Proxy validation.
+Do not rewrite `remote_ip` from visitor `X-Forwarded-For` before that guard.
+The callback may halt to reject a request. Missing forwarding must not invent HTTPS.
+
+To migrate a host such as ZAQ from a `call/2` override, remove
+`defoverridable call: 2`, replace `@impl Plug` with `@impl WebWidget.Endpoint`,
+rename `call(conn, opts)` to `web_widget_normalize(conn)`, and return the normalized
+connection instead of calling `super(opts)`. Its trusted normalizer can continue
+reading `config(:force_ssl)[:rewrite_on]` at runtime; the widget does not infer that
+policy. Keep the ingress trust/ambiguity validation above. The host must first
+consume a package revision containing this API.
+
 ## Runtime builder and shared protocol
 
 The resolved connector must include string-keyed settings

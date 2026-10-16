@@ -15,6 +15,60 @@ async function installTokenWidget(page: Page, navigate = true) {
   });
 }
 
+for (const outage of ["server unavailability", "browser offline"]) {
+test(`Phoenix automatically rejoins after prolonged ${outage}`, async ({ page, request, context }) => {
+  test.setTimeout(60_000);
+  const user = `native-reconnect-${crypto.randomUUID()}`;
+  let unavailable = false;
+  let closeTransport: (() => void) | undefined;
+  let tokenRequests = 0;
+  let sessionRequests = 0;
+  await page.route("**/api/widget-token", async route => {
+    tokenRequests++;
+    const issued = await request.get("http://127.0.0.1:4021/identity", { params: { user_id: user } });
+    await route.fulfill({ headers: { "cache-control": "no-store" }, json: await issued.json() });
+  });
+  await page.route("**/widget/420/session*", route => {
+    sessionRequests++;
+    return unavailable ? route.abort() : route.continue();
+  });
+  await page.route("**/widget/420/live/longpoll*", route => unavailable ? route.abort() : route.continue());
+  await page.routeWebSocket("**/widget/420/live/websocket*", socket => {
+    if (unavailable) { socket.close({ code: 1013, reason: "Unavailable" }); return; }
+    const server = socket.connectToServer();
+    closeTransport = () => {
+      server.close();
+      socket.close({ code: 1012, reason: "Restart" });
+    };
+  });
+  await installTokenWidget(page);
+  const widget = page.frameLocator("#zaq-widget");
+  const input = widget.getByRole("textbox", { name: "Message", exact: true });
+  await input.fill("reconnect before outage");
+  await input.press("Enter");
+  await expect(widget.getByText("Answer to reconnect before outage", { exact: true })).toBeVisible();
+  await input.fill("Unsent draft");
+  const initialSessionRequests = sessionRequests;
+  unavailable = true;
+  if (outage === "browser offline") await context.setOffline(true);
+  closeTransport!();
+  await expect(widget.locator(".zaq-connection")).toContainText("Reconnecting");
+  // A real outage longer than the former terminal deadline; never call connect().
+  await page.waitForTimeout(12_000);
+  await expect(widget.locator("#widget-session-error")).toBeHidden();
+  unavailable = false;
+  if (outage === "browser offline") await context.setOffline(false);
+  await expect(widget.locator(".zaq-widget")).toHaveAttribute("data-reconnecting", "false", { timeout: 20_000 });
+  await expect(input).toHaveValue("Unsent draft");
+  await expect(widget.getByText("Answer to reconnect before outage", { exact: true })).toBeVisible();
+  expect(sessionRequests).toBe(initialSessionRequests);
+  expect(tokenRequests).toBe(1);
+  await input.fill("reconnect after outage");
+  await input.press("Enter");
+  await expect(widget.getByText("Answer to reconnect after outage", { exact: true })).toBeVisible();
+});
+}
+
 test("token URL bootstraps in the fragment and renews without remounting", async ({ page, request }) => {
   let tokens = 0;
   let failRenewal = false;
@@ -446,7 +500,7 @@ for (const answerTiming of ["during", "after"] as const) {
       await input.press("Enter");
       await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Partial");
       const original = await (await request.get(`${control}/held-stream/${user}`)).json();
-      expect((await session()).active.request_id).toBe(original.request_id);
+       expect((await session()).streams[original.message_id].request_id).toBe(original.request_id);
       expect(tokenRequests).toBe(1);
 
       // Real scheduled renewal: no manual connect, synthetic event, or clock jump.
@@ -483,7 +537,7 @@ for (const answerTiming of ["during", "after"] as const) {
       expect(renewed.authentication_pending).toBe(false);
       expect(renewed.response_subscribed).toBe(true);
       if (answerTiming === "after") {
-        expect(renewed.active.request_id).toBe(original.request_id);
+         expect(renewed.streams[original.message_id].request_id).toBe(original.request_id);
         expect((await request.post(`${control}/held-stream/${user}/complete`)).status()).toBe(204);
       }
       await expect(widget.locator(".zaq-answer-content strong")).toHaveText("Finished");
@@ -560,7 +614,7 @@ test("actual JWT expiry during a held response restores the final answer after a
     evidence.original = original;
     expect(original.status).toBe("running");
     expect(original.topic).toBe(initial.topic);
-    expect((await session()).active.request_id).toBe(original.request_id);
+    expect((await session()).streams[original.message_id].request_id).toBe(original.request_id);
     expect(await submissions()).toBe(1);
 
     // Only the real WidgetLive expiry path sets authentication_pending here.

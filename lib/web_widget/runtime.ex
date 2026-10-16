@@ -16,7 +16,7 @@ defmodule WebWidget.Runtime do
 
   alias WebWidget.Configuration
   alias WebWidget.Embedding.Origins
-  alias WebWidget.Integration.{BindingStore, ControlProof, Protocol, Session}
+  alias WebWidget.Integration.{BindingStore, ControlProof, Protocol, Response, Session}
 
   @widget_fields [
     :widget_id,
@@ -206,7 +206,8 @@ defmodule WebWidget.Runtime do
        %{
          current
          | expires_at: replacement.expires_at,
-           binding_claims: replacement.binding_claims
+           binding_claims: replacement.binding_claims,
+           profile: replacement.profile
        }}
     else
       {:error, :unavailable} -> {:error, :store_unavailable}
@@ -220,13 +221,62 @@ defmodule WebWidget.Runtime do
   @doc "Dispatches an internal request using a verified, process-bound session."
   def dispatch(event, session) do
     with {:ok, config} <- session_config(session) do
-      Protocol.dispatch(config.integration, event, session)
+      config.integration |> Protocol.dispatch(event, session) |> unwrap_response(session)
     end
   end
+
+  defp unwrap_response(%{response: response, delivery_binding: binding}, session) do
+    if binding == session.delivery_binding,
+      do: response,
+      else: {:error, :delivery_binding_changed}
+  end
+
+  defp unwrap_response(response, _session), do: response
+
+  @doc "Initializes the private host delivery binding for an authenticated caller."
+  def initialize(%{type: "widget.init", request_id: request} = event, session) do
+    with {:ok, config} <- session_config(session),
+         {:ok, response, bound} <-
+           initialize_result(
+             Protocol.dispatch(config.integration, event, session),
+             request,
+             Map.get(event, :conversation_id),
+             session
+           ),
+         true <- authorized?(bound) do
+      {:ok, response, bound}
+    else
+      {:error, :unauthorized} -> {:error, :session_unauthorized}
+      {:error, _} = error -> error
+      _ -> {:error, :session_unauthorized}
+    end
+  end
+
+  def initialize(_, _), do: {:error, :invalid_initialization}
+
+  defp initialize_result(result, request, conversation, session) do
+    response = if is_map(result), do: Map.get(result, :response, result), else: result
+
+    with :ok <- Response.validate_command(response, request, conversation, :initialization),
+         %{type: :widget_initialized, payload: %{created: false}} <- response,
+         {:ok, binding} <- initialization_binding(result),
+         {:ok, bound} <- Protocol.bind_delivery(session, binding) do
+      {:ok, response, bound}
+    else
+      {:error, _} = error -> error
+      _ -> {:error, :invalid_host_response}
+    end
+  end
+
+  defp initialization_binding(%{delivery_binding: binding}) when not is_nil(binding),
+    do: {:ok, binding}
+
+  defp initialization_binding(_), do: {:error, :delivery_binding_missing}
 
   @doc "Subscribes the verified caller before its first question; no conversation ID is needed."
   def subscribe(session) do
     with {:ok, config} <- session_config(session),
+         {:ok, _} <- Protocol.bind_delivery(session, session.delivery_binding),
          :ok <- Phoenix.PubSub.subscribe(config.pubsub_server, session.topic) do
       {:ok, {config.pubsub_server, session.topic}}
     end

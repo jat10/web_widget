@@ -140,7 +140,8 @@ defmodule WebWidget.Integration.SignedIdentityTest do
   test "same-page reconnect survives process replacement but not runtime ownership", ctx do
     {:ok, proof} = sign(ctx)
     assert {:ok, session} = authenticate(ctx, proof)
-    assert session.topic == "web_widget:session:" <> ctx.page_id
+    assert session.topic == nil
+    assert session.delivery_binding == nil
 
     assert {:ok, reconnected} = Task.async(fn -> authenticate(ctx, proof) end) |> Task.await()
     assert reconnected.topic == session.topic
@@ -149,7 +150,8 @@ defmodule WebWidget.Integration.SignedIdentityTest do
 
     {:ok, other_proof} = sign(ctx)
     assert {:ok, other_page} = authenticate(ctx, other_proof, "other-page")
-    refute other_page.topic == session.topic
+    assert other_page.topic == nil
+    refute other_page.page_id == session.page_id
 
     assert {:ok, ref} = Runtime.monitor(session)
     stop_supervised!(ctx.spec.id)
